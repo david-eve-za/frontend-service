@@ -3,67 +3,108 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.glez</groupId>
-        <artifactId>microservices</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.0</version> <!-- Using a recent stable Spring Boot version -->
+        <relativePath/> <!-- Ensures Maven resolves parent POM from repositories, not a local relative path -->
     </parent>
 
+    <!-- Project's specific GAV coordinates -->
+    <!-- Explicitly defining groupId; defaults to parent's (org.springframework.boot) if omitted -->
+    <groupId>com.glez</groupId>
     <artifactId>frontend-service</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>frontend-service</name>
     <description>frontend-service</description>
 
     <properties>
-        <java.version>17</java.version>
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
     </properties>
 
     <dependencies>
+        <!-- Standard Spring Boot web starter -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- Spring Boot DevTools for enhanced development experience (e.g., auto-restart) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-devtools</artifactId>
             <scope>runtime</scope>
             <optional>true</optional>
         </dependency>
+
+        <!-- Spring security -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-docker-compose</artifactId>
-            <scope>runtime</scope>
-            <optional>true</optional>
+            <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
+
+
+        <!-- Optional: Spring Boot Docker Compose integration. Consider removing if not used. -->
+        <!--        <dependency>-->
+        <!--            <groupId>org.springframework.boot</groupId>-->
+        <!--            <artifactId>spring-boot-docker-compose</artifactId>-->
+        <!--            <scope>runtime</scope>-->
+        <!--            <optional>true</optional>-->
+        <!--        </dependency>-->
+
+        <!-- Spring Boot Test starter for unit and integration testing -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- PDF and EPUB to JSon Libraries -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20240303</version>
+        </dependency>
+        <!-- Lombook -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.36</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <!-- Spring Boot Maven plugin for packaging and running the application -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <!-- Plugin to integrate frontend (Node/npm) builds with Maven -->
             <plugin>
                 <groupId>com.github.eirslett</groupId>
                 <artifactId>frontend-maven-plugin</artifactId>
                 <version>1.15.0</version>
                 <configuration>
-                    <nodeVersion>v22.1.0</nodeVersion>
-                    <npmVersion>10.7.0</npmVersion>
-                    <workingDirectory>src/main/angular/</workingDirectory>
+                    <nodeVersion>v22.4.0</nodeVersion>
+                    <npmVersion>10.8.1</npmVersion>
+                    <workingDirectory>src/main/angular/</workingDirectory> <!-- Location of the Angular project -->
                 </configuration>
                 <executions>
+                    <!-- Installs Node.js and npm locally for the build process -->
                     <execution>
                         <id>install node and npm</id>
                         <goals>
                             <goal>install-node-and-npm</goal>
                         </goals>
                     </execution>
+                    <!-- Runs 'npm install' to download Angular project dependencies -->
                     <execution>
                         <id>npm install</id>
                         <goals>
@@ -73,56 +114,59 @@
                             <arguments>install</arguments>
                         </configuration>
                     </execution>
+                    <!-- Runs 'npm run build' to compile the Angular application -->
                     <execution>
                         <id>npm run build</id>
                         <goals>
                             <goal>npm</goal>
                         </goals>
                         <configuration>
-                            <arguments>run build</arguments>
+                            <arguments>run build</arguments> <!-- Assumes 'build' script is defined in package.json -->
                         </configuration>
                     </execution>
                 </executions>
             </plugin>
+            <!-- Maven Clean Plugin: extended to clean frontend artifacts -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-clean-plugin</artifactId>
-                <version>3.2.0</version>
                 <configuration>
                     <filesets>
+                        <!-- Clean IntelliJ IDEA specific files from Angular project -->
                         <fileset>
                             <directory>src/main/angular/.idea</directory>
                         </fileset>
+                        <!-- Clean Angular build output directory -->
                         <fileset>
                             <directory>src/main/angular/dist</directory>
                         </fileset>
+                        <!-- Clean Angular cache directory -->
                         <fileset>
                             <directory>src/main/angular/.angular</directory>
                             <includes>
-                                <include>**</include>
+                                <include>**/*</include> <!-- Include all contents -->
                             </includes>
                         </fileset>
+                        <!-- Clean Node.js modules directory -->
                         <fileset>
                             <directory>src/main/angular/node_modules</directory>
                             <includes>
-                                <include>**</include>
+                                <include>**/*</include> <!-- Include all contents -->
                             </includes>
                         </fileset>
+                        <!-- Clean locally installed Node environment by frontend-maven-plugin -->
                         <fileset>
                             <directory>src/main/angular/node</directory>
                         </fileset>
-<!--                        <fileset>-->
-<!--                            <directory>src/main/angular</directory>-->
-<!--                            <includes>-->
-<!--                                <include>package-lock.json</include>-->
-<!--                            </includes>-->
-<!--                        </fileset>-->
+                        <!-- Clean static resources directory (often target for frontend assets) -->
                         <fileset>
                             <directory>src/main/resources/static</directory>
                             <includes>
-                                <include>**</include>
+                                <include>**/*</include> <!-- Include all contents -->
                             </includes>
                             <excludes>
+                                <!-- Excludes a file or folder named 'static' directly under src/main/resources/static -->
+                                <!-- Ensure this exclusion is intended for your project's static resource management -->
                                 <exclude>static</exclude>
                             </excludes>
                         </fileset>
