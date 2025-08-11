@@ -5,6 +5,7 @@ import com.glez.frontendservice.pdf.model.PDFImage;
 import com.glez.frontendservice.pdf.model.PDFPage;
 import com.glez.frontendservice.pdf.model.StyledText;
 import com.glez.frontendservice.pdf.util.PDFUtils;
+import lombok.Cleanup;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -26,43 +27,36 @@ public class JsonToPDFConverter {
         JSONObject json = new JSONObject(jsonContent);
         PDFDocument pdfDocument = PDFDocument.fromJson(json);
 
-        try (PDDocument document = new PDDocument()) {
-            PDFUtils.applyMetadata(document, pdfDocument.getMetadata());
+        @Cleanup PDDocument document = new PDDocument();
+        PDFUtils.applyMetadata(document, pdfDocument.getMetadata());
 
-            for (PDFPage pageData : pdfDocument.getPages()) {
-                PDPage page = new PDPage(new PDRectangle(pageData.getWidth(), pageData.getHeight()));
-                document.addPage(page);
+        for (PDFPage pageData : pdfDocument.getPages()) {
+            PDPage page = new PDPage(new PDRectangle(pageData.getWidth(), pageData.getHeight()));
+            document.addPage(page);
 
-                try (PDPageContentStream contentStream = new PDPageContentStream(document, page)) {
-                    // Agregar texto
-                    for (StyledText text : pageData.getTexts()) {
-                        addStyledText(contentStream, text);
-                    }
-
-                    // Agregar imágenes
-                    for (PDFImage image : pageData.getImages()) {
-                        addImage(document, contentStream, image);
-                    }
-                }
+            @Cleanup PDPageContentStream contentStream = new PDPageContentStream(document, page);
+            for (StyledText text : pageData.getTexts()) {
+                addStyledText(contentStream, text);
             }
 
-            document.save(pdfPath);
+            for (PDFImage image : pageData.getImages()) {
+                addImage(document, contentStream, image);
+            }
         }
+
+        document.save(pdfPath);
     }
 
     private static void addStyledText(PDPageContentStream contentStream, StyledText text) throws IOException {
         contentStream.beginText();
 
-        // Configurar fuente
         PDType1Font font = resolveFont(text);
         contentStream.setFont(font, text.getFontSize());
 
-        // Configurar color
         if (text.getRed() >= 0 && text.getGreen() >= 0 && text.getBlue() >= 0) {
             contentStream.setNonStrokingColor(text.getRed(), text.getGreen(), text.getBlue());
         }
 
-        // Posicionamiento
         contentStream.newLineAtOffset(text.getX(), text.getY());
         contentStream.showText(text.getText());
         contentStream.endText();
@@ -75,8 +69,9 @@ public class JsonToPDFConverter {
             return new PDType1Font(Standard14Fonts.FontName.TIMES_BOLD);
         } else if (text.isItalic()) {
             return new PDType1Font(Standard14Fonts.FontName.TIMES_ITALIC);
+        } else {
+            return new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN);
         }
-        return new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN);
     }
 
     private static void addImage(PDDocument document, PDPageContentStream contentStream, PDFImage image) throws IOException {

@@ -1,20 +1,14 @@
 package com.glez.frontendservice.pdf.model;
 
-import lombok.Getter;
-import lombok.Setter;
-import lombok.NoArgsConstructor;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
+import lombok.*;
 import org.json.JSONObject;
 
-@Getter
-@Setter
-@NoArgsConstructor // For default instantiation
-@AllArgsConstructor // For creating instances with all arguments
-@Builder(toBuilder = true) // Enables builder pattern and copying to builder
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class StyledText {
 
-    // JSON Keys for consistency and to prevent typos
     private static final String KEY_TEXT = "text";
     private static final String KEY_FONT_NAME = "fontName";
     private static final String KEY_FONT_SIZE = "fontSize";
@@ -35,18 +29,14 @@ public class StyledText {
     private float fontSize;
     private boolean bold;
     private boolean italic;
-
     @Builder.Default
     private boolean underlined = false;
     @Builder.Default
     private boolean strikethrough = false;
-
     private float x;
     private float y;
     private float width;
     private float height;
-
-    // Default color component value (-1f) can indicate 'not set' or 'use a default color'.
     @Builder.Default
     private float red = -1f;
     @Builder.Default
@@ -74,24 +64,21 @@ public class StyledText {
     }
 
     public static StyledText fromJson(JSONObject json) {
-        // Using builder for fluent and readable object creation.
-        // Assumes 'text', 'fontName', 'fontSize', 'bold', 'italic', 'x', 'y', 'width', 'height' are mandatory.
-        // If any of these can be optional, use optString, optFloat, optBoolean with appropriate defaults.
         return StyledText.builder()
                 .text(json.getString(KEY_TEXT))
                 .fontName(json.getString(KEY_FONT_NAME))
-                .fontSize(json.getFloat(KEY_FONT_SIZE)) // Uses org.json.JSONObject.getFloat
+                .fontSize(json.getFloat(KEY_FONT_SIZE))
                 .bold(json.getBoolean(KEY_BOLD))
                 .italic(json.getBoolean(KEY_ITALIC))
-                .underlined(json.optBoolean(KEY_UNDERLINED, false)) // Default to false if key is missing
-                .strikethrough(json.optBoolean(KEY_STRIKETHROUGH, false)) // Default to false if key is missing
+                .underlined(json.optBoolean(KEY_UNDERLINED, false))
+                .strikethrough(json.optBoolean(KEY_STRIKETHROUGH, false))
                 .x(json.getFloat(KEY_X))
                 .y(json.getFloat(KEY_Y))
                 .width(json.getFloat(KEY_WIDTH))
                 .height(json.getFloat(KEY_HEIGHT))
-                .red(json.optFloat(KEY_RED, -1f)) // Default to -1f if key is missing
-                .green(json.optFloat(KEY_GREEN, -1f)) // Default to -1f if key is missing
-                .blue(json.optFloat(KEY_BLUE, -1f)) // Default to -1f if key is missing
+                .red(json.optFloat(KEY_RED, -1f))
+                .green(json.optFloat(KEY_GREEN, -1f))
+                .blue(json.optFloat(KEY_BLUE, -1f))
                 .build();
     }
 }

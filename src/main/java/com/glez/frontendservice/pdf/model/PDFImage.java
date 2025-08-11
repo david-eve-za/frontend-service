@@ -1,19 +1,17 @@
 package com.glez.frontendservice.pdf.model;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.json.JSONObject;
 
-/**
- * Represents an image to be embedded in a PDF.
- * Contains metadata such as name, format, dimensions, position,
- * and the image data itself.
- */
-@Getter
-@Setter
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class PDFImage {
 
-    // Define constants for JSON keys to improve maintainability and readability
     private static final String KEY_NAME = "name";
     private static final String KEY_FORMAT = "format";
     private static final String KEY_WIDTH = "width";
@@ -22,61 +20,14 @@ public class PDFImage {
     private static final String KEY_X = "x";
     private static final String KEY_Y = "y";
 
-    /**
-     * The name of the image file (e.g., "logo.png").
-     */
     private String name;
-
-    /**
-     * The format of the image (e.g., "png", "jpeg").
-     */
     private String format;
-
-    /**
-     * The width of the image in pixels.
-     */
     private int width;
-
-    /**
-     * The height of the image in pixels.
-     */
     private int height;
-
-    /**
-     * The image data, Base64 encoded string.
-     */
-    private String data; // Base64
-
-    /**
-     * The x-coordinate for the bottom-left corner of the image in the PDF.
-     */
+    private String data;
     private float x;
-
-    /**
-     * The y-coordinate for the bottom-left corner of the image in the PDF.
-     */
     private float y;
 
-    // Consider adding constructors if useful, e.g., using Lombok's
-    // @NoArgsConstructor (which is implicitly present if no other constructors are defined)
-    // and @AllArgsConstructor.
-    // public PDFImage() {} // Default constructor, useful for fromJson or frameworks
-
-    // public PDFImage(String name, String format, int width, int height, String data, float x, float y) {
-    //     this.name = name;
-    //     this.format = format;
-    //     this.width = width;
-    //     this.height = height;
-    //     this.data = data;
-    //     this.x = x;
-    //     this.y = y;
-    // }
-
-    /**
-     * Converts this PDFImage instance to a {@link JSONObject}.
-     *
-     * @return A JSONObject representation of this image.
-     */
     public JSONObject toJson() {
         JSONObject json = new JSONObject();
         json.put(KEY_NAME, name);
@@ -89,24 +40,15 @@ public class PDFImage {
         return json;
     }
 
-    /**
-     * Creates a PDFImage instance from a {@link JSONObject}.
-     *
-     * @param json The JSONObject containing the image data.
-     * @return A new PDFImage instance populated from the JSONObject.
-     * @throws org.json.JSONException if a key is missing or a value is of the wrong type.
-     */
     public static PDFImage fromJson(JSONObject json) {
-        PDFImage image = new PDFImage();
-        image.setName(json.getString(KEY_NAME));
-        image.setFormat(json.getString(KEY_FORMAT));
-        image.setWidth(json.getInt(KEY_WIDTH));
-        image.setHeight(json.getInt(KEY_HEIGHT));
-        image.setData(json.getString(KEY_DATA));
-        // JSONObject doesn't have a direct getFloat method.
-        // getDouble is used and then cast to float.
-        image.setX((float) json.getDouble(KEY_X));
-        image.setY((float) json.getDouble(KEY_Y));
-        return image;
+        return PDFImage.builder()
+                .name(json.getString(KEY_NAME))
+                .format(json.getString(KEY_FORMAT))
+                .width(json.getInt(KEY_WIDTH))
+                .height(json.getInt(KEY_HEIGHT))
+                .data(json.getString(KEY_DATA))
+                .x((float) json.getDouble(KEY_X))
+                .y((float) json.getDouble(KEY_Y))
+                .build();
     }
 }
