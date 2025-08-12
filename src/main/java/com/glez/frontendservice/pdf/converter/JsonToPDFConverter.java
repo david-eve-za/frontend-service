@@ -13,20 +13,31 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.json.JSONObject;
+import org.springframework.stereotype.Component;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Base64;
+import java.util.Map;
 
-public class JsonToPDFConverter {
+@Component
+public class JsonToPDFConverter implements PdfConverter {
 
-    public static void convert(String jsonPath, String pdfPath) throws IOException {
-        String jsonContent = new String(Files.readAllBytes(new File(jsonPath).toPath()));
-        JSONObject json = new JSONObject(jsonContent);
-        PDFDocument pdfDocument = PDFDocument.fromJson(json);
+    private static final Map<String, PDType1Font> FONT_MAP = Map.of(
+            "TIMES_ROMAN", new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN),
+            "TIMES_BOLD", new PDType1Font(Standard14Fonts.FontName.TIMES_BOLD),
+            "TIMES_ITALIC", new PDType1Font(Standard14Fonts.FontName.TIMES_ITALIC),
+            "TIMES_BOLD_ITALIC", new PDType1Font(Standard14Fonts.FontName.TIMES_BOLD_ITALIC)
+    );
 
+    @Override
+    public PDFDocument convertPdfToDocumentModel(InputStream pdfInputStream) throws IOException {
+        throw new UnsupportedOperationException("This converter does not support PDF to JSON conversion.");
+    }
+
+    @Override
+    public void convertJsonToPdf(PDFDocument pdfDocument, OutputStream outputStream) throws IOException {
         @Cleanup PDDocument document = new PDDocument();
         PDFUtils.applyMetadata(document, pdfDocument.getMetadata());
 
@@ -43,11 +54,10 @@ public class JsonToPDFConverter {
                 addImage(document, contentStream, image);
             }
         }
-
-        document.save(pdfPath);
+        document.save(outputStream);
     }
 
-    private static void addStyledText(PDPageContentStream contentStream, StyledText text) throws IOException {
+    private void addStyledText(PDPageContentStream contentStream, StyledText text) throws IOException {
         contentStream.beginText();
 
         PDType1Font font = resolveFont(text);
@@ -62,19 +72,19 @@ public class JsonToPDFConverter {
         contentStream.endText();
     }
 
-    private static PDType1Font resolveFont(StyledText text) {
+    private PDType1Font resolveFont(StyledText text) {
         if (text.isBold() && text.isItalic()) {
-            return new PDType1Font(Standard14Fonts.FontName.TIMES_BOLD_ITALIC);
+            return FONT_MAP.get("TIMES_BOLD_ITALIC");
         } else if (text.isBold()) {
-            return new PDType1Font(Standard14Fonts.FontName.TIMES_BOLD);
+            return FONT_MAP.get("TIMES_BOLD");
         } else if (text.isItalic()) {
-            return new PDType1Font(Standard14Fonts.FontName.TIMES_ITALIC);
+            return FONT_MAP.get("TIMES_ITALIC");
         } else {
-            return new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN);
+            return FONT_MAP.get("TIMES_ROMAN");
         }
     }
 
-    private static void addImage(PDDocument document, PDPageContentStream contentStream, PDFImage image) throws IOException {
+    private void addImage(PDDocument document, PDPageContentStream contentStream, PDFImage image) throws IOException {
         byte[] imageData = Base64.getDecoder().decode(image.getData());
         PDImageXObject pdImage = PDImageXObject.createFromByteArray(
                 document,

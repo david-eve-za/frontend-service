@@ -24,6 +24,7 @@ import org.apache.pdfbox.text.TextPosition;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -32,23 +33,23 @@ import java.util.Base64;
 import java.util.List;
 import java.util.ArrayList;
 
-public class PDFToJsonConverter {
+@Component
+public class PDFToJsonConverter implements PdfConverter {
 
     private static final Logger logger = LoggerFactory.getLogger(PDFToJsonConverter.class);
-    private static final int JSON_INDENT_FACTOR = 4;
 
-    public static void convert(String pdfPath, String jsonPath) throws IOException {
-        @Cleanup PDDocument document = Loader.loadPDF(new File(pdfPath));
-        PDFDocument pdfDocument = extractPDFContent(document);
-        saveAsJson(pdfDocument, jsonPath);
-    }
-
-    public static PDFDocument convertPdfToDocumentModel(InputStream pdfInputStream) throws IOException {
+    @Override
+    public PDFDocument convertPdfToDocumentModel(InputStream pdfInputStream) throws IOException {
         @Cleanup PDDocument document = Loader.loadPDF(pdfInputStream.readAllBytes());
         return extractPDFContent(document);
     }
 
-    private static PDFDocument extractPDFContent(PDDocument document) throws IOException {
+    @Override
+    public void convertJsonToPdf(PDFDocument pdfDocument, OutputStream outputStream) throws IOException {
+        throw new UnsupportedOperationException("This converter does not support JSON to PDF conversion.");
+    }
+
+    private PDFDocument extractPDFContent(PDDocument document) throws IOException {
         PDFDocument pdfDocument = new PDFDocument();
         pdfDocument.setMetadata(PDFUtils.extractMetadata(document));
 
@@ -79,7 +80,7 @@ public class PDFToJsonConverter {
         return pdfDocument;
     }
 
-    private static List<PDFImage> extractImagesFromPage(PDPage pdPage, int pageNum) throws IOException {
+    private List<PDFImage> extractImagesFromPage(PDPage pdPage, int pageNum) throws IOException {
         List<PDFImage> images = new ArrayList<>();
         PDResources resources = pdPage.getResources();
         int imageCount = 1;
@@ -107,13 +108,6 @@ public class PDFToJsonConverter {
             }
         }
         return images;
-    }
-
-    private static void saveAsJson(PDFDocument pdfDocument, String jsonPath) throws IOException {
-        JSONObject json = pdfDocument.toJson();
-        try (FileWriter fileWriter = new FileWriter(jsonPath)) {
-            fileWriter.write(json.toString(JSON_INDENT_FACTOR));
-        }
     }
 
     private static class StyleAwareTextStripper extends PDFTextStripper {

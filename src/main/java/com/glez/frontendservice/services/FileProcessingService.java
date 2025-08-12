@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
-public class FileProcessingService {
+public class FileProcessingService implements FileService {
 
     private static final Logger logger = LoggerFactory.getLogger(FileProcessingService.class);
 
@@ -41,6 +41,7 @@ public class FileProcessingService {
         }
     }
 
+    @Override
     public String processFile(MultipartFile file) throws IOException {
         if (file.isEmpty()) {
             logger.warn("Attempted to process an empty file.");
@@ -70,7 +71,9 @@ public class FileProcessingService {
         return String.format("File '%s' (Size: %d bytes) processed. Content read successfully.", originalFileName, size);
     }
 
-    private Path storeFileOnServer(MultipartFile file, String originalFileName) throws IOException {
+    @Override
+    public Path storeFile(MultipartFile file) throws IOException {
+        String originalFileName = StringUtils.cleanPath(Objects.requireNonNull(file.getOriginalFilename()));
         String extension = StringUtils.getFilenameExtension(originalFileName);
         String uniqueFileName = UUID.randomUUID().toString() + (extension != null && !extension.isEmpty() ? "." + extension : "");
 
@@ -87,6 +90,7 @@ public class FileProcessingService {
         }
     }
 
+    @Override
     public boolean isValidImageType(MultipartFile file) {
         String contentType = file.getContentType();
         return contentType != null && SUPPORTED_IMAGE_TYPES.contains(contentType);
