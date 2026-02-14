@@ -15,22 +15,22 @@
             "prefix": "app",
             "architect": {
                 "build": {
-                    "builder": "@angular-devkit/build-angular:browser",
+                    "builder": "@angular-devkit/build-angular:application",
                     "options": {
                         "outputPath": "../resources/static",
                         "index": "src/index.html",
-                        "main": "src/main.ts",
-                        "polyfills": [
-                            "zone.js"
-                        ],
+                        "browser": "src/main.ts",
                         "tsConfig": "tsconfig.app.json",
                         "inlineStyleLanguage": "scss",
                         "assets": [
-                            "src/favicon.ico",
-                            "src/assets"
+                            {
+                                "glob": "**/*",
+                                "input": "public"
+                            }
                         ],
                         "styles": [
-                            "src/styles.scss"
+                            "src/assets/styles.scss",
+                            "src/assets/tailwind.css"
                         ],
                         "scripts": []
                     },
@@ -39,24 +39,21 @@
                             "budgets": [
                                 {
                                     "type": "initial",
-                                    "maximumWarning": "4mb",
+                                    "maximumWarning": "1mb",
                                     "maximumError": "5mb"
                                 },
                                 {
                                     "type": "anyComponentStyle",
-                                    "maximumWarning": "4mb",
-                                    "maximumError": "5mb"
+                                    "maximumWarning": "2kb",
+                                    "maximumError": "4kb"
                                 }
                             ],
                             "outputHashing": "all"
                         },
                         "development": {
-                            "buildOptimizer": false,
                             "optimization": false,
-                            "vendorChunk": true,
                             "extractLicenses": false,
-                            "sourceMap": true,
-                            "namedChunks": true
+                            "sourceMap": true
                         }
                     },
                     "defaultConfiguration": "production"
@@ -74,27 +71,19 @@
                     "defaultConfiguration": "development"
                 },
                 "extract-i18n": {
-                    "builder": "@angular-devkit/build-angular:extract-i18n",
-                    "options": {
-                        "buildTarget": "sakai-ng:build"
-                    }
+                    "builder": "@angular-devkit/build-angular:extract-i18n"
                 },
                 "test": {
                     "builder": "@angular-devkit/build-angular:karma",
                     "options": {
-                        "polyfills": [
-                            "zone.js",
-                            "zone.js/testing"
-                        ],
                         "tsConfig": "tsconfig.spec.json",
-                        "karmaConfig": "karma.conf.js",
                         "inlineStyleLanguage": "scss",
                         "assets": [
                             "src/favicon.ico",
                             "src/assets"
                         ],
                         "styles": [
-                            "src/styles.scss"
+                            "src/assets/styles.scss"
                         ],
                         "scripts": []
                     }
@@ -103,6 +92,6 @@
         }
     },
     "cli": {
-      "analytics": "03ba7992-3cf2-4503-aba6-de22ed601c96"
+        "analytics": false
     }
 }
