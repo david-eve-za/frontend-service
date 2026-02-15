@@ -1,0 +1,13 @@
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false
+spring:
+  ai:
+    google:
+      genai:
+        project-id: test-project-id
+        location: us-central1
+  autoconfigure:
+    exclude: org.springframework.ai.model.google.genai.autoconfigure.chat.GoogleGenAiChatAutoConfiguration
