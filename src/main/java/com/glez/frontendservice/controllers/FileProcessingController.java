@@ -1,10 +1,11 @@
 package com.glez.frontendservice.controllers;
 
-import gon.cue.model.Book;
-import gon.cue.model.ChunkDto;
-import gon.cue.model.PaginatedResponse;
-import gon.cue.repository.BookRepository;
-import gon.cue.services.BookProcessingService;
+
+import com.glez.frontendservice.model.Book;
+import com.glez.frontendservice.model.ChunkDto;
+import com.glez.frontendservice.model.PaginatedResponse;
+import com.glez.frontendservice.repository.BookRepository;
+import com.glez.frontendservice.services.BookProcessingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;

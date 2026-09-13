@@ -1,6 +1,7 @@
 package com.glez.frontendservice.services;
 
-import gon.cue.components.SmartTextSplitter;
+
+import com.glez.frontendservice.components.SmartTextSplitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;

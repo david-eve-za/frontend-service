@@ -16,33 +16,67 @@ spring:
     url: jdbc:h2:file:./H2-FrontEnd-Service
     driverClassName: org.h2.Driver
     username: sa
-    password: 
+    password:
   servlet:
     multipart:
       enabled: true
       max-file-size: 50MB
       max-request-size: 50MB
   ai:
+    openai:
+      api-key: ${NVIDIA_API_KEY}
+      base-url: https://integrate.api.nvidia.com
+      chat:
+        model: meta/llama-3.1-70b-instruct
+    model:
+      embedding: none
     ollama:
       base-url: http://localhost:11434
       chat:
         options:
           model: gpt-oss:20b
-      # IMPORTANT: Ensure Ollama server is running and the model 'gpt-oss:20b' is pulled.
-      # You can start Ollama and pull the model using:
-      # ollama run gpt-oss:20b
-    google:
-      genai:
-        api-key: ${GEMINI_API_KEY:AIzaSyB7LHLlJgvw3_xQRnk7-iDjpBZIpk0BhFg} # Environment variable for security. Set GEMINI_API_KEY.
-        chat:
-          options:
-            model: gemma-3-27b-it
+
+app:
+  nvidia:
+    models: "meta/llama-3.1-70b-instruct,nvidia/nemotron-3-ultra"
+    max-retries: 3
+  nlp:
+    model-path: classpath:/model
+    models:
+      en: opennlp-en-ud-ewt-sentence-1.3-2.5.4.bin
+      es: opennlp-es-ud-gsd-sentence-1.3-2.5.4.bin
+  processing:
+    chunk-size: 5000
+    chunk-overlap: 100
+    thread-pool:
+      core-size: 4
+      max-size: 8
+      queue-capacity: 100
 
 logging:
   level:
     root: INFO
+    com.glez.frontendservice: DEBUG
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
   file:
     name: logs/${spring.application.name}.log
+
+springdoc:
+  api-docs:
+    path: /api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: alpha
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    filter: true
+    doc-expansion: list
+    display-request-duration: true
+  packages-to-scan: com.glez.frontendservice.controllers
+  paths-to-match: /api/**
+  default-produces-media-type: application/json
+  default-consumes-media-type: application/json

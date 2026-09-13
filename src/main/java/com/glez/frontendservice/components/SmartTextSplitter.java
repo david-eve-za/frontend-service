@@ -2,62 +2,119 @@ package com.glez.frontendservice.components;
 
 import opennlp.tools.sentdetect.SentenceDetectorME;
 import opennlp.tools.sentdetect.SentenceModel;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class SmartTextSplitter {
 
-    private final Map<String, SentenceDetectorME> sentenceDetectors = new HashMap<>();
-    private final TokenTextSplitter tokenSplitter;
+    private final Map<String, SentenceDetectorME> sentenceDetectors = new ConcurrentHashMap<>();
+    private TokenTextSplitter tokenSplitter;
 
-    public SmartTextSplitter() throws Exception {
-        // Cargar el modelo de oraciones en inglés
-        loadModel("en", "/model/en-sent.bin");
-        // Cargar el modelo de oraciones en español
-        loadModel("es", "/model/es-sent.bin");
+    @Value("${app.nlp.model-path:classpath:/model}")
+    private String modelPath;
 
-        // Configuramos el splitter de tokens (5000 tokens según tu config de Python)
-        this.tokenSplitter = new TokenTextSplitter(5000, 100, 5, 1000, true);
+    @Value("${app.nlp.models.en:opennlp-en-ud-ewt-sentence-1.3-2.5.4.bin}")
+    private String enModel;
+
+    @Value("${app.nlp.models.es:opennlp-es-ud-gsd-sentence-1.3-2.5.4.bin}")
+    private String esModel;
+
+    @Value("${app.processing.chunk-size:5000}")
+    private int chunkSize;
+
+    @Value("${app.processing.chunk-overlap:100}")
+    private int chunkOverlap;
+
+    public SmartTextSplitter() {
+        // Constructor - tokenSplitter will be initialized in @PostConstruct
     }
 
-    private void loadModel(String lang, String path) throws IOException {
-        try (InputStream modelIn = getClass().getResourceAsStream(path)) {
+    @PostConstruct
+    public void init() {
+        List<Character> punctuationMarks = List.of('.', '?', '!', '\n', '¿', '¡', ';', ':');
+        this.tokenSplitter = TokenTextSplitter.builder()
+                .withChunkSize(chunkSize)
+                .withMinChunkSizeChars(350)
+                .withMinChunkLengthToEmbed(10)
+                .withMaxNumChunks(10000)
+                .withKeepSeparator(true)
+                .withPunctuationMarks(punctuationMarks)
+                .build();
+    }
+
+    private SentenceDetectorME getDetector(String lang) {
+        return sentenceDetectors.computeIfAbsent(lang, this::loadModel);
+    }
+
+    private SentenceDetectorME loadModel(String lang) {
+        String modelFile = "es".equals(lang) ? esModel : enModel;
+        String fullPath = modelPath + "/" + modelFile;
+        try (InputStream modelIn = getClass().getResourceAsStream(fullPath)) {
             if (modelIn == null) {
-                throw new IOException("Model file not found: " + path);
+                return createFallbackDetector();
             }
             SentenceModel model = new SentenceModel(modelIn);
-            sentenceDetectors.put(lang, new SentenceDetectorME(model));
+            return new SentenceDetectorME(model);
+        } catch (IOException e) {
+            return createFallbackDetector();
         }
+    }
+
+    private SentenceDetectorME createFallbackDetector() {
+        try (InputStream modelIn = getClass().getResourceAsStream(modelPath + "/" + enModel)) {
+            if (modelIn != null) {
+                return new SentenceDetectorME(new SentenceModel(modelIn));
+            }
+        } catch (IOException ignored) {
+        }
+        return null;
     }
 
     public List<String> split(String text, String language, int chunkSize) {
-        // Seleccionar el detector según el idioma, por defecto inglés
-        SentenceDetectorME detector = sentenceDetectors.get(language);
-        if (detector == null) {
-            detector = sentenceDetectors.get("en");
-        }
+        Document doc = new Document(text);
+        List<Document> splitDocs = tokenSplitter.apply(List.of(doc));
 
-        // 1. Dividir en oraciones (equivalente a lo que hace NLTK internamente)
+        List<String> chunks = new ArrayList<>();
+        for (Document d : splitDocs) {
+            chunks.add(d.getText());
+        }
+        return chunks;
+    }
+
+    public List<String> split(String text) {
+        return split(text, "en", chunkSize);
+    }
+
+    public List<String> splitBySentences(String text, String language, int chunkSize) {
+        SentenceDetectorME detector = getDetector(language);
+        if (detector == null) {
+            return split(text, language, chunkSize);
+        }
         String[] sentences = detector.sentDetect(text);
 
         List<String> chunks = new ArrayList<>();
         StringBuilder currentChunk = new StringBuilder();
 
         for (String sentence : sentences) {
-            // 2. Si añadir la oración excede el límite, guardamos el chunk actual
             if (estimateTokenCount(currentChunk.toString() + sentence) > chunkSize) {
                 chunks.add(currentChunk.toString().trim());
                 currentChunk = new StringBuilder(sentence);
             } else {
-                currentChunk.append(" ").append(sentence);
+                if (!currentChunk.isEmpty()) {
+                    currentChunk.append(" ");
+                }
+                currentChunk.append(sentence);
             }
         }
 
@@ -68,13 +125,7 @@ public class SmartTextSplitter {
         return chunks;
     }
 
-    // Sobrecarga para uso por defecto (inglés)
-    public List<String> split(String text) {
-        return split(text, "en",1000);
-    }
-
     private int estimateTokenCount(String text) {
-        // Aproximación rápida o uso del tokenizador de Spring AI
         return text.length() / 4;
     }
 }

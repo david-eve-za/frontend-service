@@ -1,13 +1,15 @@
 package com.glez.frontendservice.services;
 
-import gon.cue.components.SmartTextSplitter;
-import gon.cue.model.*;
-import gon.cue.repository.BookRepository;
-import gon.cue.repository.ChunksRepository;
+
+import com.glez.frontendservice.components.SmartTextSplitter;
+import com.glez.frontendservice.model.*;
+import com.glez.frontendservice.repository.BookRepository;
+import com.glez.frontendservice.repository.ChunksRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,51 +22,33 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor // Add this annotation
+@RequiredArgsConstructor
 public class BookProcessingService {
 
     private final BookRepository bookRepository;
     private final TextExtractorService textExtractorService;
-    private final TranslationAgent translationAgent;
+    private final NvidiaAiService nvidiaAiService;
     private final AudioGeneratorService audioGeneratorService;
     private final ChunksRepository chunksRepository;
     private final SmartTextSplitter smartTextSplitter;
     private final ApplicationContext applicationContext;
 
-    private final ExecutorService executorService = Executors.newFixedThreadPool(4); // Initialize here
-
     // Map to keep track of running tasks for each book to allow cancellation
     private final Map<UUID, List<CompletableFuture<?>>> activeTasks = new ConcurrentHashMap<>();
-
-    // Remove @Autowired and the constructor, Lombok's @RequiredArgsConstructor handles constructor injection
-    // public BookProcessingService(BookRepository bookRepository, TextExtractorService textExtractorService, TranslationAgent translationAgent, AudioGeneratorService audioGeneratorService, ChunksRepository chunksRepository, SmartTextSplitter smartTextSplitter, ApplicationContext applicationContext) {
-    //     this.bookRepository = bookRepository;
-    //     this.textExtractorService = textExtractorService;
-    //     this.translationAgent = translationAgent;
-    //     this.audioGeneratorService = audioGeneratorService;
-    //     this.chunksRepository = chunksRepository;
-    //     this.smartTextSplitter = smartTextSplitter;
-    //     this.applicationContext = applicationContext;
-
-    //     this.executorService = Executors.newFixedThreadPool(4);
-    // }
 
     public Book storeBook(InputStream fileInputStream, String originalFilename) {
         Book book = new Book();
         book.setName(originalFilename);
         book.setStatus(ProcessingStatus.UPLOADED);
-        
+
         try {
             String extractedText = textExtractorService.extractAndCleanText(fileInputStream, originalFilename);
-            book.setFullText(extractedText); // Store the full extracted text
-            book = bookRepository.save(book); // Save the book with full text
+            book.setFullText(extractedText);
+            book = bookRepository.save(book);
         } catch (IOException e) {
-            // If text extraction fails, delete the book record if it was saved without chunks
             if (book.getId() != null) {
                 bookRepository.delete(book);
             }
@@ -82,13 +66,11 @@ public class BookProcessingService {
     @Transactional
     public void finalizeProcessing(UUID bookId) {
         Book finalBook = bookRepository.findById(bookId).orElseThrow(() -> new RuntimeException("Book disappeared during processing"));
-        
-        // If the book was stopped/paused, do not proceed to completion
+
         if (finalBook.getStatus() == ProcessingStatus.STOPPED) {
             return;
         }
-        
-        // Avoid reprocessing if it's already in a final state
+
         if (finalBook.getStatus() == ProcessingStatus.COMPLETED || finalBook.getStatus() == ProcessingStatus.FAILED) {
             return;
         }
@@ -113,13 +95,10 @@ public class BookProcessingService {
                 finalBook.setStatus(ProcessingStatus.FAILED);
             }
         } else {
-            // If not all are completed, and we are not stopped, it means some failed.
-            // Check if any are still processing (shouldn't be, as futures are done)
             boolean anyFailed = finalChunks.stream().anyMatch(c -> c.getStatus() == ChunkStatus.FAILED);
             if (anyFailed) {
                 finalBook.setStatus(ProcessingStatus.FAILED);
             }
-            // If some are AWAITING (because of pause), we leave the book status as is (or set to STOPPED if not already)
         }
         bookRepository.save(finalBook);
     }
@@ -129,18 +108,14 @@ public class BookProcessingService {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
 
-        // Cancel any active processing tasks for this book
         List<CompletableFuture<?>> futures = activeTasks.remove(bookId);
         if (futures != null) {
             for (CompletableFuture<?> future : futures) {
-                future.cancel(true); // Attempt to interrupt running tasks
+                future.cancel(true);
             }
         }
 
-        // Delete all associated chunks first
         chunksRepository.deleteAllByBook(book);
-
-        // Then delete the book
         bookRepository.delete(book);
     }
 
@@ -162,12 +137,11 @@ public class BookProcessingService {
     public void splitBookIntoChunks(UUID bookId) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
-        
+
         if (book.getFullText() == null || book.getFullText().isEmpty()) {
             throw new IllegalArgumentException("Book with ID " + bookId + " has no full text to chunk.");
         }
 
-        // Clear existing chunks for this book
         chunksRepository.deleteAllByBook(book);
 
         List<String> splitText = smartTextSplitter.split(book.getFullText());
@@ -181,29 +155,26 @@ public class BookProcessingService {
             chunk.setPosition(i);
             chunksRepository.save(chunk);
         }
-        
-        // Update book status to UPLOADED or AWAITING_PROCESSING after re-chunking
-        book.setStatus(ProcessingStatus.UPLOADED); 
+
+        book.setStatus(ProcessingStatus.UPLOADED);
         bookRepository.save(book);
     }
 
+    @Async("bookProcessingExecutor")
     @Transactional
-    public void translateChunk(UUID chunkId) {
+    public CompletableFuture<Void> translateChunkAsync(UUID chunkId) {
         Chunks chunk = chunksRepository.findById(chunkId)
                 .orElseThrow(() -> new IllegalArgumentException("Chunk with ID " + chunkId + " not found."));
 
-        // Ensure original text exists before attempting translation
         if (chunk.getOriginalText() == null || chunk.getOriginalText().isEmpty()) {
             throw new IllegalArgumentException("Chunk with ID " + chunkId + " has no original text to translate.");
         }
-        
-        // Set chunk status to PROCESSING
+
         chunk.setStatus(ChunkStatus.PROCESSING);
         chunksRepository.save(chunk);
 
         try {
-            // Assuming "en" to "es" translation for now, this can be made configurable later
-            String translated = translationAgent.translateChunk(chunk.getOriginalText(), "en", "es");
+            String translated = nvidiaAiService.translateChunk(chunk.getOriginalText(), "en", "es");
             chunk.setTranslatedText(translated);
             chunk.setStatus(ChunkStatus.COMPLETED);
         } catch (Exception e) {
@@ -213,14 +184,31 @@ public class BookProcessingService {
         } finally {
             chunksRepository.save(chunk);
         }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @Async("bookProcessingExecutor")
+    @Transactional
+    public CompletableFuture<Void> processBookChunksAsync(UUID bookId) {
+        Book book = bookRepository.findById(bookId)
+                .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
+
+        List<Chunks> chunks = chunksRepository.findByBook(book);
+        List<CompletableFuture<?>> futures = chunks.stream()
+                .filter(c -> c.getStatus() == ChunkStatus.AWAITING)
+                .map(c -> translateChunkAsync(c.getId()))
+                .collect(Collectors.toList());
+
+        activeTasks.put(bookId, futures);
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
     }
 
     public PaginatedResponse<ChunkDto> getBookChunks(UUID bookId, Pageable pageable) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
-        
+
         Page<Chunks> chunksPage = chunksRepository.findByBook(book, pageable);
-        
+
         Page<ChunkDto> chunkDtoPage = chunksPage.map(chunk -> new ChunkDto(
                 chunk.getId(),
                 chunk.getOriginalText(),
@@ -228,7 +216,7 @@ public class BookProcessingService {
                 chunk.getStatus(),
                 chunk.getPosition()
         ));
-        
+
         return new PaginatedResponse<>(chunkDtoPage);
     }
 }

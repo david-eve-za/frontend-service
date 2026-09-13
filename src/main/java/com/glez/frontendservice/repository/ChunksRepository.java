@@ -1,7 +1,8 @@
 package com.glez.frontendservice.repository;
 
-import gon.cue.model.Book;
-import gon.cue.model.Chunks;
+
+import com.glez.frontendservice.model.Book;
+import com.glez.frontendservice.model.Chunks;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
