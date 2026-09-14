@@ -33,11 +33,6 @@ export class AppMenu {
                 path: '/book-translator',
                 items: [
                     { 
-                        label: 'Dashboard', 
-                        icon: 'pi pi-fw pi-home',
-                        routerLink: ['/'] 
-                    },
-                    { 
                         label: 'Translate Book', 
                         icon: 'pi pi-fw pi-file-arrow-right',
                         routerLink: ['/book-translator'] 
