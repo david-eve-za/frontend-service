@@ -1,5 +1,8 @@
 package com.glez.frontendservice.services;
 
+import com.glez.frontendservice.model.RegexPattern;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
@@ -13,19 +16,20 @@ import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class TextExtractorService {
 
-    // Patrones de limpieza basados en tu código Python
-    private static final Pattern URL_PATTERN = Pattern.compile("https?://\\S+|\\b(?:www\\.)?[\\w.-]+\\.(?:com|org|net|gov|edu|io|co|ai|app|blog|info|biz|dev|me|xyz)(?:/\\S*)?\\b", Pattern.CASE_INSENSITIVE);
-    private static final Pattern SOCIAL_PATTERN = Pattern.compile("@\\w+|#\\w+");
-    private static final Pattern ISBN_PATTERN = Pattern.compile("ISBN(?:\\s*-?\\s*\\d{1,5}){2,5}[xX]?|\\bISBNs\\b", Pattern.CASE_INSENSITIVE);
-    private static final Pattern PAGE_NUM_PATTERN = Pattern.compile("(?i)(?:^|\\s)(?:page|p\\.)\\s*\\d+\\s*(?:de\\s*\\d+)?(?:/|\\s|$)|(?i)(?:^|\\s)page\\|\\s*\\d+");
-    private static final Pattern EMPTY_LINES = Pattern.compile("(\\n\\s*)+\\n");
-    private static final Pattern WHITESPACE_PATTERN = Pattern.compile("[ \\t]+");
+    private final RegexPatternService regexPatternService;
+
+    // Cache for compiled patterns to avoid recompilation
+    private List<RegexPattern> cachedPatterns = null;
+    private long lastCacheRefresh = 0;
+    private static final long CACHE_TTL_MS = 60000; // 1 minute cache
 
     /**
-     * Extrae texto de un archivo (PDF o EPUB) y lo limpia.
+     * Extrae texto de un archivo (PDF u otros formatos soportados por Tika) y lo limpia.
      */
     public String extractAndCleanText(InputStream inputStream, String filename) throws IOException {
         Resource resource = new InputStreamResource(inputStream);
@@ -46,21 +50,52 @@ public class TextExtractorService {
         return cleanText(rawText);
     }
 
-    private String cleanText(String text) {
+    /**
+     * Limpia el texto aplicando los patrones configurados desde la base de datos.
+     */
+    public String cleanText(String text) {
         if (text == null) return "";
 
-        String cleaned = URL_PATTERN.matcher(text).replaceAll("");
-        cleaned = SOCIAL_PATTERN.matcher(cleaned).replaceAll("");
-        cleaned = ISBN_PATTERN.matcher(cleaned).replaceAll("");
-        cleaned = PAGE_NUM_PATTERN.matcher(cleaned).replaceAll("");
+        String cleaned = text;
+        List<RegexPattern> patterns = getCachedPatterns();
 
-        // Limpiar espacios en blanco múltiples
-        cleaned = WHITESPACE_PATTERN.matcher(cleaned).replaceAll(" ");
+        for (RegexPattern regexPattern : patterns) {
+            if (!regexPattern.getEnabled()) continue;
 
-        // Limpiar saltos de línea múltiples (equivalente a \n{3,})
+            try {
+                Pattern pattern = regexPattern.toPattern();
+                String replacement = regexPattern.getReplacement() != null ? regexPattern.getReplacement() : "";
+                cleaned = pattern.matcher(cleaned).replaceAll(replacement);
+            } catch (Exception e) {
+                log.warn("Error applying regex pattern '{}': {}", regexPattern.getName(), e.getMessage());
+            }
+        }
+
+        // Post-processing: normalize multiple newlines (always applied)
         cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
-        cleaned = EMPTY_LINES.matcher(cleaned).replaceAll("\n\n");
 
         return cleaned.trim();
+    }
+
+    /**
+     * Obtiene los patrones cacheados, refrescando si es necesario.
+     */
+    private List<RegexPattern> getCachedPatterns() {
+        long now = System.currentTimeMillis();
+        if (cachedPatterns == null || (now - lastCacheRefresh) > CACHE_TTL_MS) {
+            cachedPatterns = regexPatternService.getPatternsForTextCleaning();
+            lastCacheRefresh = now;
+            log.debug("Refreshed regex pattern cache, loaded {} patterns", cachedPatterns.size());
+        }
+        return cachedPatterns;
+    }
+
+    /**
+     * Fuerza la recarga de la caché de patrones.
+     */
+    public void refreshPatternCache() {
+        cachedPatterns = null;
+        lastCacheRefresh = 0;
+        getCachedPatterns();
     }
 }

@@ -6,6 +6,10 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import com.glez.frontendservice.model.RegexPattern;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -13,15 +17,59 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 @DisplayName("TextExtractorService Tests")
 class TextExtractorServiceTest {
+
+    @Mock
+    private RegexPatternService regexPatternService;
 
     private TextExtractorService textExtractorService;
 
     @BeforeEach
     void setUp() {
-        textExtractorService = new TextExtractorService();
+        MockitoAnnotations.openMocks(this);
+        textExtractorService = new TextExtractorService(regexPatternService);
+        // Configure mock to return default patterns similar to the old implementation
+        RegexPattern urlPattern = RegexPattern.builder()
+                .name("url-cleaner")
+                .pattern("https?://\\S+|\\b(?:www\\.)?[\\w.-]+\\.(?:com|org|net|gov|edu|io|co|ai|app|blog|info|biz|dev|me|xyz)(?:/\\S*)?\\b")
+                .replacement("")
+                .enabled(true)
+                .caseInsensitive(true)
+                .build();
+        RegexPattern socialPattern = RegexPattern.builder()
+                .name("social-media-cleaner")
+                .pattern("@\\w+|#\\w+")
+                .replacement("")
+                .enabled(true)
+                .caseInsensitive(true)
+                .build();
+        RegexPattern isbnPattern = RegexPattern.builder()
+                .name("isbn-cleaner")
+                .pattern("ISBN(?:\\s*-?\\s*\\d{1,5}){2,5}[xX]?|\\bISBNs\\b")
+                .replacement("")
+                .enabled(true)
+                .caseInsensitive(true)
+                .build();
+        RegexPattern pageNumPattern = RegexPattern.builder()
+                .name("page-number-cleaner")
+                .pattern("(?i)(?:^|\\s)(?:page|p\\.)\\s*\\d+\\s*(?:de\\s*\\d+)?(?:/|\\s|$)|(?i)(?:^|\\s)page\\|\\s*\\d+")
+                .replacement("")
+                .enabled(true)
+                .caseInsensitive(true)
+                .build();
+        RegexPattern whitespacePattern = RegexPattern.builder()
+                .name("whitespace-cleaner")
+                .pattern("[ \\t]+")
+                .replacement(" ")
+                .enabled(true)
+                .build();
+
+        when(regexPatternService.getPatternsForTextCleaning()).thenReturn(
+                java.util.List.of(urlPattern, socialPattern, isbnPattern, pageNumPattern, whitespacePattern)
+        );
     }
 
     @Nested
