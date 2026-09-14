@@ -1,12 +1,12 @@
 import { Component } from '@angular/core';
-import { RegexPatternFormComponent } from './regex-pattern-form.component';
+import { RegexPatternTableComponent } from './regex-pattern-table.component';
 
 @Component({
   selector: 'app-book-translator-settings',
   standalone: true,
-  imports: [RegexPatternFormComponent],
+  imports: [RegexPatternTableComponent],
   template: `
-    <app-regex-pattern-form></app-regex-pattern-form>
+    <app-regex-pattern-table></app-regex-pattern-table>
   `
 })
 export class BookTranslatorSettings {}
