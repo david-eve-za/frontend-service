@@ -200,3 +200,21 @@ nbdist/
 # Ignore all local history of files
 .history
 .ionide
+# H2 Database
+H2-FrontEnd-Service*.db
+H2-FrontEnd-Service*.trace.db
+
+# Logs
+logs/*.log
+logs/*.gz
+
+# Angular build artifacts
+src/main/angular/node/
+src/main/angular/node_modules/
+src/main/angular/.angular/
+src/main/angular/.postcssrc.json
+src/main/angular/.prettierignore
+src/main/angular/.prettierrc.json
+
+# Compiled static resources (keep model/ tracked)
+src/main/resources/static/
