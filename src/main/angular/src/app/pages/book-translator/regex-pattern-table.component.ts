@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { Subject, takeUntil } from 'rxjs';
@@ -415,7 +415,8 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
     private fb: FormBuilder,
     private regexPatternService: RegexPatternService,
     private messageService: MessageService,
-    private confirmationService: ConfirmationService
+    private confirmationService: ConfirmationService,
+    private cdr: ChangeDetectorRef
   ) {
     this.form = this.createForm();
   }
@@ -453,11 +454,13 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
       next: (patterns) => {
         this.patterns = patterns;
         this.loading = false;
+        this.cdr.detectChanges();
       },
       error: (err) => {
         this.loading = false;
         this.error = 'No se pudieron cargar los patrones. ' + (err.message || 'Error de conexión');
         this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar los patrones' });
+        this.cdr.detectChanges();
       }
     });
   }

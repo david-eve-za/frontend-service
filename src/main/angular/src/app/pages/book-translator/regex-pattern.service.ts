@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable, of, BehaviorSubject } from 'rxjs';
-import { tap, catchError, shareReplay, switchMap } from 'rxjs/operators';
+import { tap, catchError } from 'rxjs/operators';
 
 export interface RegexPattern {
   id?: string;
@@ -68,8 +68,7 @@ export class RegexPatternService {
           return of(cache);
         }
         throw err;
-      }),
-      shareReplay(1)
+      })
     );
   }
 
