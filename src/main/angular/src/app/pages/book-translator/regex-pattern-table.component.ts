@@ -17,6 +17,8 @@ import { ConfirmDialogModule } from 'primeng/confirmdialog';
 import { ToolbarModule } from 'primeng/toolbar';
 import { IconFieldModule } from 'primeng/iconfield';
 import { InputIconModule } from 'primeng/inputicon';
+import { SkeletonModule } from 'primeng/skeleton';
+import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { MessageService, ConfirmationService } from 'primeng/api';
 
 @Component({
@@ -38,7 +40,9 @@ import { MessageService, ConfirmationService } from 'primeng/api';
     ConfirmDialogModule,
     ToolbarModule,
     IconFieldModule,
-    InputIconModule
+    InputIconModule,
+    SkeletonModule,
+    ProgressSpinnerModule
   ],
   providers: [MessageService, ConfirmationService],
   template: `
@@ -46,114 +50,144 @@ import { MessageService, ConfirmationService } from 'primeng/api';
     <p-confirmDialog></p-confirmDialog>
 
     <div class="card">
-      <p-toolbar>
-        <ng-template pTemplate="start">
-          <div class="flex gap-2">
-            <p-button label="Nuevo Patrón" icon="pi pi-plus" (click)="openNew()" styleClass="p-button-primary"></p-button>
-            <p-button label="Actualizar" icon="pi pi-refresh" (click)="loadPatterns()" styleClass="p-button-secondary" [loading]="loading"></p-button>
-          </div>
-        </ng-template>
-        <ng-template pTemplate="end">
-          <p-iconField>
-            <p-inputIcon class="pi pi-search" />
-            <input pInputText type="text" (input)="onGlobalFilter($event)" placeholder="Buscar..." style="width: 250px" />
-          </p-iconField>
-        </ng-template>
-      </p-toolbar>
+      <!-- Header Section -->
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-content-between gap-4 mb-4 p-4 bg-blue-50 border-l-4 border-blue-500 rounded-r">
+        <div>
+          <h2 class="text-xl font-bold text-gray-800">Gestor de Expresiones Regulares</h2>
+          <p class="text-sm text-gray-600 mt-1">Gestiona las expresiones regulares usadas para limpiar texto extraído de documentos</p>
+        </div>
+        <div class="flex gap-2">
+          <p-button label="Nuevo Patrón" icon="pi pi-plus" (click)="openNew()" styleClass="p-button-primary"></p-button>
+          <p-button label="Actualizar" icon="pi pi-refresh" (click)="loadPatterns()" styleClass="p-button-secondary" [loading]="loading" [disabled]="loading"></p-button>
+        </div>
+      </div>
 
-      <p-table 
-        [value]="patterns" 
-        [loading]="loading"
-        [paginator]="true"
-        [rows]="10"
-        [showCurrentPageReport]="true"
-        currentPageReportTemplate="Mostrando {first} a {last} de {totalRecords} patrones"
-        [rowsPerPageOptions]="[10, 25, 50]"
-        [globalFilterFields]="['name', 'displayName', 'pattern', 'patternType']"
-        responsiveLayout="scroll"
-        dataKey="id">
-        
-        <ng-template pTemplate="header">
-          <tr>
-            <th style="width: 50px">#</th>
-            <th pSortableColumn="orderIndex">Orden <p-sortIcon field="orderIndex"></p-sortIcon></th>
-            <th pSortableColumn="displayName">Nombre <p-sortIcon field="displayName"></p-sortIcon></th>
-            <th pSortableColumn="patternType">Tipo <p-sortIcon field="patternType"></p-sortIcon></th>
-            <th pSortableColumn="pattern">Patrón <p-sortIcon field="pattern"></p-sortIcon></th>
-            <th pSortableColumn="replacement">Reemplazo <p-sortIcon field="replacement"></p-sortIcon></th>
-            <th pSortableColumn="enabled">Estado <p-sortIcon field="enabled"></p-sortIcon></th>
-            <th style="width: 120px">Acciones</th>
-          </tr>
-        </ng-template>
-        
-        <ng-template pTemplate="body" let-pattern let-rowIndex="rowIndex">
-          <tr>
-            <td>{{ rowIndex + 1 }}</td>
-            <td>{{ pattern.orderIndex }}</td>
-            <td>
-              <div class="font-medium">{{ pattern.displayName }}</div>
-              <div class="text-sm text-gray-500">{{ pattern.name }}</div>
-            </td>
-            <td>
-              <p-tag 
-                [value]="getPatternTypeLabel(pattern.patternType)" 
-                [severity]="getPatternTypeSeverity(pattern.patternType)">
-              </p-tag>
-            </td>
-            <td>
-              <code class="text-sm" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;">
-                {{ pattern.pattern }}
-              </code>
-            </td>
-            <td>
-              <code class="text-sm" style="max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;">
-                {{ pattern.replacement || '(vacío = eliminar)' }}
-              </code>
-            </td>
-            <td>
-              <p-tag 
-                [value]="pattern.enabled ? 'Activo' : 'Inactivo'" 
-                [severity]="pattern.enabled ? 'success' : 'danger'">
-              </p-tag>
-            </td>
-            <td>
-              <div class="flex gap-1">
-                <p-button 
-                  icon="pi pi-pencil" 
-                  pTooltip="Editar" 
-                  (click)="openEdit(pattern)" 
-                  styleClass="p-button-text p-button-sm p-button-rounded p-button-info"
-                  [disabled]="saving">
-                </p-button>
-                <p-button 
-                  icon="pi pi-eye" 
-                  pTooltip="Ver detalles" 
-                  (click)="openView(pattern)" 
-                  styleClass="p-button-text p-button-sm p-button-rounded p-button-secondary"
-                  [disabled]="saving">
-                </p-button>
-                <p-button 
-                  icon="pi pi-trash" 
-                  pTooltip="Eliminar" 
-                  (click)="confirmDelete(pattern)" 
-                  styleClass="p-button-text p-button-sm p-button-rounded p-button-danger"
-                  [disabled]="saving">
-                </p-button>
-              </div>
-            </td>
-          </tr>
-        </ng-template>
-        
-        <ng-template pTemplate="emptymessage">
-          <tr>
-            <td colspan="8" class="text-center py-8">
-              <i class="pi pi-info-circle text-4xl text-gray-400"></i>
-              <p class="mt-2 text-gray-500">No hay patrones configurados</p>
-              <p-button label="Crear primer patrón" icon="pi pi-plus" (click)="openNew()" styleClass="p-button-primary mt-2"></p-button>
-            </td>
-          </tr>
-        </ng-template>
-      </p-table>
+      <!-- Loading Skeleton -->
+      <div *ngIf="loading && patterns.length === 0" class="p-4">
+        <p-progressSpinner styleClass="w-8 h-8" strokeWidth="3"></p-progressSpinner>
+        <p class="mt-2 text-gray-500">Cargando patrones...</p>
+      </div>
+
+      <!-- Error State -->
+      <div *ngIf="error && patterns.length === 0" class="p-4 text-center">
+        <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <p class="mt-2 text-red-700 font-medium">{{ error }}</p>
+          <p-button label="Reintentar" icon="pi pi-refresh" (click)="loadPatterns()" styleClass="p-button-sm p-button-outlined mt-2"></p-button>
+        </div>
+      </div>
+
+      <!-- Table Container -->
+      <div *ngIf="!loading || patterns.length > 0" class="card">
+        <p-table 
+          [value]="patterns" 
+          [loading]="loading && patterns.length === 0"
+          [paginator]="true"
+          [rows]="10"
+          [showCurrentPageReport]="true"
+          currentPageReportTemplate="Mostrando {first} a {last} de {totalRecords} patrones"
+          [rowsPerPageOptions]="[10, 25, 50]"
+          [globalFilterFields]="['name', 'displayName', 'pattern', 'patternType']"
+          responsiveLayout="scroll"
+          dataKey="id"
+          [sortMode]="'single'">
+          
+          <ng-template pTemplate="header">
+            <tr>
+              <th style="width: 50px">#</th>
+              <th pSortableColumn="orderIndex">Orden <p-sortIcon field="orderIndex"></p-sortIcon></th>
+              <th pSortableColumn="displayName">Nombre <p-sortIcon field="displayName"></p-sortIcon></th>
+              <th pSortableColumn="patternType">Tipo <p-sortIcon field="patternType"></p-sortIcon></th>
+              <th pSortableColumn="pattern">Patrón <p-sortIcon field="pattern"></p-sortIcon></th>
+              <th pSortableColumn="replacement">Reemplazo <p-sortIcon field="replacement"></p-sortIcon></th>
+              <th pSortableColumn="enabled">Estado <p-sortIcon field="enabled"></p-sortIcon></th>
+              <th style="width: 120px">Acciones</th>
+            </tr>
+          </ng-template>
+          
+          <ng-template pTemplate="body" let-pattern let-rowIndex="rowIndex">
+            <tr>
+              <td>{{ rowIndex + 1 }}</td>
+              <td>{{ pattern.orderIndex }}</td>
+              <td>
+                <div class="font-medium">{{ pattern.displayName }}</div>
+                <div class="text-sm text-gray-500">{{ pattern.name }}</div>
+              </td>
+              <td>
+                <p-tag 
+                  [value]="getPatternTypeLabel(pattern.patternType)" 
+                  [severity]="getPatternTypeSeverity(pattern.patternType)">
+                </p-tag>
+              </td>
+              <td>
+                <code class="text-sm" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;">
+                  {{ pattern.pattern }}
+                </code>
+              </td>
+              <td>
+                <code class="text-sm" style="max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;">
+                  {{ pattern.replacement || '(vacío = eliminar)' }}
+                </code>
+              </td>
+              <td>
+                <p-tag 
+                  [value]="pattern.enabled ? 'Activo' : 'Inactivo'" 
+                  [severity]="pattern.enabled ? 'success' : 'danger'">
+                </p-tag>
+              </td>
+              <td>
+                <div class="flex gap-1">
+                  <p-button 
+                    icon="pi pi-pencil" 
+                    pTooltip="Editar" 
+                    (click)="openEdit(pattern)" 
+                    styleClass="p-button-text p-button-sm p-button-rounded p-button-info"
+                    [disabled]="saving">
+                  </p-button>
+                  <p-button 
+                    icon="pi pi-eye" 
+                    pTooltip="Ver detalles" 
+                    (click)="openView(pattern)" 
+                    styleClass="p-button-text p-button-sm p-button-rounded p-button-secondary"
+                    [disabled]="saving">
+                  </p-button>
+                  <p-button 
+                    icon="pi pi-trash" 
+                    pTooltip="Eliminar" 
+                    (click)="confirmDelete(pattern)" 
+                    styleClass="p-button-text p-button-sm p-button-rounded p-button-danger"
+                    [disabled]="saving">
+                  </p-button>
+                </div>
+              </td>
+            </tr>
+          </ng-template>
+          
+          <!-- Skeleton rows while loading -->
+          <ng-template pTemplate="loadingbody">
+            <tr *ngFor="let i of [1,2,3,4,5]">
+              <td><p-skeleton width="30px" height="1rem"></p-skeleton></td>
+              <td><p-skeleton width="40px" height="1rem"></p-skeleton></td>
+              <td><p-skeleton width="150px" height="1rem"></p-skeleton></td>
+              <td><p-skeleton width="80px" height="1rem"></p-skeleton></td>
+              <td><p-skeleton width="180px" height="1rem"></p-skeleton></td>
+              <td><p-skeleton width="80px" height="1rem"></p-skeleton></td>
+              <td><p-skeleton width="70px" height="1rem"></p-skeleton></td>
+              <td><p-skeleton width="100px" height="1rem"></p-skeleton></td>
+            </tr>
+          </ng-template>
+          
+          <ng-template pTemplate="emptymessage">
+            <tr>
+              <td colspan="8" class="text-center py-8">
+                <i class="pi pi-info-circle text-4xl text-gray-400"></i>
+                <p class="mt-2 text-gray-500">No hay patrones configurados</p>
+                <p-button label="Crear primer patrón" icon="pi pi-plus" (click)="openNew()" styleClass="p-button-primary mt-2"></p-button>
+              </td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
     </div>
 
     <!-- Dialog para Crear/Editar -->
@@ -259,7 +293,8 @@ import { MessageService, ConfirmationService } from 'primeng/api';
       [modal]="true" 
       [style]="{ width: '600px' }" 
       [draggable]="false" 
-      [resizable]="false">
+      [resizable]="false"
+      [closeOnEscape]="true">
       
       <div class="grid" *ngIf="selectedPattern">
         <div class="col-12">
@@ -337,11 +372,21 @@ import { MessageService, ConfirmationService } from 'primeng/api';
     :host ::ng-deep .p-datatable .p-datatable-tbody > tr > td {
       padding: 0.75rem 1rem;
     }
+    :host ::ng-deep .p-skeleton {
+      background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+      background-size: 200% 100%;
+      animation: loading 1.5s infinite;
+    }
+    @keyframes loading {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
   `]
 })
 export class RegexPatternTableComponent implements OnInit, OnDestroy {
   patterns: RegexPattern[] = [];
   loading = false;
+  error: string | null = null;
   saving = false;
   validating = false;
   validationResult: boolean | undefined;
@@ -403,6 +448,7 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
 
   loadPatterns() {
     this.loading = true;
+    this.error = null;
     this.regexPatternService.getEnabled().pipe(takeUntil(this.destroying$)).subscribe({
       next: (patterns) => {
         this.patterns = patterns;
@@ -410,6 +456,7 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
       },
       error: (err) => {
         this.loading = false;
+        this.error = 'No se pudieron cargar los patrones. ' + (err.message || 'Error de conexión');
         this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar los patrones' });
       }
     });
