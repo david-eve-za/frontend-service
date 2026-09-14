@@ -27,25 +27,30 @@ export class AppMenu {
                 label: 'Home',
                 items: [{ label: 'Dashboard', icon: 'pi pi-fw pi-home', routerLink: ['/'] }]
             },
-            {
+{
                 label: 'Book Translator',
                 icon: 'pi pi-fw pi-language',
                 path: '/book-translator',
                 items: [
-                    { 
-                        label: 'Translate Book', 
+                    {
+                        label: 'Subir Archivos',
+                        icon: 'pi pi-fw pi-upload',
+                        routerLink: ['/book-translator/upload']
+                    },
+                    {
+                        label: 'Translate Book',
                         icon: 'pi pi-fw pi-file-arrow-right',
-                        routerLink: ['/book-translator'] 
+                        routerLink: ['/book-translator']
                     },
-                    { 
-                        label: 'History', 
-                        icon: 'pi pi-fw pi-history', 
-                        routerLink: ['/book-translator/history'] 
+                    {
+                        label: 'History',
+                        icon: 'pi pi-fw pi-history',
+                        routerLink: ['/book-translator/history']
                     },
-                    { 
-                        label: 'Settings', 
-                        icon: 'pi pi-fw pi-cog', 
-                        routerLink: ['/book-translator/settings'] 
+                    {
+                        label: 'Settings',
+                        icon: 'pi pi-fw pi-cog',
+                        routerLink: ['/book-translator/settings']
                     }
                 ]
             },
