@@ -15,6 +15,18 @@ export interface BookStatusResponse {
   status: string;
 }
 
+export interface SemanticBlock {
+  type: 'prologue' | 'chapter' | 'epilogue';
+  id: number;
+  content: string;
+}
+
+export interface SaveBlocksPayload {
+  documentId: string;
+  rawText: string;
+  blocks: SemanticBlock[];
+}
+
 export interface BookListItem {
   id: string;
   name: string;
@@ -83,6 +95,14 @@ export class BookTranslatorUploadService {
 
   splitBookIntoChunks(bookId: string): Observable<{ message: string }> {
     return this.http.post<{ message: string }>(`${this.API_URL}/${bookId}/split`, {});
+  }
+
+  getBookFullText(bookId: string): Observable<string> {
+    return this.http.get(`${this.API_URL}/${bookId}/full-text`, { responseType: 'text' });
+  }
+
+  saveBlocks(payload: SaveBlocksPayload): Observable<{ message: string; blocksSaved: number }> {
+    return this.http.post<{ message: string; blocksSaved: number }>('/api/blocks', payload);
   }
 
   pollBookStatus(bookId: string, intervalMs: number = 2000): Observable<BookStatusResponse> {

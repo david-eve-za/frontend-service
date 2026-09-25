@@ -5,13 +5,15 @@ import { ToastModule } from 'primeng/toast';
 import { MessageService } from 'primeng/api';
 import { UploadStep1FilesComponent, SelectedFile } from './upload-step1-files.component';
 import { UploadStep2ConfigComponent, ProcessingConfig } from './upload-step2-config.component';
-import { UploadStep3ConfirmComponent } from './upload-step3-confirm.component';
+import { UploadStep3SplitComponent, SplitBookState } from './upload-step3-split.component';
+import { UploadStep4ConfirmComponent } from './upload-step4-confirm.component';
+import { UploadResponse } from './book-translator-upload.service';
 import { MenuItem } from 'primeng/api';
 
 @Component({
   selector: 'app-upload-wizard',
   standalone: true,
-  imports: [CommonModule, StepsModule, ToastModule, UploadStep1FilesComponent, UploadStep2ConfigComponent, UploadStep3ConfirmComponent],
+  imports: [CommonModule, StepsModule, ToastModule, UploadStep1FilesComponent, UploadStep2ConfigComponent, UploadStep3SplitComponent, UploadStep4ConfirmComponent],
   template: `
     <p-toast></p-toast>
 
@@ -38,15 +40,25 @@ import { MenuItem } from 'primeng/api';
         </app-upload-step2-config>
       </div>
 
-      <!-- Step 3: Confirm & Process -->
+      <!-- Step 3: Split Text -->
       <div *ngIf="activeStep === 2" class="mt-6">
-        <app-upload-step3-confirm
+        <app-upload-step3-split
           [selectedFiles]="fileList"
-          [config]="processingConfig"
+          [books]="splitBooks"
           (back)="onStep3Back()"
+          (continue)="onStep3Continue()">
+        </app-upload-step3-split>
+      </div>
+
+      <!-- Step 4: Confirm & Process -->
+      <div *ngIf="activeStep === 3" class="mt-6">
+        <app-upload-step4-confirm
+          [books]="splitBooks"
+          [config]="processingConfig"
+          (back)="onStep4Back()"
           (viewHistory)="onViewHistory()"
           (processingComplete)="onProcessingComplete($event)">
-        </app-upload-step3-confirm>
+        </app-upload-step4-confirm>
       </div>
     </div>
   `,
@@ -65,6 +77,7 @@ import { MenuItem } from 'primeng/api';
 export class UploadWizardComponent implements OnInit {
   activeStep = 0;
   selectedFiles: SelectedFile[] = [];
+  splitBooks: SplitBookState[] = [];
   processingConfig: ProcessingConfig = {
     targetLanguage: 'es',
     ttsVoice: 'Paulina',
@@ -80,6 +93,7 @@ export class UploadWizardComponent implements OnInit {
   items: MenuItem[] = [
     { label: 'Subir Archivos', routerLink: '' },
     { label: 'Configurar', routerLink: '' },
+    { label: 'Split del Texto', routerLink: '' },
     { label: 'Confirmar', routerLink: '' }
   ];
 
@@ -89,6 +103,7 @@ export class UploadWizardComponent implements OnInit {
 
   onFilesSelected(files: SelectedFile[]) {
     this.selectedFiles = files;
+    this.splitBooks = [];
   }
 
   onStep1Continue() {
@@ -115,12 +130,20 @@ export class UploadWizardComponent implements OnInit {
     this.activeStep = 1;
   }
 
+  onStep3Continue() {
+    this.activeStep = 3;
+  }
+
+  onStep4Back() {
+    this.activeStep = 2;
+  }
+
   onViewHistory() {
     // Navigate to history page
     window.location.href = '/book-translator/history';
   }
 
-  onProcessingComplete(results: any[]) {
+  onProcessingComplete(results: UploadResponse[]) {
     this.messageService.add({
       severity: 'success',
       summary: 'Completado',

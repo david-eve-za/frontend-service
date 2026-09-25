@@ -1,34 +1,36 @@
-import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ButtonModule } from 'primeng/button';
 import { TagModule } from 'primeng/tag';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { ToastModule } from 'primeng/toast';
 import { MessageService } from 'primeng/api';
+import { firstValueFrom } from 'rxjs';
 import { ProcessingConfig } from './upload-step2-config.component';
+import { SplitBookState } from './upload-step3-split.component';
 import { BookTranslatorUploadService, UploadResponse } from './book-translator-upload.service';
 
 @Component({
-  selector: 'app-upload-step3-confirm',
+  selector: 'app-upload-step4-confirm',
   standalone: true,
   imports: [CommonModule, ButtonModule, TagModule, ProgressSpinnerModule, ToastModule],
   template: `
     <p-toast></p-toast>
 
     <div class="card">
-      <div class="font-semibold text-xl mb-4">Paso 3: Confirmar y Procesar</div>
+      <div class="font-semibold text-xl mb-4">Paso 4: Confirmar y Procesar</div>
       <p class="text-gray-600 mb-6">
         Revisa la configuración antes de iniciar el procesamiento.
       </p>
 
-      <!-- Files Summary -->
+      <!-- Books Summary -->
       <div class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-        <div class="font-medium mb-2">Archivos a procesar ({{ selectedFiles.length }}):</div>
+        <div class="font-medium mb-2">Documentos a procesar ({{ books.length }}):</div>
         <div class="space-y-1 max-h-40 overflow-y-auto">
-          <div *ngFor="let file of selectedFiles" class="flex items-center gap-3 text-sm">
-            <i class="pi" [ngClass]="getFileIcon(file.type)"></i>
-            <span class="truncate">{{ file.name }}</span>
-            <span class="text-gray-500">{{ formatFileSize(file.size) }}</span>
+          <div *ngFor="let book of books" class="flex items-center gap-3 text-sm">
+            <i class="pi pi-file"></i>
+            <span class="truncate">{{ book.name }}</span>
+            <span class="text-gray-500 truncate">{{ book.bookId }}</span>
           </div>
         </div>
       </div>
@@ -49,14 +51,6 @@ import { BookTranslatorUploadService, UploadResponse } from './book-translator-u
             <span class="text-gray-500">Patrones de limpieza:</span>
             <span class="font-medium ml-2">{{ config.regexPatternIds.length || 0 }} seleccionados</span>
           </div>
-          <div>
-            <span class="text-gray-500">Dividir en fragmentos:</span>
-            <p-tag [value]="config.splitIntoChunks ? 'Sí' : 'No'" [severity]="config.splitIntoChunks ? 'success' : 'danger'" />
-          </div>
-          <div>
-            <span class="text-gray-500">Generar audio:</span>
-            <p-tag [value]="config.generateAudio ? 'Sí' : 'No'" [severity]="config.generateAudio ? 'success' : 'danger'" />
-          </div>
         </div>
       </div>
 
@@ -64,13 +58,10 @@ import { BookTranslatorUploadService, UploadResponse } from './book-translator-u
       <div *ngIf="processing" class="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
         <div class="flex items-center gap-3">
           <p-progressSpinner styleClass="w-6 h-6" strokeWidth="3"></p-progressSpinner>
-          <div>
-            <div class="font-medium">{{ processingMessage }}</div>
-            <div class="text-sm text-gray-600" *ngIf="currentBookId">Book ID: {{ currentBookId }}</div>
-          </div>
+          <div class="font-medium">Dividiendo el texto en fragmentos...</div>
         </div>
-        <div class="mt-3 text-sm text-gray-600" *ngIf="processedCount !== undefined">
-          Procesados: {{ processedCount }} de {{ totalFiles }}
+        <div class="mt-3 text-sm text-gray-600">
+          Procesados: {{ processedCount }} de {{ totalBooks }}
         </div>
       </div>
 
@@ -137,28 +128,26 @@ import { BookTranslatorUploadService, UploadResponse } from './book-translator-u
   `,
   providers: [MessageService]
 })
-export class UploadStep3ConfirmComponent implements OnChanges {
-  @Input() selectedFiles: File[] = [];
+export class UploadStep4ConfirmComponent implements OnChanges {
+  @Input() books: SplitBookState[] = [];
   @Input() config!: ProcessingConfig;
   @Output() back = new EventEmitter<void>();
   @Output() viewHistory = new EventEmitter<void>();
   @Output() processingComplete = new EventEmitter<UploadResponse[]>();
 
   processing = false;
-  processingMessage = '';
-  currentBookId = '';
   processedCount = 0;
-  totalFiles = 0;
+  totalBooks = 0;
   results: { fileName: string; success: boolean; message: string; bookId?: string }[] = [];
 
   constructor(
     private uploadService: BookTranslatorUploadService,
-    private messageService: MessageService
+    private messageService: MessageService,
+    private cdr: ChangeDetectorRef
   ) {}
 
   ngOnChanges(changes: SimpleChanges) {
-    if (changes['selectedFiles'] || changes['config']) {
-      // Reset results when inputs change
+    if (changes['books'] || changes['config']) {
       if (!this.processing) {
         this.results = [];
       }
@@ -176,7 +165,7 @@ export class UploadStep3ConfirmComponent implements OnChanges {
   }
 
   canStart(): boolean {
-    return this.selectedFiles.length > 0 &&
+    return this.books.length > 0 &&
            !!this.config.targetLanguage &&
            !!this.config.ttsVoice;
   }
@@ -186,93 +175,46 @@ export class UploadStep3ConfirmComponent implements OnChanges {
 
     this.processing = true;
     this.results = [];
-    this.totalFiles = this.selectedFiles.length;
+    this.totalBooks = this.books.length;
     this.processedCount = 0;
 
-    try {
-      // Upload files sequentially
-      for (const file of this.selectedFiles) {
-        this.processingMessage = `Subiendo ${file.name}...`;
-        this.currentBookId = '';
-
-        try {
-          const response = await this.uploadFile(file);
-
-          if (response.success) {
-            this.currentBookId = response.bookId || '';
-            this.processingMessage = `Procesando ${file.name}...`;
-
-            // Wait for processing to complete
-            const finalStatus = await this.pollForCompletion(response.bookId!);
-
-            this.results.push({
-              fileName: file.name,
-              success: finalStatus.status === 'COMPLETED',
-              message: finalStatus.status === 'COMPLETED' ? 'Procesamiento completado' : `Error: ${finalStatus.status}`,
-              bookId: response.bookId
-            });
-          } else {
-            this.results.push({
-              fileName: file.name,
-              success: false,
-              message: response.error || 'Error al subir archivo'
-            });
-          }
-        } catch (err) {
-          this.results.push({
-            fileName: file.name,
-            success: false,
-            message: err instanceof Error ? err.message : 'Error desconocido'
-          });
-        }
-
-        this.processedCount++;
+    for (const book of this.books) {
+      try {
+        await firstValueFrom(this.uploadService.splitBookIntoChunks(book.bookId));
+        this.results.push({
+          fileName: book.name,
+          success: true,
+          message: 'Texto dividido en fragmentos correctamente',
+          bookId: book.bookId
+        });
+      } catch (err) {
+        this.results.push({
+          fileName: book.name,
+          success: false,
+          message: err instanceof Error ? err.message : 'Error al dividir el texto'
+        });
       }
+      this.processedCount++;
+      this.cdr.markForCheck();
+    }
 
-      this.processingMessage = 'Procesamiento completado';
-      this.processingComplete.emit(this.results.filter(r => r.success).map(r => ({
+    this.processing = false;
+    this.cdr.markForCheck();
+
+    const successes = this.results.filter(r => r.success);
+    if (successes.length > 0) {
+      this.processingComplete.emit(successes.map(r => ({
         message: r.message,
         bookId: r.bookId!,
         status: 'COMPLETED'
       } as UploadResponse)));
-
-    } catch (err) {
+    } else {
       this.messageService.add({
         severity: 'error',
         summary: 'Error',
-        detail: 'Error durante el procesamiento'
+        detail: 'No se pudo procesar ningún documento.'
       });
-    } finally {
-      this.processing = false;
-      this.currentBookId = '';
     }
-  }
-
-  private uploadFile(file: File): Promise<UploadResponse & { success: boolean }> {
-    return new Promise((resolve, reject) => {
-      this.uploadService.uploadFile(file).subscribe({
-        next: (response) => resolve({ ...response, success: !response.error }),
-        error: (err) => reject(err)
-      });
-    });
-  }
-
-  private pollForCompletion(bookId: string): Promise<{ status: string }> {
-    return new Promise((resolve, reject) => {
-      const poll = () => {
-        this.uploadService.getBookStatus(bookId).subscribe({
-          next: (response) => {
-            if (response.status === 'COMPLETED' || response.status === 'FAILED') {
-              resolve(response);
-            } else {
-              setTimeout(poll, 3000);
-            }
-          },
-          error: (err) => reject(err)
-        });
-      };
-      poll();
-    });
   }
 
   getLanguageLabel(code: string): string {
@@ -288,19 +230,5 @@ export class UploadStep3ConfirmComponent implements OnChanges {
       { label: 'Coreano (ko)', value: 'ko' }
     ].find(l => l.value === code);
     return lang?.label || code;
-  }
-
-  getFileIcon(type: string): string {
-    if (type.includes('pdf')) return 'pi pi-file-pdf text-red-500';
-    if (type.includes('epub')) return 'pi pi-book text-blue-500';
-    if (type.includes('text')) return 'pi pi-file text-gray-500';
-    if (type.includes('word') || type.includes('document')) return 'pi pi-file-word text-blue-600';
-    return 'pi pi-file text-gray-500';
-  }
-
-  formatFileSize(bytes: number): string {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 }

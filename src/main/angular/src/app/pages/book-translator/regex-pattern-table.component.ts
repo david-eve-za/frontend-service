@@ -546,9 +546,11 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
           summary: result.valid ? 'Patrón válido' : 'Patrón inválido',
           detail: result.message
         });
+        this.cdr.markForCheck();
       },
       error: () => {
         this.validating = false;
+        this.cdr.markForCheck();
       }
     });
   }
@@ -572,10 +574,12 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
           this.messageService.add({ severity: 'success', summary: 'Éxito', detail: 'Patrón actualizado' });
           this.loadPatterns();
           this.closeDialog();
+          this.cdr.markForCheck();
         },
         error: () => {
           this.saving = false;
           this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudo actualizar el patrón' });
+          this.cdr.markForCheck();
         }
       });
     } else {
@@ -585,10 +589,12 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
           this.messageService.add({ severity: 'success', summary: 'Éxito', detail: 'Patrón creado' });
           this.loadPatterns();
           this.closeDialog();
+          this.cdr.markForCheck();
         },
         error: () => {
           this.saving = false;
           this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudo crear el patrón' });
+          this.cdr.markForCheck();
         }
       });
     }

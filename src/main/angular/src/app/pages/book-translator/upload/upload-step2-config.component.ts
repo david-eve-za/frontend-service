@@ -1,4 +1,4 @@
-import { Component, Input, Output, EventEmitter, OnInit, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnInit, OnChanges, SimpleChanges, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SelectModule } from 'primeng/select';
@@ -103,29 +103,6 @@ export interface ProcessingConfig {
         </div>
       </div>
 
-      <!-- Processing Options -->
-      <div class="mb-6">
-        <fieldset>
-          <legend class="block text-sm font-medium mb-3">Opciones de Procesamiento</legend>
-          <div class="space-y-3">
-            <div class="flex items-center gap-2">
-              <p-checkbox [(ngModel)]="config.splitIntoChunks" [binary]="true" />
-              <label class="text-sm">
-                <span class="font-medium">Dividir en fragmentos</span>
-                <small class="text-gray-500 ml-1">(Requerido para traducción)</small>
-              </label>
-            </div>
-            <div class="flex items-center gap-2">
-              <p-checkbox [(ngModel)]="config.generateAudio" [binary]="true" />
-              <label class="text-sm">
-                <span class="font-medium">Generar audio</span>
-                <small class="text-gray-500 ml-1">(Crea archivo de audio del texto traducido)</small>
-              </label>
-            </div>
-          </div>
-        </fieldset>
-      </div>
-
       <!-- Action Buttons -->
       <div class="flex justify-content-between pt-4 border-t">
         <p-button
@@ -187,7 +164,7 @@ export class UploadStep2ConfigComponent implements OnInit, OnChanges {
     { label: 'Yuna (Coreano - macOS)', value: 'Yuna' }
   ];
 
-  constructor(private regexPatternService: RegexPatternService) {}
+  constructor(private regexPatternService: RegexPatternService, private cdr: ChangeDetectorRef) {}
 
   ngOnInit() {
     this.loadPatterns();
@@ -221,10 +198,12 @@ export class UploadStep2ConfigComponent implements OnInit, OnChanges {
           selected: this.config?.regexPatternIds?.includes(p.id!) || false
         }));
         this.loadingPatterns = false;
+        this.cdr.markForCheck();
       },
       error: () => {
         this.loadingPatterns = false;
         this.patterns = [];
+        this.cdr.markForCheck();
       }
     });
   }

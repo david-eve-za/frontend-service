@@ -3,6 +3,7 @@ package com.glez.frontendservice.services;
 
 import com.glez.frontendservice.components.SmartTextSplitter;
 import com.glez.frontendservice.model.*;
+import com.glez.frontendservice.repository.BlockRepository;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.repository.ChunksRepository;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +19,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -33,6 +35,7 @@ public class BookProcessingService {
     private final NvidiaAiService nvidiaAiService;
     private final AudioGeneratorService audioGeneratorService;
     private final ChunksRepository chunksRepository;
+    private final BlockRepository blockRepository;
     private final SmartTextSplitter smartTextSplitter;
     private final ApplicationContext applicationContext;
 
@@ -116,6 +119,7 @@ public class BookProcessingService {
         }
 
         chunksRepository.deleteAllByBook(book);
+        blockRepository.deleteAllByBook(book);
         bookRepository.delete(book);
     }
 
@@ -123,6 +127,32 @@ public class BookProcessingService {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
         return book.getFullText();
+    }
+
+    @Transactional
+    public int saveBlocks(UUID bookId, String rawText, List<BlockSaveRequest.BlockItem> blocks) {
+        Book book = bookRepository.findById(bookId)
+                .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
+
+        if (rawText != null) {
+            book.setFullText(rawText);
+        }
+
+        blockRepository.deleteAllByBook(book);
+
+        int position = 0;
+        for (BlockSaveRequest.BlockItem item : blocks) {
+            Block block = new Block();
+            block.setBook(book);
+            block.setBlockType(Block.BlockType.valueOf(item.type().toUpperCase(Locale.ROOT)));
+            block.setBlockNumber(item.id());
+            block.setContent(item.content());
+            block.setPosition(position++);
+            blockRepository.save(block);
+        }
+
+        bookRepository.save(book);
+        return position;
     }
 
     @Transactional

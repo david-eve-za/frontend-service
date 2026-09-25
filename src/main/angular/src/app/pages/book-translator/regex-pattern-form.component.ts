@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, FormGroup, FormArray, FormControl, Validators } from '@angular/forms';
 import { Subject, takeUntil, debounceTime, distinctUntilChanged } from 'rxjs';
@@ -198,7 +198,8 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
     private fb: FormBuilder,
     private regexPatternService: RegexPatternService,
     private confirmationService: ConfirmationService,
-    private messageService: MessageService
+    private messageService: MessageService,
+    private cdr: ChangeDetectorRef
   ) {
     this.form = this.fb.group({
       patterns: this.fb.array([])
@@ -226,6 +227,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
         this.validating = new Array(this.patterns.length).fill(false);
         this.validationResult = new Array(this.patterns.length).fill(undefined);
         this.validationMessage = new Array(this.patterns.length).fill('');
+        this.cdr.markForCheck();
       },
       error: (err) => {
         this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar los patrones' });
@@ -309,6 +311,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
               this.validationResult.splice(index, 1);
               this.validationMessage.splice(index, 1);
               this.messageService.add({ severity: 'success', summary: 'Éxito', detail: 'Patrón eliminado' });
+              this.cdr.markForCheck();
             },
             error: () => this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudo eliminar' })
           });
@@ -374,9 +377,11 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
           summary: result.valid ? 'Patrón válido' : 'Patrón inválido',
           detail: result.message
         });
+        this.cdr.markForCheck();
       },
       error: () => {
         this.validating[index] = false;
+        this.cdr.markForCheck();
       }
     });
   }
@@ -397,6 +402,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
         this.saving = false;
         this.messageService.add({ severity: 'success', summary: 'Éxito', detail: 'Todos los patrones guardados' });
         this.loadPatterns();
+        this.cdr.markForCheck();
         return;
       }
 
@@ -409,6 +415,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
           error: () => {
             this.saving = false;
             this.messageService.add({ severity: 'error', summary: 'Error', detail: `Error guardando ${pattern.displayName}` });
+            this.cdr.markForCheck();
           }
         });
       } else {
@@ -417,6 +424,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
           error: () => {
             this.saving = false;
             this.messageService.add({ severity: 'error', summary: 'Error', detail: `Error creando ${pattern.displayName}` });
+            this.cdr.markForCheck();
           }
         });
       }

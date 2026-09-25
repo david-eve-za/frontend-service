@@ -218,3 +218,6 @@ src/main/angular/.prettierrc.json
 
 # Compiled static resources (keep model/ tracked)
 src/main/resources/static/
+
+# Environment variables (secrets, loaded via envFile in .vscode/launch.json)
+.env
