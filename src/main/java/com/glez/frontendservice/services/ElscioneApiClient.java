@@ -50,7 +50,10 @@ public class ElscioneApiClient {
     private record ListResponse(List<ApiItem> items) {
     }
 
-    private static final Set<Integer> RETRYABLE_STATUSES = Set.of(500, 502, 503, 504);
+    /**
+     * Statuses that suggest a Cloudflare/Anubis challenge and must refresh
+     * the session before retrying. 503 doubles as a retryable server error.
+     */
     private static final Set<Integer> CHALLENGE_STATUSES = Set.of(403, 429, 503);
 
     private final CloudflareBypassService cloudflareBypass;
@@ -187,11 +190,17 @@ public class ElscioneApiClient {
                     log.info("Cloudflare challenge suspected (HTTP {}) for {}, refreshing session", statusCode, request.uri());
                     cloudflareBypass.invalidate();
                 }
-                if (RETRYABLE_STATUSES.contains(statusCode) || CHALLENGE_STATUSES.contains(statusCode)) {
+                // Every 5xx is a server-side failure worth retrying with
+                // backoff: the classic 500-504 plus the Cloudflare origin
+                // errors (520 unknown error, 521 web server down, 522/524
+                // timeouts, 523 unreachable, 525/526 SSL, 530 error 1XXX).
+                // 4xx are client errors and never retry (except challenges).
+                if (statusCode >= 500 || CHALLENGE_STATUSES.contains(statusCode)) {
                     if (++retries > maxRetries) {
                         throw new NovelsApiException("HTTP " + statusCode + " after "
                                 + maxRetries + " retries for " + request.uri());
                     }
+                    log.debug("HTTP {} for {} (retry {}/{}), backing off", statusCode, request.uri(), retries, maxRetries);
                     sleepBackoff(retries);
                     continue;
                 }
@@ -204,6 +213,7 @@ public class ElscioneApiClient {
                     throw new NovelsApiException("Request failed after " + maxRetries
                             + " retries for " + request.uri() + ": " + e.getMessage(), e);
                 }
+                log.debug("I/O error for {} (retry {}/{}): {}", request.uri(), retries, maxRetries, e.getMessage());
                 sleepBackoff(retries);
             }
         }

@@ -89,6 +89,32 @@ class ElscioneApiClientTest {
     }
 
     @Test
+    @DisplayName("listContents retries Cloudflare origin errors (520-526, 530) before giving up")
+    void listContents_retriesCloudflareOriginErrors() {
+        plannedStatuses.add(520);
+        plannedStatuses.add(522);
+        plannedStatuses.add(200);
+
+        List<ElscioneApiClient.ApiItem> items = client.listContents("/Officially%20Novels/");
+
+        assertEquals(3, requestCount.get());
+        assertEquals(2, items.size());
+    }
+
+    @Test
+    @DisplayName("listContents throws after exhausting the retry budget on a Cloudflare 52x")
+    void listContents_throwsWhen52xRetriesExhausted() {
+        client = buildClient(2);
+        plannedStatuses.add(522);
+
+        NovelsApiException exception = assertThrows(NovelsApiException.class,
+                () -> client.listContents("/Officially%20Novels/"));
+
+        assertTrue(exception.getMessage().contains("HTTP 522 after 2 retries"));
+        assertEquals(3, requestCount.get());
+    }
+
+    @Test
     @DisplayName("listContents throws after exhausting the retry budget")
     void listContents_throwsWhenRetriesExhausted() {
         plannedStatuses.add(500);
