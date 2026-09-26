@@ -109,7 +109,7 @@ interface NovelRow extends NovelSummary {
         dataKey="id"
         (onLazyLoad)="loadCatalog($event)"
         (onRowExpand)="onNovelExpand($event)"
-        [expandedRowKeys]="expandedRowKeys">
+        (onRowCollapse)="onNovelCollapse($event)">
         <ng-template pTemplate="header">
           <tr>
             <th style="width: 3rem"></th>
@@ -144,7 +144,7 @@ interface NovelRow extends NovelSummary {
         </ng-template>
 
         <!-- Nivel 2: volúmenes de la obra -->
-        <ng-template pTemplate="rowexpansion" let-novel>
+        <ng-template pTemplate="expandedrow" let-novel>
           <tr class="bg-gray-50">
             <td colspan="5" class="p-0">
               <div *ngIf="volumeLoading[novel.id]" class="text-center text-gray-500 py-4">
@@ -284,6 +284,8 @@ export class NovelsManager implements OnInit, OnDestroy {
 
   private volumePollSubscription?: Subscription;
   private syncPollSubscription?: Subscription;
+  private catalogSyncSubscription?: Subscription;
+  private currentPage = 0;
   private pollNovelId?: string;
 
   constructor(
@@ -300,6 +302,7 @@ export class NovelsManager implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.volumePollSubscription?.unsubscribe();
     this.syncPollSubscription?.unsubscribe();
+    this.catalogSyncSubscription?.unsubscribe();
   }
 
   // ------- Nivel 1: catálogo de obras -------
@@ -310,6 +313,7 @@ export class NovelsManager implements OnInit, OnDestroy {
     try {
       const result = await firstValueFrom(
         this.novelsService.getCatalog(this.searchTerm, page, this.pageSize));
+      this.currentPage = page;
       this.novels = result.content.map(n => ({ ...n, volumesLoaded: false }));
       this.totalRecords = result.totalElements;
       this.volumes = {};
@@ -326,14 +330,58 @@ export class NovelsManager implements OnInit, OnDestroy {
     }
   }
 
-  reloadCatalog(): void {
-    this.loadCatalog({ first: 0, rows: this.pageSize });
+  reloadCatalog(resetPage = true): void {
+    const first = resetPage ? 0 : this.currentPage * this.pageSize;
+    this.loadCatalog({ first, rows: this.pageSize });
+  }
+
+  /**
+   * Refresco periódico (10s) mientras la sincronización corre: actualiza la
+   * página actual del catálogo conservando la expansión y el caché de
+   * volúmenes, y recarga los volúmenes de las obras expandidas para que los
+   * nuevos descubiertos por el sync aparezcan sin colapsar la fila.
+   */
+  private startCatalogAutoRefresh(): void {
+    this.catalogSyncSubscription?.unsubscribe();
+    this.catalogSyncSubscription = timer(10000, 10000)
+      .pipe(takeWhile(() => this.syncStatus?.state === 'RUNNING'))
+      .subscribe(() => this.refreshCatalogDuringSync());
+  }
+
+  private async refreshCatalogDuringSync(): Promise<void> {
+    try {
+      const result = await firstValueFrom(
+        this.novelsService.getCatalog(this.searchTerm, this.currentPage, this.pageSize));
+      this.totalRecords = result.totalElements;
+      this.novels = result.content.map(n => {
+        const previous = this.novels.find(o => o.id === n.id);
+        return { ...n, volumesLoaded: previous?.volumesLoaded ?? false };
+      });
+      for (const novelId of Object.keys(this.expandedRowKeys)) {
+        if (this.volumes[novelId]) {
+          this.volumes[novelId] = await firstValueFrom(this.novelsService.getVolumes(novelId));
+        }
+      }
+    } catch {
+      // Refresco transitorio fallido durante el sync: se conserva el último
+      // estado válido hasta el siguiente tick.
+    } finally {
+      this.cdr.markForCheck();
+    }
   }
 
   onNovelExpand(event: { data: NovelRow }): void {
+    // PrimeNG reemplaza su objeto interno de expandedRowKeys (rowExpandMode
+    // 'single') y no lo emite de vuelta, así que la expansión se rastrea en
+    // paralelo para saber qué volúmenes refrescar durante el auto-refresh.
+    this.expandedRowKeys[event.data.id] = true;
     if (!event.data.volumesLoaded) {
       this.loadVolumes(event.data.id);
     }
+  }
+
+  onNovelCollapse(event: { data: NovelRow }): void {
+    delete this.expandedRowKeys[event.data.id];
   }
 
   // ------- Nivel 2: volúmenes -------
@@ -468,6 +516,7 @@ export class NovelsManager implements OnInit, OnDestroy {
       this.syncStatus = await firstValueFrom(this.novelsService.getSyncStatus());
       if (this.syncStatus.state === 'RUNNING') {
         this.pollSync();
+        this.startCatalogAutoRefresh();
       }
       this.cdr.markForCheck();
     } catch {
@@ -486,6 +535,7 @@ export class NovelsManager implements OnInit, OnDestroy {
         detail: 'Sincronización de metadatos iniciada.'
       });
       this.pollSync();
+      this.startCatalogAutoRefresh();
     } catch (err: any) {
       const detail = err?.error?.error || err?.message || 'No se pudo iniciar la sincronización.';
       this.messageService.add({ severity: 'error', summary: 'Error', detail });
@@ -510,7 +560,9 @@ export class NovelsManager implements OnInit, OnDestroy {
         const finished = status.state !== 'RUNNING';
         this.syncStatus = status;
         if (finished) {
-          this.reloadCatalog();
+          this.catalogSyncSubscription?.unsubscribe();
+          // Refresco final conservando la página actual del usuario.
+          this.reloadCatalog(false);
         }
         this.cdr.markForCheck();
       }

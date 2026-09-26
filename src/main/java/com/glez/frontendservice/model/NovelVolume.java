@@ -48,7 +48,7 @@ public class NovelVolume {
      * este volumen. Coincide con novel.remotePath salvo en novelas
      * virtuales armadas desde archivos sueltos.
      */
-    @Column(name = "remote_dir")
+    @Column(name = "remote_dir", length = 1024)
     private String remoteDir;
 
     /**
@@ -56,7 +56,7 @@ public class NovelVolume {
      * volúmenes numerados o "file:<nombre de archivo>" para archivos sin
      * número. Permite el upsert idempotente entre ejecuciones.
      */
-    @Column(name = "source_key", nullable = false)
+    @Column(name = "source_key", nullable = false, length = 1024)
     private String sourceKey;
 
     /** El volumen desapareció de la fuente en el último sync (estado local se conserva). */

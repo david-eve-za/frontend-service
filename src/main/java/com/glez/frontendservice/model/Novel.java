@@ -30,7 +30,7 @@ public class Novel {
      * para novelas virtuales creadas a partir de archivos sueltos en la
      * raíz de la biblioteca remota.
      */
-    @Column(name = "remote_path", unique = true)
+    @Column(name = "remote_path", unique = true, length = 1024)
     private String remotePath;
 
     /** Título de la obra (nombre del directorio remoto sanitizado). */

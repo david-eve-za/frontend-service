@@ -41,7 +41,7 @@ public class NovelVolumeFile {
     private NovelVolume volume;
 
     /** href remoto percent-encoded del archivo (único en todo el catálogo). */
-    @Column(name = "remote_href", unique = true, nullable = false)
+    @Column(name = "remote_href", unique = true, nullable = false, length = 1024)
     private String remoteHref;
 
     @Enumerated(EnumType.STRING)
