@@ -128,6 +128,41 @@ class BookPipelineOrchestratorTest {
     }
 
     @Test
+    @DisplayName("targetStep=TRANSLATE: runs up to translate and marks the book AWAITING without audio")
+    void processBook_upToTranslate_skipsAudioAndMarksAwaiting() {
+        stubTraceEvents();
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        lenient().when(bookRepository.save(any(Book.class))).thenReturn(book);
+        Chunks done = chunk(ChunkStatus.COMPLETED, 0, 1, "texto traducido");
+        when(chunksRepository.findByBook(book)).thenReturn(List.of(done));
+
+        orchestrator.processBook(bookId, ProcessStep.TRANSLATE).join();
+
+        verify(audioGeneratorService, never()).processTextToAudio(any(), any());
+        assertEquals(ProcessingStatus.AWAITING, book.getStatus(),
+                "Pipeline stopped at a checkpoint must leave the book AWAITING, not PROCESSING");
+        assertNull(book.getAudioFilePath());
+    }
+
+    @Test
+    @DisplayName("targetStep=AUDIO: generates the audio file but does not finalize")
+    void processBook_upToAudio_generatesAudioWithoutFinalize() {
+        stubTraceEvents();
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        lenient().when(bookRepository.save(any(Book.class))).thenReturn(book);
+        Chunks done = chunk(ChunkStatus.COMPLETED, 0, 1, "texto traducido");
+        when(chunksRepository.findByBook(book)).thenReturn(List.of(done));
+        when(audioGeneratorService.processTextToAudio(any(), any())).thenReturn(true);
+
+        orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
+
+        verify(audioGeneratorService, times(1)).processTextToAudio(any(), any());
+        assertEquals(ProcessingStatus.AWAITING, book.getStatus(),
+                "Audio stage done at checkpoint must leave the book AWAITING until FINALIZE runs");
+        assertNotNull(book.getAudioFilePath());
+    }
+
+    @Test
     @DisplayName("Happy path: extract skipped, split, translate, audio and finalize complete")
     void processBook_happyPath_completesBook() {
         stubTraceEvents();

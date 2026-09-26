@@ -16,4 +16,6 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
     List<Chunks> findByBook(Book book);
     Page<Chunks> findByBook(Book book, Pageable pageable); // New method
     void deleteAllByBook(Book book);
+    long countByBook(Book book);
+    long countByBookAndStatus(Book book, com.glez.frontendservice.model.ChunkStatus status);
 }

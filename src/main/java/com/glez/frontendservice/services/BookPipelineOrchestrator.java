@@ -66,14 +66,29 @@ public class BookPipelineOrchestrator {
     }
 
     /**
-     * Starts or resumes the pipeline of a book from its last checkpoint.
-     * Asynchronous: returns immediately after validation.
+     * Starts or resumes the pipeline of a book from its last checkpoint,
+     * running every remaining step (up to FINALIZE). Asynchronous: returns
+     * immediately after validation.
      *
      * @throws IllegalArgumentException if the book does not exist
      * @throws IllegalStateException if the book is already being processed
      */
     @Async("bookProcessingExecutor")
     public CompletableFuture<Void> processBook(UUID bookId) {
+        return processBook(bookId, ProcessStep.FINALIZE);
+    }
+
+    /**
+     * Same as {@link #processBook(UUID)} but stops after the target step
+     * completes (checkpoint semantics). Used by the novels manager to run
+     * TRANSLATE and AUDIO as independent, user-triggered stages.
+     *
+     * @param targetStep last pipeline step to execute
+     * @throws IllegalArgumentException if the book does not exist
+     * @throws IllegalStateException if the book is already being processed
+     */
+    @Async("bookProcessingExecutor")
+    public CompletableFuture<Void> processBook(UUID bookId, ProcessStep targetStep) {
         if (!runningBooks.add(bookId)) {
             // Rejected before the try block: the finally clause must not
             // release the lock held by the other run.
@@ -98,7 +113,8 @@ public class BookPipelineOrchestrator {
             book.setLastTraceId(traceId);
             bookRepository.save(book);
 
-            runPipeline(bookId, traceId);
+            runPipeline(bookId, traceId, targetStep);
+            markAwaitingIfStoppedEarly(bookId, targetStep);
             return CompletableFuture.completedFuture(null);
         } catch (RuntimeException e) {
             log.error("Pipeline run aborted for book {}", bookId, e);
@@ -113,12 +129,38 @@ public class BookPipelineOrchestrator {
         return runningBooks.contains(bookId);
     }
 
-    private void runPipeline(UUID bookId, String traceId) {
+    private void runPipeline(UUID bookId, String traceId, ProcessStep targetStep) {
         runExtractStep(bookId, traceId);
         runSplitStep(bookId, traceId);
+        if (targetStep == ProcessStep.SPLIT) {
+            return;
+        }
         runTranslateStep(bookId, traceId);
+        if (targetStep == ProcessStep.TRANSLATE) {
+            return;
+        }
         runAudioStep(bookId, traceId);
+        if (targetStep == ProcessStep.AUDIO) {
+            return;
+        }
         runFinalizeStep(bookId, traceId);
+    }
+
+    /**
+     * When the run stopped at a checkpoint (targetStep before FINALIZE), the
+     * book must not stay PROCESSING: mark it AWAITING so the UI reflects that
+     * it is waiting for the user to trigger the next stage.
+     */
+    private void markAwaitingIfStoppedEarly(UUID bookId, ProcessStep targetStep) {
+        if (targetStep == ProcessStep.FINALIZE) {
+            return;
+        }
+        bookRepository.findById(bookId).ifPresent(book -> {
+            if (book.getStatus() == ProcessingStatus.PROCESSING) {
+                book.setStatus(ProcessingStatus.AWAITING);
+                bookRepository.save(book);
+            }
+        });
     }
 
     /**

@@ -98,6 +98,13 @@ app:
     # Cloudflare). Takes precedence over FlareSolverr.
     static-cf-user-agent: ""
     static-cf-clearance: ""
+  novels-manager:
+    # Catalog sync downloads NOTHING: only titles/volumes/formats metadata.
+    auto-sync-enabled: true
+    # Every 3 hours (cron; fixed by requirement).
+    sync-cron: "0 0 */3 * * *"
+    # Directory levels walked below the library root during metadata sync.
+    sync-max-depth: 3
 
 logging:
   level:

@@ -1,5 +1,6 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { ActivatedRoute } from '@angular/router';
 import { StepsModule } from 'primeng/steps';
 import { ToastModule } from 'primeng/toast';
 import { MessageService } from 'primeng/api';
@@ -97,9 +98,26 @@ export class UploadWizardComponent implements OnInit {
     { label: 'Confirmar', routerLink: '' }
   ];
 
-  constructor(private messageService: MessageService) {}
+  constructor(private messageService: MessageService,
+              private route: ActivatedRoute) {}
 
-  ngOnInit() {}
+  ngOnInit() {
+    // Deep-link desde el Gestor de Novelas: ?bookId=&name= trae un libro ya
+    // creado (texto del volumen preparado por el backend) y salta directo
+    // al paso 3, donde el editor de bloques carga el texto extraído.
+    const bookId = this.route.snapshot.queryParamMap.get('bookId');
+    const name = this.route.snapshot.queryParamMap.get('name') || 'Volumen del catálogo';
+    if (bookId) {
+      this.splitBooks = [{
+        name,
+        bookId,
+        text: '',
+        loaded: false,
+        saved: false
+      }];
+      this.activeStep = 2;
+    }
+  }
 
   onFilesSelected(files: SelectedFile[]) {
     this.selectedFiles = files;

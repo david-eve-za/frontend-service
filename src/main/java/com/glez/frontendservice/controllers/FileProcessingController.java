@@ -122,15 +122,22 @@ public class FileProcessingController {
     @PostMapping("/{bookId}/process")
     public ResponseEntity<Map<String, Object>> processBook(
             @Parameter(description = "ID of the book to process", required = true)
-            @PathVariable UUID bookId) {
+            @PathVariable UUID bookId,
+            @Parameter(description = "Optional last pipeline step to run (EXTRACT, SPLIT, TRANSLATE, AUDIO, FINALIZE). "
+                    + "Defaults to FINALIZE (full pipeline). Used by the novels manager to run "
+                    + "translation and audio as independent stages.")
+            @RequestParam(name = "to", required = false) com.glez.frontendservice.model.ProcessStep targetStep) {
         Map<String, Object> response = new HashMap<>();
         try {
             if (bookPipelineOrchestrator.isRunning(bookId)) {
                 response.put("error", "Book " + bookId + " is already being processed.");
                 return ResponseEntity.status(409).body(response);
             }
-            bookPipelineOrchestrator.processBook(bookId);
-            response.put("message", "Processing started/resumed for book " + bookId);
+            com.glez.frontendservice.model.ProcessStep effectiveTarget =
+                    targetStep != null ? targetStep : com.glez.frontendservice.model.ProcessStep.FINALIZE;
+            bookPipelineOrchestrator.processBook(bookId, effectiveTarget);
+            response.put("message", "Processing started/resumed for book " + bookId
+                    + (targetStep != null ? " up to " + targetStep : ""));
             response.put("bookId", bookId);
             return ResponseEntity.accepted().body(response);
         } catch (IllegalArgumentException e) {

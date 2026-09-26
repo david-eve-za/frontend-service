@@ -38,6 +38,11 @@ export class AppMenu {
                         routerLink: ['/book-translator/upload']
                     },
                     {
+                        label: 'Gestor de Novelas',
+                        icon: 'pi pi-fw pi-book',
+                        routerLink: ['/book-translator/novels']
+                    },
+                    {
                         label: 'Translate Book',
                         icon: 'pi pi-fw pi-file-arrow-right',
                         routerLink: ['/book-translator']

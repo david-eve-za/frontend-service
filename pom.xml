@@ -58,6 +58,19 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- @DataJpaTest slice (Boot 4 ships test slices in dedicated modules) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-data-jpa-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- TestEntityManager used by @DataJpaTest -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-jpa-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Spring Boot Starter for Data JPA -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
