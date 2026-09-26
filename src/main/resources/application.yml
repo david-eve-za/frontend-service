@@ -83,10 +83,10 @@ app:
     chunk-size: 65536
     api-timeout-seconds: 30
     download-timeout-seconds: 60
-    # Retry policy equivalent to urllib3 Retry(total=5, backoff_factor=1,
-    # status_forcelist=[500,502,503,504]).
+    # Exponential backoff per retry attempt: 16s, 32s, 64s, 128s, 256s.
+    # Wide spacing so Cloudflare/origin cooldowns elapse before retrying.
     max-retries: 5
-    retry-backoff-seconds: 1
+    retry-backoff-seconds: 16
     session-ttl-minutes: 30
     # FlareSolverr sidecar (compose.yaml) solves the Cloudflare challenge and
     # provides the cf_clearance cookie + matching user agent. Empty disables it.

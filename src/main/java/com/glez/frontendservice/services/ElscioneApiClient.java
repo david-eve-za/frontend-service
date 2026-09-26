@@ -75,7 +75,7 @@ public class ElscioneApiClient {
                              ObjectMapper objectMapper,
                              @Value("${app.novels.base-url}") String baseUrl,
                              @Value("${app.novels.max-retries:5}") int maxRetries,
-                             @Value("${app.novels.retry-backoff-seconds:1}") long retryBackoffSeconds,
+                             @Value("${app.novels.retry-backoff-seconds:16}") long retryBackoffSeconds,
                              @Value("${app.novels.api-timeout-seconds:30}") int apiTimeoutSeconds,
                              @Value("${app.novels.download-timeout-seconds:60}") int downloadTimeoutSeconds,
                              @Value("${app.novels.chunk-size:65536}") int chunkSize) {
