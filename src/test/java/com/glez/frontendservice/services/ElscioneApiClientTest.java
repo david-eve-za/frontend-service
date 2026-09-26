@@ -12,11 +12,13 @@ import tools.jackson.databind.json.JsonMapper;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -112,6 +114,75 @@ class ElscioneApiClientTest {
 
         assertTrue(exception.getMessage().contains("HTTP 522 after 2 retries"));
         assertEquals(3, requestCount.get());
+    }
+
+    @Test
+    @DisplayName("retryAfterMillis parses Retry-After in seconds and ignores HTTP-dates")
+    void retryAfterMillis_parsesHeader() {
+        assertEquals(2000L, client.retryAfterMillis(responseWithHeader("Retry-After", "2")));
+        assertEquals(0L, client.retryAfterMillis(responseWithHeader("Retry-After", "Wed, 21 Oct 2026 07:28:00 GMT")));
+        assertEquals(0L, client.retryAfterMillis(responseWithHeader("X-Other", "5")));
+    }
+
+    @Test
+    @DisplayName("pacer spaces requests apart when a minimum interval is configured")
+    void pacer_spacesRequests() {
+        client = new ElscioneApiClient(bypass, objectMapper,
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/Officially%20Novels/",
+                5, 0, 2, 2, 8192, 100);
+        long start = System.nanoTime();
+        client.listContents("/Officially%20Novels/");
+        client.listContents("/Officially%20Novels/");
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        // Intervalo con jitter -25% -> el segundo request espera >= 75ms.
+        assertTrue(elapsedMs >= 60,
+                "Two paced requests should be spaced by the minimum interval (jittered), took " + elapsedMs + "ms");
+        assertEquals(2, requestCount.get());
+    }
+
+    private java.net.http.HttpResponse<Void> responseWithHeader(String name, String value) {
+        return new java.net.http.HttpResponse<>() {
+            @Override
+            public int statusCode() {
+                return 429;
+            }
+
+            @Override
+            public java.net.http.HttpHeaders headers() {
+                return java.net.http.HttpHeaders.of(java.util.Map.of(name, List.of(value)), (a, b) -> true);
+            }
+
+            @Override
+            public Void body() {
+                return null;
+            }
+
+            @Override
+            public Optional<java.net.http.HttpResponse<Void>> previousResponse() {
+                return Optional.empty();
+            }
+
+            @Override
+            public java.net.http.HttpRequest request() {
+                return java.net.http.HttpRequest.newBuilder(URI.create("http://localhost/")).build();
+            }
+
+            @Override
+            public URI uri() {
+                return URI.create("http://localhost/");
+            }
+
+            @Override
+            public Optional<javax.net.ssl.SSLSession> sslSession() {
+                return Optional.empty();
+            }
+
+            @Override
+            public java.net.http.HttpClient.Version version() {
+                return java.net.http.HttpClient.Version.HTTP_1_1;
+            }
+        };
     }
 
     @Test
@@ -225,7 +296,7 @@ class ElscioneApiClientTest {
     private ElscioneApiClient buildClientWith(CloudflareBypassService bypassService, int maxRetries) {
         return new ElscioneApiClient(bypassService, objectMapper,
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/Officially%20Novels/",
-                maxRetries, 0, 2, 2, 8192);
+                maxRetries, 0, 2, 2, 8192, 0);
     }
 
     private HttpServer startHttpServer() throws IOException {

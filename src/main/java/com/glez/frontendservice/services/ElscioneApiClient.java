@@ -56,6 +56,9 @@ public class ElscioneApiClient {
      */
     private static final Set<Integer> CHALLENGE_STATUSES = Set.of(403, 429, 503);
 
+    /** Techo del sleep combinando backoff + Retry-After (5 min). */
+    private static final long MAX_RETRY_SLEEP_MILLIS = Duration.ofMinutes(5).toMillis();
+
     private final CloudflareBypassService cloudflareBypass;
     private final ObjectMapper objectMapper;
     private final URI apiUri;
@@ -65,6 +68,18 @@ public class ElscioneApiClient {
     private final int apiTimeoutSeconds;
     private final int downloadTimeoutSeconds;
     private final int chunkSize;
+
+    /**
+     * Espaciado mínimo entre CUALQUIER par de peticiones a elscione (listings
+     * del sync, descargas del crawler y on-demand), compartido entre todos los
+     * hilos. Anti-bloqueo de Cloudflare: elimina bursts y agrega jitter para
+     * que el patrón de tráfico no sea metronómico. 0 lo desactiva.
+     */
+    private final long minRequestIntervalMillis;
+
+    /** Siguiente instante permitido para una petición (guard por paceLock). */
+    private long nextAllowedRequestAt;
+    private final Object paceLock = new Object();
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
@@ -78,7 +93,8 @@ public class ElscioneApiClient {
                              @Value("${app.novels.retry-backoff-seconds:16}") long retryBackoffSeconds,
                              @Value("${app.novels.api-timeout-seconds:30}") int apiTimeoutSeconds,
                              @Value("${app.novels.download-timeout-seconds:60}") int downloadTimeoutSeconds,
-                             @Value("${app.novels.chunk-size:65536}") int chunkSize) {
+                             @Value("${app.novels.chunk-size:65536}") int chunkSize,
+                             @Value("${app.novels.min-request-interval-ms:2000}") long minRequestIntervalMillis) {
         this.cloudflareBypass = cloudflareBypass;
         this.objectMapper = objectMapper;
         URI base = URI.create(baseUrl);
@@ -90,6 +106,7 @@ public class ElscioneApiClient {
         this.apiTimeoutSeconds = apiTimeoutSeconds;
         this.downloadTimeoutSeconds = downloadTimeoutSeconds;
         this.chunkSize = chunkSize;
+        this.minRequestIntervalMillis = minRequestIntervalMillis;
     }
 
     public String getFullUrl(String remotePath) {
@@ -175,6 +192,7 @@ public class ElscioneApiClient {
                                                    int timeoutSeconds) {
         int retries = 0;
         while (true) {
+            paceRequest();
             CloudflareBypassService.CloudflareSession session = cloudflareBypass.getSession();
             HttpRequest request = applyBrowserHeaders(requestFactory.create(session), session)
                     .timeout(Duration.ofSeconds(timeoutSeconds))
@@ -201,7 +219,7 @@ public class ElscioneApiClient {
                                 + maxRetries + " retries for " + request.uri());
                     }
                     log.debug("HTTP {} for {} (retry {}/{}), backing off", statusCode, request.uri(), retries, maxRetries);
-                    sleepBackoff(retries);
+                    sleepBackoff(retrySleepMillis(retries, response));
                     continue;
                 }
                 throw new NovelsApiException("Unexpected HTTP status " + statusCode + " for " + request.uri());
@@ -214,7 +232,7 @@ public class ElscioneApiClient {
                             + " retries for " + request.uri() + ": " + e.getMessage(), e);
                 }
                 log.debug("I/O error for {} (retry {}/{}): {}", request.uri(), retries, maxRetries, e.getMessage());
-                sleepBackoff(retries);
+                sleepBackoff(Math.min(retryBackoffMillis * (1L << Math.min(retries - 1, 16)), MAX_RETRY_SLEEP_MILLIS));
             }
         }
     }
@@ -236,13 +254,66 @@ public class ElscioneApiClient {
         return builder;
     }
 
-    private void sleepBackoff(int retryNumber) {
+    /**
+     * Pacer anti-bloqueo compartido por todos los hilos: ninguna petición sale
+     * antes de que transcurra el intervalo mínimo (con jitter aleatorio del
+     * ±25%) desde la petición anterior. Sin él, el pool de descargas dispara
+     * ráfagas de ~10 req/s que disparan las heurísticas de rate de Cloudflare.
+     * El sleep es interrumpible para no bloquear cancelaciones.
+     */
+    void paceRequest() {
+        if (minRequestIntervalMillis <= 0) {
+            return;
+        }
+        long jitter = Math.round((Math.random() - 0.5) * 0.5 * minRequestIntervalMillis);
+        long interval = minRequestIntervalMillis + jitter;
+        long sleepMillis;
+        synchronized (paceLock) {
+            long now = System.currentTimeMillis();
+            sleepMillis = Math.max(0, nextAllowedRequestAt - now);
+            nextAllowedRequestAt = Math.max(nextAllowedRequestAt, now) + interval;
+        }
+        if (sleepMillis > 0) {
+            log.debug("Pacing request: waiting {}ms (min interval {}ms)", sleepMillis, interval);
+            try {
+                Thread.sleep(sleepMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new NovelsApiException("Pacer wait interrupted", e);
+            }
+        }
+    }
+
+    /**
+     * Backoff del reintento n (exponencial: base * 2^(n-1)), ampliado al valor
+     * del header Retry-After cuando el servidor lo envía (429/503) y con un
+     * techo total de 5 minutos.
+     */
+    private long retrySleepMillis(int retryNumber, HttpResponse<?> response) {
         long backoff = retryBackoffMillis * (1L << Math.min(retryNumber - 1, 16));
-        if (backoff <= 0) {
+        long retryAfter = retryAfterMillis(response);
+        return Math.min(Math.max(backoff, retryAfter), MAX_RETRY_SLEEP_MILLIS);
+    }
+
+    /** Lee Retry-After en segundos; ignora el formato HTTP-date. */
+    long retryAfterMillis(HttpResponse<?> response) {
+        return response.headers().firstValue("Retry-After")
+                .flatMap(value -> {
+                    try {
+                        return java.util.Optional.of(Long.parseLong(value.trim()) * 1000L);
+                    } catch (NumberFormatException e) {
+                        return java.util.Optional.<Long>empty();
+                    }
+                })
+                .orElse(0L);
+    }
+
+    private void sleepBackoff(long millis) {
+        if (millis <= 0) {
             return;
         }
         try {
-            Thread.sleep(backoff);
+            Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new NovelsApiException("Retry wait interrupted", e);

@@ -79,7 +79,9 @@ app:
     base-url: "https://server.elscione.com/Officially%20Translated%20Light%20Novels/"
     # Local destination for downloaded novels (relative to the working dir).
     output-dir: ./output
-    max-workers: 5
+    # Anti-blocking (Tier 3): fewer parallel connections look less bot-like;
+    # the shared pacer already bounds the aggregate request rate.
+    max-workers: 3
     chunk-size: 65536
     api-timeout-seconds: 30
     download-timeout-seconds: 60
@@ -87,6 +89,10 @@ app:
     # Wide spacing so Cloudflare/origin cooldowns elapse before retrying.
     max-retries: 5
     retry-backoff-seconds: 16
+    # Anti-blocking (Tier 1): minimum spacing between ANY two elscione
+    # requests (listings + downloads) across all threads, with +/-25% jitter.
+    # 0 disables pacing. Honors Retry-After when the server sends it (Tier 2).
+    min-request-interval-ms: 2000
     session-ttl-minutes: 30
     # FlareSolverr sidecar (compose.yaml) solves the Cloudflare challenge and
     # provides the cf_clearance cookie + matching user agent. Empty disables it.

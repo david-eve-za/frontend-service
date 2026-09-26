@@ -51,7 +51,7 @@ public class NovelsUpdaterService {
     public NovelsUpdaterService(ElscioneApiClient apiClient,
                                 NovelFileManager fileManager,
                                 @Value("${app.novels.base-url}") String baseUrl,
-                                @Value("${app.novels.max-workers:5}") int maxWorkers) {
+                                @Value("${app.novels.max-workers:3}") int maxWorkers) {
         this.apiClient = apiClient;
         this.fileManager = fileManager;
         this.startPath = URI.create(baseUrl).getRawPath();
