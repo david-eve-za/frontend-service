@@ -41,13 +41,19 @@ class FileProcessingControllerTest {
     @Mock
     private BookRepository bookRepository;
 
+    @Mock
+    private com.glez.frontendservice.services.BookPipelineOrchestrator bookPipelineOrchestrator;
+
+    @Mock
+    private com.glez.frontendservice.services.ProcessingTraceService processingTraceService;
+
     private FileProcessingController controller;
     private UUID bookId;
     private Book book;
 
     @BeforeEach
     void setUp() {
-        controller = new FileProcessingController(bookProcessingService, bookRepository);
+        controller = new FileProcessingController(bookProcessingService, bookRepository, bookPipelineOrchestrator, processingTraceService);
         bookId = UUID.randomUUID();
         book = new Book();
         book.setId(bookId);

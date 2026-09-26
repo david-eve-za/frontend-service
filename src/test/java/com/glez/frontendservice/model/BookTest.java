@@ -37,13 +37,19 @@ class BookTest {
             String name = "test.pdf";
             ProcessingStatus status = ProcessingStatus.UPLOADED;
             String fullText = "Full text content";
+            com.glez.frontendservice.model.ProcessStep currentStep = com.glez.frontendservice.model.ProcessStep.SPLIT;
+            String lastTraceId = "abc123";
+            String audioFilePath = "test.mp3";
 
-            Book book = new Book(id, name, status, fullText, null);
+            Book book = new Book(id, name, status, fullText, currentStep, lastTraceId, audioFilePath, null);
 
             assertEquals(id, book.getId());
             assertEquals(name, book.getName());
             assertEquals(status, book.getStatus());
             assertEquals(fullText, book.getFullText());
+            assertEquals(currentStep, book.getCurrentStep());
+            assertEquals(lastTraceId, book.getLastTraceId());
+            assertEquals(audioFilePath, book.getAudioFilePath());
         }
 
         @Test

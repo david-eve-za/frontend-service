@@ -1,11 +1,14 @@
 package com.glez.frontendservice.controllers;
 
 
+import com.glez.frontendservice.dtos.TraceEventDto;
 import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.ChunkDto;
 import com.glez.frontendservice.model.PaginatedResponse;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.services.BookProcessingService;
+import com.glez.frontendservice.services.BookPipelineOrchestrator;
+import com.glez.frontendservice.services.ProcessingTraceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -36,6 +39,8 @@ public class FileProcessingController {
 
     private final BookProcessingService bookProcessingService;
     private final BookRepository bookRepository;
+    private final BookPipelineOrchestrator bookPipelineOrchestrator;
+    private final ProcessingTraceService processingTraceService;
 
     // Remove @Autowired, Lombok's @RequiredArgsConstructor handles constructor injection
     // public FileProcessingController(BookProcessingService bookProcessingService, BookRepository bookRepository) {
@@ -77,7 +82,7 @@ public class FileProcessingController {
         }
     }
 
-    @Operation(summary = "List all books", description = "Retrieves a list of all books with their IDs and status.")
+    @Operation(summary = "List all books", description = "Retrieves a list of all books with their IDs, status, current step and audio artifact.")
     @GetMapping("/list")
     public ResponseEntity<List<Map<String, Object>>> getAllBooks() {
         List<Map<String, Object>> books = bookRepository.findAll().stream()
@@ -86,6 +91,9 @@ public class FileProcessingController {
                     bookMap.put("id", book.getId());
                     bookMap.put("name", book.getName());
                     bookMap.put("status", book.getStatus());
+                    bookMap.put("currentStep", book.getCurrentStep());
+                    bookMap.put("lastTraceId", book.getLastTraceId());
+                    bookMap.put("audioFilePath", book.getAudioFilePath());
                     return bookMap;
                 })
                 .collect(Collectors.toList());
@@ -100,9 +108,51 @@ public class FileProcessingController {
                     Map<String, Object> response = new HashMap<>();
                     response.put("bookId", book.getId());
                     response.put("status", book.getStatus());
+                    response.put("currentStep", book.getCurrentStep());
+                    response.put("lastTraceId", book.getLastTraceId());
+                    response.put("audioFilePath", book.getAudioFilePath());
                     return ResponseEntity.ok(response);
                 })
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @Operation(summary = "Start or resume the processing pipeline",
+            description = "Idempotent: derives the first pending step from the persisted state and resumes from there. "
+                    + "Safe to call again after a failure to continue from the last checkpoint.")
+    @PostMapping("/{bookId}/process")
+    public ResponseEntity<Map<String, Object>> processBook(
+            @Parameter(description = "ID of the book to process", required = true)
+            @PathVariable UUID bookId) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            if (bookPipelineOrchestrator.isRunning(bookId)) {
+                response.put("error", "Book " + bookId + " is already being processed.");
+                return ResponseEntity.status(409).body(response);
+            }
+            bookPipelineOrchestrator.processBook(bookId);
+            response.put("message", "Processing started/resumed for book " + bookId);
+            response.put("bookId", bookId);
+            return ResponseEntity.accepted().body(response);
+        } catch (IllegalArgumentException e) {
+            response.put("error", e.getMessage());
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            response.put("error", "Error starting processing: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
+    }
+
+    @Operation(summary = "Get processing timeline",
+            description = "Full trace of every pipeline step attempt of a book: step, status, attempts, durations and errors.")
+    @GetMapping("/{bookId}/trace")
+    public ResponseEntity<List<TraceEventDto>> getBookTrace(
+            @Parameter(description = "ID of the book", required = true)
+            @PathVariable UUID bookId) {
+        try {
+            return ResponseEntity.ok(processingTraceService.getTimeline(bookId));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
     }
 
 

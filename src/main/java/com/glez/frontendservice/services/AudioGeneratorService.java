@@ -2,9 +2,10 @@ package com.glez.frontendservice.services;
 
 
 import com.glez.frontendservice.components.SmartTextSplitter;
+import com.glez.frontendservice.tts.EdgeTtsClient;
+import com.glez.frontendservice.tts.EdgeTtsException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedWriter;
@@ -18,14 +19,14 @@ import java.util.Map;
 @Service
 public class AudioGeneratorService {
 
-    @Value("${app.audio.voice:Paulina}") // Configurable en application.properties
-    private String voice;
     private final SmartTextSplitter textSplitter;
+    private final EdgeTtsClient edgeTtsClient;
     private static final Logger log = LoggerFactory.getLogger(AudioGeneratorService.class);
 
 
-    public AudioGeneratorService(SmartTextSplitter textSplitter) {
+    public AudioGeneratorService(SmartTextSplitter textSplitter, EdgeTtsClient edgeTtsClient) {
         this.textSplitter = textSplitter;
+        this.edgeTtsClient = edgeTtsClient;
     }
 
     // Mapa de normalización idéntico a tu versión Python
@@ -53,7 +54,7 @@ public class AudioGeneratorService {
             try {
                 for (int i = 0; i < chunks.size(); i++) {
                     String normalized = normalizeText(chunks.get(i));
-                    Path chunkPath = tempDir.resolve(String.format("chunk_%04d.m4a", i));
+                    Path chunkPath = tempDir.resolve(String.format("chunk_%04d.mp3", i));
 
                     if (textToAudio(normalized, chunkPath)) {
                         audioFiles.add(chunkPath);
@@ -84,20 +85,14 @@ public class AudioGeneratorService {
         return result;
     }
 
-    private boolean textToAudio(String text, Path outputPath) throws IOException, InterruptedException {
-        // Guardamos el texto en un archivo temporal para el comando 'say'
-        Path tempTextFile = Files.createTempFile("chunk_text_", ".txt");
-        Files.writeString(tempTextFile, text);
-
-        ProcessBuilder pb = new ProcessBuilder(
-                "say", "-v", voice, "-o", outputPath.toString(), "-f", tempTextFile.toString()
-        );
-
-        Process process = pb.start();
-        int exitCode = process.waitFor();
-        Files.deleteIfExists(tempTextFile);
-
-        return exitCode == 0;
+    private boolean textToAudio(String text, Path outputPath) {
+        try {
+            edgeTtsClient.synthesizeToFile(text, outputPath);
+            return true;
+        } catch (EdgeTtsException e) {
+            log.error("Falló la síntesis de audio con Edge TTS para el fragmento", e);
+            return false;
+        }
     }
 
     private boolean mergeAudioFiles(List<Path> audioFiles, Path targetFile, Path tempDir) throws IOException, InterruptedException {

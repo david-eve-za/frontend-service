@@ -208,6 +208,9 @@ H2-FrontEnd-Service*.trace.db
 logs/*.log
 logs/*.gz
 
+# Novels-sync crawler downloads (runtime data, not source)
+output/
+
 # Angular build artifacts
 src/main/angular/node/
 src/main/angular/node_modules/

@@ -18,3 +18,10 @@ services:
     environment:
       - RABBITMQ_DEFAULT_USER=guest
       - RABBITMQ_DEFAULT_PASS=guest
+  flaresolverr:
+    image: 'ghcr.io/flaresolverr/flaresolverr:latest'
+    container_name: flaresolverr
+    ports:
+      - '8191:8191'
+    environment:
+      - LOG_LEVEL=info

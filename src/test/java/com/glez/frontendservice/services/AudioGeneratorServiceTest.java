@@ -1,6 +1,7 @@
 package com.glez.frontendservice.services;
 
 import com.glez.frontendservice.components.SmartTextSplitter;
+import com.glez.frontendservice.tts.EdgeTtsClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -26,6 +27,9 @@ class AudioGeneratorServiceTest {
     @Mock
     private SmartTextSplitter textSplitter;
 
+    @Mock
+    private EdgeTtsClient edgeTtsClient;
+
     private AudioGeneratorService audioGeneratorService;
 
     @TempDir
@@ -33,15 +37,7 @@ class AudioGeneratorServiceTest {
 
     @BeforeEach
     void setUp() {
-        audioGeneratorService = new AudioGeneratorService(textSplitter);
-        // Set voice via reflection since it's @Value
-        try {
-            java.lang.reflect.Field field = AudioGeneratorService.class.getDeclaredField("voice");
-            field.setAccessible(true);
-            field.set(audioGeneratorService, "Paulina");
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to set voice field", e);
-        }
+        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient);
     }
 
     @Nested
@@ -75,7 +71,7 @@ class AudioGeneratorServiceTest {
         @Test
         @DisplayName("Should call textSplitter with correct parameters")
         void processTextToAudio_withValidText_callsTextSplitter() {
-            Path outputPath = tempDir.resolve("output.m4a");
+            Path outputPath = tempDir.resolve("output.mp3");
             String text = "This is a test text for audio generation.";
             List<String> chunks = List.of("Chunk 1", "Chunk 2");
             when(textSplitter.split(text, "es", 1000)).thenReturn(chunks);
@@ -91,6 +87,34 @@ class AudioGeneratorServiceTest {
             }
 
             verify(textSplitter).split(text, "es", 1000);
+        }
+
+        @Test
+        @DisplayName("Should synthesize every chunk through the Edge TTS client")
+        void processTextToAudio_withValidText_callsEdgeTtsClientForEachChunk() {
+            Path outputPath = tempDir.resolve("output.mp3");
+            String text = "This is a test text for audio generation.";
+            List<String> chunks = List.of("Chunk 1", "Chunk 2");
+            when(textSplitter.split(text, "es", 1000)).thenReturn(chunks);
+
+            audioGeneratorService.processTextToAudio(text, outputPath);
+
+            verify(edgeTtsClient, times(2)).synthesizeToFile(anyString(), any(Path.class));
+        }
+
+        @Test
+        @DisplayName("Should skip chunks that fail synthesis and not generate audio when all fail")
+        void processTextToAudio_whenAllChunksFail_returnsFalse() {
+            Path outputPath = tempDir.resolve("output.mp3");
+            String text = "This is a test text for audio generation.";
+            List<String> chunks = List.of("Chunk 1");
+            when(textSplitter.split(text, "es", 1000)).thenReturn(chunks);
+            doThrow(new com.glez.frontendservice.tts.EdgeTtsException("synthesis failed"))
+                    .when(edgeTtsClient).synthesizeToFile(anyString(), any(Path.class));
+
+            boolean result = audioGeneratorService.processTextToAudio(text, outputPath);
+
+            assertFalse(result);
         }
     }
 

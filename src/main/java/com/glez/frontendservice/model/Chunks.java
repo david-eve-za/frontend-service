@@ -32,4 +32,7 @@ public class Chunks {
 
     @Column(nullable = false)
     private Integer position;
+
+    @Column(nullable = false)
+    private Integer attempts = 0;
 }

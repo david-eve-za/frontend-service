@@ -13,6 +13,21 @@ export interface UploadResponse {
 export interface BookStatusResponse {
   bookId: string;
   status: string;
+  currentStep?: string;
+  lastTraceId?: string;
+  audioFilePath?: string;
+}
+
+export interface TraceEvent {
+  id: string;
+  traceId: string;
+  step: 'EXTRACT' | 'SPLIT' | 'TRANSLATE' | 'AUDIO' | 'FINALIZE';
+  status: 'STARTED' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+  attempt: number;
+  startedAt: string;
+  finishedAt?: string;
+  errorMessage?: string;
+  details?: string;
 }
 
 export interface SemanticBlock {
@@ -31,6 +46,9 @@ export interface BookListItem {
   id: string;
   name: string;
   status: string;
+  currentStep?: string;
+  lastTraceId?: string;
+  audioFilePath?: string;
 }
 
 export interface ProcessingConfig {
@@ -95,6 +113,14 @@ export class BookTranslatorUploadService {
 
   splitBookIntoChunks(bookId: string): Observable<{ message: string }> {
     return this.http.post<{ message: string }>(`${this.API_URL}/${bookId}/split`, {});
+  }
+
+  processBook(bookId: string): Observable<{ message: string }> {
+    return this.http.post<{ message: string }>(`${this.API_URL}/${bookId}/process`, {});
+  }
+
+  getBookTrace(bookId: string): Observable<TraceEvent[]> {
+    return this.http.get<TraceEvent[]>(`${this.API_URL}/${bookId}/trace`);
   }
 
   getBookFullText(bookId: string): Observable<string> {

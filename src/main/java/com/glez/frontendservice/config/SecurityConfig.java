@@ -20,6 +20,11 @@ public class SecurityConfig {
         http
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
+                .headers(headers -> headers
+                        // La consola H2 se renderiza con frames; SAMEORIGIN permite
+                        // cargarlos desde el mismo origen (fix X-Frame-Options: DENY).
+                        .frameOptions(frameOptions -> frameOptions.sameOrigin())
+                )
                 .authorizeHttpRequests(auth -> auth
                         .anyRequest().permitAll()
                 );
