@@ -107,6 +107,9 @@ app:
   novels-manager:
     # Catalog sync downloads NOTHING: only titles/volumes/formats metadata.
     auto-sync-enabled: true
+    # Full catalog metadata sync when the application boots, so the
+    # manager starts fresh without waiting for the 3h cron.
+    sync-on-startup: true
     # Every 3 hours (cron; fixed by requirement).
     sync-cron: "0 0 */3 * * *"
     # Directory levels walked below the library root during metadata sync.

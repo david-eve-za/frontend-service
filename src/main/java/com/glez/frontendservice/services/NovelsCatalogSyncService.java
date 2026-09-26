@@ -12,6 +12,8 @@ import com.glez.frontendservice.repository.NovelVolumeRepository;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,7 @@ public class NovelsCatalogSyncService {
     private final String decodedStartPath;
     private final int maxDepth;
     private final boolean autoSyncEnabled;
+    private final boolean syncOnStartupEnabled;
 
     private final AtomicReference<SyncRun> activeRun = new AtomicReference<>();
     private final ExecutorService syncExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -67,7 +70,8 @@ public class NovelsCatalogSyncService {
                                      NovelFileNameParser fileNameParser,
                                      @Value("${app.novels.base-url}") String baseUrl,
                                      @Value("${app.novels-manager.sync-max-depth:3}") int maxDepth,
-                                     @Value("${app.novels-manager.auto-sync-enabled:true}") boolean autoSyncEnabled) {
+                                     @Value("${app.novels-manager.auto-sync-enabled:true}") boolean autoSyncEnabled,
+                                     @Value("${app.novels-manager.sync-on-startup:true}") boolean syncOnStartupEnabled) {
         this.apiClient = apiClient;
         this.novelRepository = novelRepository;
         this.volumeRepository = volumeRepository;
@@ -77,6 +81,26 @@ public class NovelsCatalogSyncService {
         this.decodedStartPath = URLDecoder.decode(startPath, StandardCharsets.UTF_8);
         this.maxDepth = maxDepth;
         this.autoSyncEnabled = autoSyncEnabled;
+        this.syncOnStartupEnabled = syncOnStartupEnabled;
+    }
+
+    /**
+     * Dispara la sincronización de metadatos al arrancar la aplicación para
+     * que el catálogo esté actualizado sin esperar al primer cron de 3 horas.
+     * Idempotente: si ya hay una sincronización en curso se omite.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    void syncOnStartup() {
+        if (!syncOnStartupEnabled) {
+            log.debug("Catalog startup sync disabled; skipping");
+            return;
+        }
+        try {
+            startSync();
+            log.info("Catalog sync triggered by application startup");
+        } catch (IllegalStateException e) {
+            log.info("Skipping startup catalog sync: {}", e.getMessage());
+        }
     }
 
     @PreDestroy

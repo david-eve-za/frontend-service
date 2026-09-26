@@ -22,7 +22,10 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -60,7 +63,7 @@ class NovelsCatalogSyncServiceTest {
         apiClient = mock(ElscioneApiClient.class);
         service = new NovelsCatalogSyncService(apiClient, novelRepository, volumeRepository,
                 fileRepository, new NovelFileNameParser(),
-                "https://server.elscione.com" + BASE, 3, true);
+                "https://server.elscione.com" + BASE, 3, true, false);
     }
 
     private static ElscioneApiClient.ApiItem dir(String href) {
@@ -202,5 +205,35 @@ class NovelsCatalogSyncServiceTest {
         assertNotNull(run.lastError);
         assertEquals(com.glez.frontendservice.dtos.NovelsCatalogSyncStatus.State.COMPLETED, run.state,
                 "A listing failure is recorded but does not fail the whole sync");
+    }
+
+    @Test
+    @DisplayName("startup sync triggers the catalog walk when enabled")
+    void startupSync_triggersWhenEnabled() throws Exception {
+        java.util.concurrent.CountDownLatch firstListing = new java.util.concurrent.CountDownLatch(1);
+        when(apiClient.listContents(anyString())).thenAnswer(invocation -> {
+            firstListing.countDown();
+            return List.of();
+        });
+        NovelsCatalogSyncService enabled = new NovelsCatalogSyncService(apiClient, novelRepository,
+                volumeRepository, fileRepository, new NovelFileNameParser(),
+                "https://server.elscione.com" + BASE, 3, true, true);
+
+        enabled.syncOnStartup();
+
+        assertTrue(firstListing.await(2, java.util.concurrent.TimeUnit.SECONDS),
+                "The startup-triggered sync should reach the first listing");
+        assertNotEquals(com.glez.frontendservice.dtos.NovelsCatalogSyncStatus.State.IDLE,
+                enabled.getStatus().state());
+    }
+
+    @Test
+    @DisplayName("startup sync is skipped when the flag is disabled")
+    void startupSync_skippedWhenDisabled() {
+        service.syncOnStartup();
+
+        assertEquals(com.glez.frontendservice.dtos.NovelsCatalogSyncStatus.State.IDLE,
+                service.getStatus().state());
+        verify(apiClient, never()).listContents(anyString());
     }
 }
