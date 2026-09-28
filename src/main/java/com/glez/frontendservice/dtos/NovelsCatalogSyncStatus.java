@@ -17,7 +17,8 @@ public record NovelsCatalogSyncStatus(
         int removedVolumes,
         Instant startedAt,
         Instant finishedAt,
-        String lastError) {
+        String lastError,
+        Instant pauseUntil) {
 
     public enum State {
         IDLE,
@@ -28,6 +29,6 @@ public record NovelsCatalogSyncStatus(
     }
 
     public static NovelsCatalogSyncStatus idle() {
-        return new NovelsCatalogSyncStatus(State.IDLE, null, 0, 0, 0, 0, 0, 0, null, null, null);
+        return new NovelsCatalogSyncStatus(State.IDLE, null, 0, 0, 0, 0, 0, 0, null, null, null, null);
     }
 }

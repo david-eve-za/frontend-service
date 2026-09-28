@@ -63,7 +63,7 @@ class NovelsCatalogSyncServiceTest {
         apiClient = mock(ElscioneApiClient.class);
         service = new NovelsCatalogSyncService(apiClient, novelRepository, volumeRepository,
                 fileRepository, new NovelFileNameParser(),
-                "https://server.elscione.com" + BASE, 3, true, false);
+                "https://server.elscione.com" + BASE, 3, true, false, 0, 10);
     }
 
     private static ElscioneApiClient.ApiItem dir(String href) {
@@ -217,7 +217,7 @@ class NovelsCatalogSyncServiceTest {
         });
         NovelsCatalogSyncService enabled = new NovelsCatalogSyncService(apiClient, novelRepository,
                 volumeRepository, fileRepository, new NovelFileNameParser(),
-                "https://server.elscione.com" + BASE, 3, true, true);
+                "https://server.elscione.com" + BASE, 3, true, true, 0, 10);
 
         enabled.syncOnStartup();
 
@@ -235,5 +235,99 @@ class NovelsCatalogSyncServiceTest {
         assertEquals(com.glez.frontendservice.dtos.NovelsCatalogSyncStatus.State.IDLE,
                 service.getStatus().state());
         verify(apiClient, never()).listContents(anyString());
+    }
+
+    // ------------------------------------------------------------------
+    // Anti-ban batching: pausas de 10 min entre lotes de listados
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("listings are processed in batches separated by a pause visible as pauseUntil")
+    void batchedSync_pausesBetweenBatches() throws Exception {
+        // 3 listados (raíz + 2 novelas) con lote de 2: pausa antes del tercero.
+        when(apiClient.listContents(BASE)).thenReturn(List.of(
+                dir(BASE + "NovelA/"), dir(BASE + "NovelB/")));
+        when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
+        when(apiClient.listContents(BASE + "NovelB/")).thenReturn(List.of());
+        NovelsCatalogSyncService batched = new NovelsCatalogSyncService(apiClient, novelRepository,
+                volumeRepository, fileRepository, new NovelFileNameParser(),
+                "https://server.elscione.com" + BASE, 3, true, false, 2, 0.02); // pausa de 1.2s
+
+        long start = System.currentTimeMillis();
+        batched.startSync();
+        assertNotNull(awaitPause(batched, 5000).pauseUntil(), "la pausa entre lotes debe exponerse en el status");
+        NovelsCatalogSyncStatus done = awaitState(batched, NovelsCatalogSyncStatus.State.COMPLETED, 10_000);
+
+        assertEquals(NovelsCatalogSyncStatus.State.COMPLETED, done.state());
+        assertNull(done.pauseUntil(), "al terminar no debe quedar pausa activa");
+        assertTrue(System.currentTimeMillis() - start >= 1100, "la ejecución debe incluir la pausa completa del lote");
+    }
+
+    @Test
+    @DisplayName("cancelling during a 10-minute batch pause ends the sync within a second")
+    void batchedSync_cancelInterruptsPauseImmediately() throws Exception {
+        // Lote de 1: pausa de 10 minutos reales antes del segundo listado.
+        when(apiClient.listContents(BASE)).thenReturn(List.of(dir(BASE + "NovelA/")));
+        when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
+        NovelsCatalogSyncService slow = new NovelsCatalogSyncService(apiClient, novelRepository,
+                volumeRepository, fileRepository, new NovelFileNameParser(),
+                "https://server.elscione.com" + BASE, 3, true, false, 1, 10);
+
+        long start = System.currentTimeMillis();
+        slow.startSync();
+        assertNotNull(awaitPause(slow, 5000).pauseUntil(), "debe entrar en pausa tras el primer listado");
+        assertTrue(slow.cancel(), "la cancelación debe aceptarse durante la pausa");
+
+        NovelsCatalogSyncStatus done = awaitState(slow, NovelsCatalogSyncStatus.State.CANCELLED, 5000);
+        assertEquals(NovelsCatalogSyncStatus.State.CANCELLED, done.state());
+        assertNull(done.pauseUntil(), "la pausa se limpia al cancelar");
+        assertTrue(System.currentTimeMillis() - start < 5000, "cancelar no puede esperar los 10 minutos de la pausa");
+    }
+
+    @Test
+    @DisplayName("no trailing pause when the tree ends exactly at the batch boundary")
+    void batchedSync_noTrailingPauseAtExactBoundary() throws Exception {
+        // Exactamente 2 listados y lote de 2: el sync termina sin pausa final.
+        when(apiClient.listContents(BASE)).thenReturn(List.of(dir(BASE + "NovelA/")));
+        when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
+        NovelsCatalogSyncService boundary = new NovelsCatalogSyncService(apiClient, novelRepository,
+                volumeRepository, fileRepository, new NovelFileNameParser(),
+                "https://server.elscione.com" + BASE, 3, true, false, 2, 10); // pausa de 10 min reales
+
+        long start = System.currentTimeMillis();
+        boundary.startSync();
+        NovelsCatalogSyncStatus done = awaitState(boundary, NovelsCatalogSyncStatus.State.COMPLETED, 5000);
+
+        assertEquals(NovelsCatalogSyncStatus.State.COMPLETED, done.state());
+        assertTrue(System.currentTimeMillis() - start < 5000, "sin más listados no debe haber pausa tras el último lote");
+    }
+
+    /** Poll del status hasta que haya una pausa activa (o timeout). */
+    private NovelsCatalogSyncStatus awaitPause(NovelsCatalogSyncService svc, long timeoutMillis) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        NovelsCatalogSyncStatus status;
+        do {
+            status = svc.getStatus();
+            if (status.pauseUntil() != null) {
+                return status;
+            }
+            Thread.sleep(25);
+        } while (System.currentTimeMillis() < deadline);
+        return status;
+    }
+
+    /** Poll del status hasta alcanzar el estado objetivo (o timeout). */
+    private NovelsCatalogSyncStatus awaitState(NovelsCatalogSyncService svc, NovelsCatalogSyncStatus.State target,
+                                               long timeoutMillis) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        NovelsCatalogSyncStatus status;
+        do {
+            status = svc.getStatus();
+            if (status.state() == target) {
+                return status;
+            }
+            Thread.sleep(25);
+        } while (System.currentTimeMillis() < deadline);
+        return status;
     }
 }

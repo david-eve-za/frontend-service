@@ -131,6 +131,14 @@ app:
     sync-cron: "0 0 */3 * * *"
     # Directory levels walked below the library root during metadata sync.
     sync-max-depth: 3
+    # Anti-ban (Tier 4): process the metadata listings in batches of
+    # sync-batch-size requests separated by sync-batch-pause-minutes pauses,
+    # so the server sees short bursts with long recovery windows instead of
+    # a sustained multi-hour crawl. The pause is instantly cancellable via
+    # POST /sync/cancel and is visible in the status as pauseUntil.
+    # batch-size <= 0 disables batching (legacy continuous behavior).
+    sync-batch-size: 100
+    sync-batch-pause-minutes: 10
 
 logging:
   level:

@@ -40,6 +40,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * formato/tamaño). Es idempotente por remotePath/href, nunca borra estado
  * local (volúmenes desaparecidos se marcan removedFromSource) y se ejecuta
  * cada 3 horas vía @Scheduled además del trigger manual.
+ *
+ * Anti-ban por lotes: los listados se procesan en grupos de
+ * {@code sync-batch-size} peticiones separados por pausas de
+ * {@code sync-batch-pause-minutes} (default 100 listados / 10 minutos), de
+ * modo que el patrón de tráfico sea de ráfagas cortas con recuperación larga
+ * en lugar de una sesión sostenida de horas. La pausa es cancelable al
+ * instante y se expone en el status como {@code pauseUntil}.
  */
 @Slf4j
 @Service
@@ -55,6 +62,10 @@ public class NovelsCatalogSyncService {
     private final int maxDepth;
     private final boolean autoSyncEnabled;
     private final boolean syncOnStartupEnabled;
+    /** Listados (peticiones al servidor) por lote; <=0 deshabilita el batching. */
+    private final int syncBatchSize;
+    /** Pausa entre lotes en milisegundos (config en minutos). */
+    private final long batchPauseMillis;
 
     private final AtomicReference<SyncRun> activeRun = new AtomicReference<>();
     private final ExecutorService syncExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -71,7 +82,9 @@ public class NovelsCatalogSyncService {
                                      @Value("${app.novels.base-url}") String baseUrl,
                                      @Value("${app.novels-manager.sync-max-depth:3}") int maxDepth,
                                      @Value("${app.novels-manager.auto-sync-enabled:true}") boolean autoSyncEnabled,
-                                     @Value("${app.novels-manager.sync-on-startup:true}") boolean syncOnStartupEnabled) {
+                                     @Value("${app.novels-manager.sync-on-startup:true}") boolean syncOnStartupEnabled,
+                                     @Value("${app.novels-manager.sync-batch-size:100}") int syncBatchSize,
+                                     @Value("${app.novels-manager.sync-batch-pause-minutes:10}") double syncBatchPauseMinutes) {
         this.apiClient = apiClient;
         this.novelRepository = novelRepository;
         this.volumeRepository = volumeRepository;
@@ -82,6 +95,8 @@ public class NovelsCatalogSyncService {
         this.maxDepth = maxDepth;
         this.autoSyncEnabled = autoSyncEnabled;
         this.syncOnStartupEnabled = syncOnStartupEnabled;
+        this.syncBatchSize = syncBatchSize;
+        this.batchPauseMillis = (long) (syncBatchPauseMinutes * 60_000);
     }
 
     /**
@@ -176,10 +191,21 @@ public class NovelsCatalogSyncService {
         if (run.cancelled || depth > maxDepth) {
             return;
         }
+        // Anti-ban (Tier 4): procesar los listados en lotes separados por una
+        // pausa larga. La pausa se evalúa ANTES del siguiente listado (no tras
+        // cerrar un lote), así el lote final no deja una pausa basura al final
+        // del sync, y el primer lote arranca inmediatamente.
+        if (syncBatchSize > 0 && run.listingsProcessed.get() >= syncBatchSize && !run.cancelled) {
+            pauseBetweenBatches(run);
+        }
+        if (run.cancelled) {
+            return;
+        }
         run.currentPath = remotePath;
         List<ElscioneApiClient.ApiItem> contents;
         try {
             contents = apiClient.listContents(remotePath);
+            run.listingsProcessed.incrementAndGet();
         } catch (Exception e) {
             run.lastError = remotePath + ": " + e.getMessage();
             log.warn("Could not list {}: {}", remotePath, e.getMessage());
@@ -225,6 +251,37 @@ public class NovelsCatalogSyncService {
                     ? null
                     : (category != null ? category : lastDecodedSegment(remotePath));
             walk(run, directory.href(), childCategory, depth + 1, visitedNovelPaths);
+        }
+    }
+
+    /**
+     * Pausa anti-ban entre lotes de listados: dormir {@code batchPauseMillis}
+     * en ticks de 1s comprobando la cancelación, de modo que POST
+     * /api/novels-manager/sync/cancel responda en menos de un segundo aunque
+     * la pausa sea de 10 minutos. El estado permanece RUNNING (la cancelación
+     * lo requiere) y {@code pauseUntil} se expone en el status para
+     * observabilidad.
+     */
+    private void pauseBetweenBatches(SyncRun run) {
+        run.pausesTaken.incrementAndGet();
+        Instant until = Instant.now().plusMillis(batchPauseMillis);
+        run.pauseUntil = until;
+        log.info("Batch of {} listings complete ({} so far); pausing {} ms until {} to avoid server bans",
+                syncBatchSize, run.listingsProcessed.get(), batchPauseMillis, until);
+        try {
+            long deadline = System.currentTimeMillis() + batchPauseMillis;
+            while (!run.cancelled && System.currentTimeMillis() < deadline) {
+                Thread.sleep(Math.min(1000, Math.max(1, deadline - System.currentTimeMillis())));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            run.pauseUntil = null;
+            if (run.cancelled) {
+                log.info("Batch pause interrupted by cancellation");
+            } else {
+                log.info("Batch pause finished; continuing with the next batch");
+            }
         }
     }
 
@@ -391,7 +448,8 @@ public class NovelsCatalogSyncService {
                 run.removedVolumes.get(),
                 run.startedAt,
                 run.finishedAt,
-                run.lastError);
+                run.lastError,
+                run.pauseUntil);
     }
 
     /** Estado mutable de la ejecución en curso. */
@@ -400,8 +458,12 @@ public class NovelsCatalogSyncService {
         volatile String currentPath;
         volatile String lastError;
         volatile boolean cancelled;
+        /** Fin de la pausa entre lotes si hay una activa; null en caso contrario. */
+        volatile Instant pauseUntil;
         volatile java.time.Instant finishedAt;
         final java.time.Instant startedAt = java.time.Instant.now();
+        final AtomicInteger listingsProcessed = new AtomicInteger();
+        final AtomicInteger pausesTaken = new AtomicInteger();
         final AtomicInteger novelsSeen = new AtomicInteger();
         final AtomicInteger volumesSeen = new AtomicInteger();
         final AtomicInteger filesSeen = new AtomicInteger();
