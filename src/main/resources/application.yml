@@ -98,12 +98,29 @@ app:
     # provides the cf_clearance cookie + matching user agent. Empty disables it.
     flaresolverr-url: http://localhost:8191/v1
     flaresolverr-timeout-seconds: 60
-    # Optional manual override: the exact user agent and either the bare
-    # cf_clearance value or a full Cookie header copied from a logged-in
-    # browser session (needed when the site stacks Anubis on top of
-    # Cloudflare). Takes precedence over FlareSolverr.
-    static-cf-user-agent: ""
-    static-cf-clearance: ""
+    # Persistent FlareSolverr session: navigates the target TWICE with the same
+    # browser context and merges the cookie jars. The first navigation can
+    # solve the Cloudflare challenge AFTER FlareSolverr reads the cookies, so
+    # the second one returns the complete jar (cf_clearance included). FlareSolverr
+    # alone CANNOT solve Anubis: it returns the challenge page as content before
+    # the browser's proof of work completes. Empty disables it (single navigation).
+    flaresolverr-session: elscione-bypass
+    # Anubis proof-of-work solver (Java-native): probes the origin on session
+    # resolution and, when the Anubis interstitial appears, solves the embedded
+    # SHA-256 challenge and redeems it via pass-challenge to mint the auth cookie.
+    anubis-solve-enabled: true
+    # Safety bound: refuse to brute-force difficulties above this many hex zeros.
+    anubis-max-difficulty: 24
+    # Dynamic session cache (replaces the old static-cf-* env vars): after a
+    # verified mint the service stores {userAgent, cookies, obtainedAt} here
+    # and reuses it (after a live probe) on restarts and after invalidations,
+    # so FlareSolverr is not needed again while the cookies stay valid.
+    # Empty disables persistence. Gitignored: contains live cookies.
+    session-cache-path: .elscione-session.json
+    # Acquisition attempts per resolution: 1st probes the persisted session
+    # (if any), further attempts re-mint via FlareSolverr + Anubis. Bounded so
+    # the outer retry/backoff of ElscioneApiClient paces the re-mints.
+    session-acquisition-attempts: 2
   novels-manager:
     # Catalog sync downloads NOTHING: only titles/volumes/formats metadata.
     auto-sync-enabled: true

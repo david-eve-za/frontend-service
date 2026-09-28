@@ -59,7 +59,7 @@ class ElscioneApiClientTest {
     @BeforeEach
     void setUp() throws IOException {
         bypass = new CloudflareBypassService(objectMapper,
-                "http://127.0.0.1/base/", "", 5, "StaticUA", "static-cookie", 30);
+                "http://127.0.0.1/base/", "", 5, "", false, 24, "", 1, 30);
         requestCount.set(0);
         plannedStatuses.clear();
         lastPlannedStatus = 200;

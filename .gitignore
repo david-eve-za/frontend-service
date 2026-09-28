@@ -211,6 +211,10 @@ logs/*.gz
 # Novels-sync crawler downloads (runtime data, not source)
 output/
 
+# Novels-sync dynamic session cache (live Cloudflare/Anubis cookies, minted at runtime)
+.elscione-session.json
+
+
 # Angular build artifacts
 src/main/angular/node/
 src/main/angular/node_modules/
