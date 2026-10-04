@@ -181,7 +181,6 @@ class BookPipelineOrchestratorTest {
                 .thenReturn(List.of())   // split check: empty
                 .thenReturn(awaiting)   // split count
                 .thenReturn(awaiting)   // translate pending evaluation
-                .thenReturn(completed)   // translate failed-check
                 .thenReturn(completed); // audio join
 
         when(bookProcessingService.processBookChunksAsync(bookId))
@@ -197,8 +196,9 @@ class BookPipelineOrchestratorTest {
         // SPLIT executed
         verify(bookProcessingService).splitBookIntoChunks(bookId);
 
-        // TRANSLATE: chunks re-queued with attempts incremented
-        verify(chunksRepository, times(2)).save(any(Chunks.class));
+        // TRANSLATE: attempts are not consumed upfront anymore; a successful
+        // run never touches the counters
+        verify(chunksRepository, never()).save(any(Chunks.class));
         verify(bookProcessingService).processBookChunksAsync(bookId);
 
         // AUDIO generated with .mp3 path derived from the book name
@@ -224,13 +224,12 @@ class BookPipelineOrchestratorTest {
         Chunks done = chunk(ChunkStatus.COMPLETED, 1, 1, "ya traducido");
         List<Chunks> mixed = List.of(stale, done);
         List<Chunks> completed = List.of(
-                chunk(ChunkStatus.COMPLETED, 0, 2, "recuperado"),
+                chunk(ChunkStatus.COMPLETED, 0, 0, "recuperado"),
                 done);
 
         when(chunksRepository.findByBook(book))
                 .thenReturn(mixed)     // split check: not empty -> skip
                 .thenReturn(mixed)     // translate pending evaluation
-                .thenReturn(completed) // translate failed-check
                 .thenReturn(completed);// audio join
 
         when(bookProcessingService.processBookChunksAsync(bookId))
@@ -243,36 +242,42 @@ class BookPipelineOrchestratorTest {
         // SPLIT was skipped, the stale chunk was re-queued
         verify(bookProcessingService, never()).splitBookIntoChunks(bookId);
         assertEquals(ChunkStatus.AWAITING, stale.getStatus());
-        assertEquals(2, stale.getAttempts());
+        assertEquals(0, stale.getAttempts(),
+                "An interrupted run must not consume chunk attempts");
         verify(bookProcessingService).processBookChunksAsync(bookId);
         assertEquals(ProcessingStatus.COMPLETED, book.getStatus());
     }
 
     @Test
-    @DisplayName("Translation failure marks the book FAILED and persists the step error")
+    @DisplayName("A genuine translation failure marks the book FAILED and consumes one chunk attempt")
     void processBook_whenTranslationFails_marksBookFailed() {
         stubTraceEvents();
         when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
 
         Chunks pendingChunk = chunk(ChunkStatus.FAILED, 0, 1, null);
-        // After the (mocked) translation pass the chunk remains FAILED.
-        Chunks failedAfter = chunk(ChunkStatus.FAILED, 0, 2, null);
+        // Re-read after the failed join: the failed statuses roll back, so
+        // the chunk comes back non-COMPLETED with the healed attempts.
+        Chunks failedAfter = chunk(ChunkStatus.AWAITING, 0, 0, null);
         List<Chunks> pending = List.of(pendingChunk);
         List<Chunks> afterFailure = List.of(failedAfter);
 
         when(chunksRepository.findByBook(book))
                 .thenReturn(pending)    // split check: not empty
                 .thenReturn(pending)    // translate pending
-                .thenReturn(afterFailure); // translate failed-check
+                .thenReturn(afterFailure); // re-read after the failed join
 
         when(bookProcessingService.processBookChunksAsync(bookId))
-                .thenReturn(CompletableFuture.completedFuture(null));
+                .thenReturn(CompletableFuture.failedFuture(
+                        new RuntimeException("Translation failed for chunk " + UUID.randomUUID())));
 
         assertThrows(RuntimeException.class, () -> orchestrator.processBook(bookId).join());
 
         // Step event marked FAILED with the error and the book marked FAILED
         verify(traceService, times(1)).failStep(any(), any());
         assertEquals(ProcessingStatus.FAILED, book.getStatus());
+        // The genuinely failed chunk consumed exactly one attempt
+        assertEquals(1, failedAfter.getAttempts());
+        verify(chunksRepository).save(failedAfter);
         // No audio attempted after a failed translation
         verify(audioGeneratorService, never()).processTextToAudio(anyString(), any());
         verify(bookProcessingService, never()).splitBookIntoChunks(bookId);
@@ -283,6 +288,9 @@ class BookPipelineOrchestratorTest {
     void processBook_whenChunkExceedsMaxAttempts_aborts() {
         stubTraceEvents();
         when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        // Three genuine TRANSLATE failures back the exhausted counter
+        when(traceService.countGenuineAttempts(any(Book.class), eq(ProcessStep.TRANSLATE)))
+                .thenReturn(3);
 
         Chunks exhausted = chunk(ChunkStatus.FAILED, 0, 3, null); // attempts == maxAttempts
         List<Chunks> pending = List.of(exhausted);
@@ -296,6 +304,40 @@ class BookPipelineOrchestratorTest {
         assertEquals(ProcessingStatus.FAILED, book.getStatus());
         // The exhausted chunk is not re-queued
         verify(bookProcessingService, never()).processBookChunksAsync(bookId);
+    }
+
+    @Test
+    @DisplayName("Legacy attempt inflation from interrupted runs is healed before the retry")
+    void processBook_withInflatedLegacyAttempts_healsAndRetries() {
+        stubTraceEvents();
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        // The book lived through 2 interrupted runs + 1 genuine failure
+        when(traceService.countGenuineAttempts(any(Book.class), eq(ProcessStep.TRANSLATE)))
+                .thenReturn(1);
+
+        // All chunks carry attempts=3 inflated by the interrupted runs
+        Chunks inflated = chunk(ChunkStatus.AWAITING, 0, 3, null);
+        List<Chunks> pending = List.of(inflated);
+        List<Chunks> completed = List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido"));
+
+        when(chunksRepository.findByBook(book))
+                .thenReturn(pending)   // split check: not empty -> skip
+                .thenReturn(pending)   // translate pending evaluation (heal happens here)
+                .thenReturn(completed);// audio join
+
+        when(bookProcessingService.processBookChunksAsync(bookId))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class)))
+                .thenReturn(true);
+
+        orchestrator.processBook(bookId).join();
+
+        // The counter was clamped to the genuine failure count, the guard
+        // passed and the translation retried instead of blocking the book
+        assertEquals(1, inflated.getAttempts(),
+                "Inflated legacy attempts must be clamped to the genuine failure count");
+        verify(bookProcessingService).processBookChunksAsync(bookId);
+        assertEquals(ProcessingStatus.COMPLETED, book.getStatus());
     }
 
     @Test
@@ -359,8 +401,7 @@ class BookPipelineOrchestratorTest {
         when(chunksRepository.findByBook(book))
                 .thenReturn(List.of(awaiting)) // split check: skip
                 .thenReturn(List.of(awaiting)) // translate pending
-                .thenReturn(List.of(done))    // translate failed-check after unblock
-                .thenReturn(List.of(done));   // audio join
+                .thenReturn(List.of(done));    // audio join after unblock
 
         CompletableFuture<Void> blocked = new CompletableFuture<>();
         when(bookProcessingService.processBookChunksAsync(bookId)).thenReturn(blocked);

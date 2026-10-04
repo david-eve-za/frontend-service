@@ -40,10 +40,17 @@ class ProcessingTraceServiceTest {
     private UUID bookId;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         traceService = new ProcessingTraceService(traceEventRepository, bookRepository);
+        setField("maxAttempts", 3);
         bookId = UUID.randomUUID();
         MDC.clear();
+    }
+
+    private void setField(String name, Object value) throws Exception {
+        java.lang.reflect.Field field = traceService.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(traceService, value);
     }
 
     @AfterEach
@@ -89,23 +96,50 @@ class ProcessingTraceServiceTest {
     }
 
     @Test
-    @DisplayName("Attempt counter counts only real executions, ignoring SKIPPED events")
-    void startStep_countsAttempts_ignoringSkippedEvents() {
+    @DisplayName("Attempt counter counts only genuine attempts: skips SKIPPED, interrupted STARTED and blocked pseudo-events")
+    void startStep_countsAttempts_ignoringNonGenuineEvents() {
         Book book = book();
         when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
         ProcessTraceEvent completed = new ProcessTraceEvent();
         completed.setStatus(TraceEventStatus.COMPLETED);
+        completed.setAttempt(1);
         ProcessTraceEvent failed = new ProcessTraceEvent();
         failed.setStatus(TraceEventStatus.FAILED);
+        failed.setAttempt(2);
         ProcessTraceEvent skipped = new ProcessTraceEvent();
         skipped.setStatus(TraceEventStatus.SKIPPED);
+        skipped.setAttempt(3);
+        // Run interrupted by a crash/restart: an open STARTED event is not a failure
+        ProcessTraceEvent interrupted = new ProcessTraceEvent();
+        interrupted.setStatus(TraceEventStatus.STARTED);
+        interrupted.setAttempt(3);
+        // Legacy pseudo-failure recorded by the budget guard: attempt > max can never be genuine
+        ProcessTraceEvent blocked = new ProcessTraceEvent();
+        blocked.setStatus(TraceEventStatus.FAILED);
+        blocked.setAttempt(4);
         when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(any(), any()))
-                .thenReturn(List.of(completed, failed, skipped));
+                .thenReturn(List.of(completed, failed, skipped, interrupted, blocked));
         when(traceEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, "trace-2", null);
 
         assertEquals(3, event.getAttempt());
+    }
+
+    @Test
+    @DisplayName("countGenuineAttempts exposes the same filter for the chunk heal")
+    void countGenuineCounts_onlyGenuineEvents() {
+        Book book = book();
+        ProcessTraceEvent genuineFailure = new ProcessTraceEvent();
+        genuineFailure.setStatus(TraceEventStatus.FAILED);
+        genuineFailure.setAttempt(1);
+        ProcessTraceEvent interrupted = new ProcessTraceEvent();
+        interrupted.setStatus(TraceEventStatus.STARTED);
+        interrupted.setAttempt(2);
+        when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(book, ProcessStep.TRANSLATE))
+                .thenReturn(List.of(genuineFailure, interrupted));
+
+        assertEquals(1, traceService.countGenuineAttempts(book, ProcessStep.TRANSLATE));
     }
 
     @Test

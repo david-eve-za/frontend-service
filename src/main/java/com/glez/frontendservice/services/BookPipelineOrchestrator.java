@@ -202,6 +202,10 @@ public class BookPipelineOrchestrator {
      * Translates every chunk that still needs work: AWAITING, FAILED, or
      * PROCESSING left over from a crashed run (stale). While this instance
      * holds the per-book run lock, a PROCESSING chunk can only be stale.
+     *
+     * <p>Attempt accounting counts only GENUINE failures: a run interrupted
+     * by a crash or restart does not consume the retry budget, and a
+     * chunk's attempts only grow when its translation actually fails.
      */
     private void runTranslateStep(UUID bookId, String traceId) {
         Book book = loadBook(bookId);
@@ -225,43 +229,70 @@ public class BookPipelineOrchestrator {
             return;
         }
 
+        healLegacyChunkAttempts(book, pending);
+
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.TRANSLATE, traceId,
                 pending.size() + "/" + chunks.size() + " chunks pending");
         checkStepAttempts(event);
 
+        List<Chunks> exhausted = pending.stream()
+                .filter(c -> c.getAttempts() >= maxAttempts)
+                .toList();
+        if (!exhausted.isEmpty()) {
+            failAndAbort(event, new IllegalStateException(exhausted.size() + " chunk(s) exhausted the maximum of "
+                    + maxAttempts + " translation attempts (e.g. chunk " + exhausted.get(0).getId() + ")"));
+        }
+
+        // Re-queue stale statuses for the async pass; attempts are NOT
+        // consumed upfront anymore (only genuine failures count).
         for (Chunks chunk : pending) {
-            if (chunk.getAttempts() >= maxAttempts) {
-                failAndAbort(event, new IllegalStateException("Chunk " + chunk.getId()
-                        + " exceeded the maximum of " + maxAttempts + " attempts"));
+            if (chunk.getStatus() != ChunkStatus.AWAITING) {
+                chunk.setStatus(ChunkStatus.AWAITING);
+                chunksRepository.save(chunk);
             }
-            chunk.setAttempts(chunk.getAttempts() + 1);
-            chunk.setStatus(ChunkStatus.AWAITING);
-            chunksRepository.save(chunk);
         }
 
         try {
             bookProcessingService.processBookChunksAsync(bookId).join();
         } catch (RuntimeException e) {
-            // The failure detail is enriched with the chunks persisted as FAILED.
-            List<Chunks> failedAfterJoin = chunksRepository.findByBook(loadBook(bookId)).stream()
-                    .filter(c -> c.getStatus() == ChunkStatus.FAILED)
+            // The failed statuses roll back with the translation
+            // transaction, so every chunk that is not COMPLETED genuinely
+            // failed in this run: record one attempt for each of them.
+            List<Chunks> failed = chunksRepository.findByBook(loadBook(bookId)).stream()
+                    .filter(c -> c.getStatus() != ChunkStatus.COMPLETED)
                     .toList();
-            String detail = e.getMessage();
-            if (!failedAfterJoin.isEmpty()) {
-                detail = failedAfterJoin.size() + " chunks failed to translate (e.g. chunk "
-                        + failedAfterJoin.get(0).getId() + ")";
+            for (Chunks chunk : failed) {
+                chunk.setAttempts(chunk.getAttempts() + 1);
+                chunksRepository.save(chunk);
             }
+            String detail = !failed.isEmpty()
+                    ? failed.size() + " chunks failed to translate (e.g. chunk " + failed.get(0).getId() + ")"
+                    : e.getMessage();
             failAndAbort(event, new IllegalStateException(detail != null ? detail : e.toString(), e));
         }
 
-        List<Chunks> failed = chunksRepository.findByBook(loadBook(bookId)).stream()
-                .filter(c -> c.getStatus() == ChunkStatus.FAILED)
-                .toList();
-        if (!failed.isEmpty()) {
-            failAndAbort(event, new IllegalStateException(failed.size()
-                    + " chunks failed to translate (e.g. chunk " + failed.get(0).getId() + ")"));
-        }
         traceService.completeStep(event, "All chunks translated");
+    }
+
+    /**
+     * Heals legacy chunk attempt counters. Attempts used to be incremented
+     * on every started run — including runs interrupted by restarts or
+     * crashes — so books processed before the genuine-failure accounting
+     * can carry inflated values that block the retry guard forever.
+     * Clamps every pending chunk down to the number of genuinely failed
+     * TRANSLATE runs, which is an upper bound of the failures any single
+     * chunk could have lived through. Only ever reduces; idempotent.
+     */
+    private void healLegacyChunkAttempts(Book book, List<Chunks> pending) {
+        int genuineFailures = traceService.countGenuineAttempts(book, ProcessStep.TRANSLATE);
+        for (Chunks chunk : pending) {
+            if (chunk.getAttempts() != null && chunk.getAttempts() > genuineFailures) {
+                log.info("Healing inflated attempts of chunk {}: {} -> {} (book {})",
+                        chunk.getId(), chunk.getAttempts(), genuineFailures, book.getId());
+                chunk.setAttempts(genuineFailures);
+                chunksRepository.save(chunk);
+            }
+        }
     }
 
     /**

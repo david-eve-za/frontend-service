@@ -10,6 +10,7 @@ import com.glez.frontendservice.repository.ProcessTraceEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,9 @@ public class ProcessingTraceService {
 
     private final ProcessTraceEventRepository traceEventRepository;
     private final BookRepository bookRepository;
+
+    @Value("${app.processing.max-attempts:3}")
+    private int maxAttempts;
 
     public ProcessingTraceService(ProcessTraceEventRepository traceEventRepository,
                                   BookRepository bookRepository) {
@@ -155,9 +159,34 @@ public class ProcessingTraceService {
         MDC.remove(MDC_STEP);
     }
 
+    /**
+     * Number of genuine attempts recorded for a step: concluded runs that
+     * failed (or completed and later needed a re-run). Interrupted runs
+     * and blocked pseudo-attempts never count, so restarts or crashes
+     * cannot exhaust the retry budget.
+     */
+    public int countGenuineAttempts(Book book, ProcessStep step) {
+        return countPreviousAttempts(book, step);
+    }
+
+    /**
+     * Counts only genuine step attempts, excluding:
+     * <ul>
+     * <li>SKIPPED events (the step never ran),</li>
+     * <li>STARTED events left open by runs interrupted by a crash or
+     * restart (they are not translation failures; the per-book run lock
+     * guarantees any open STARTED event at count time is stale),</li>
+     * <li>events with attempt > max attempts: those are the
+     * pseudo-failures recorded when the budget guard aborts a run before
+     * it starts. A genuine attempt can never exceed the budget, so this
+     * filter is exact and also self-heals legacy blocked events.</li>
+     * </ul>
+     */
     private int countPreviousAttempts(Book book, ProcessStep step) {
         return (int) traceEventRepository.findByBookAndStepOrderByStartedAtDesc(book, step).stream()
                 .filter(e -> e.getStatus() != TraceEventStatus.SKIPPED)
+                .filter(e -> e.getStatus() != TraceEventStatus.STARTED)
+                .filter(e -> e.getAttempt() != null && e.getAttempt() <= maxAttempts)
                 .count();
     }
 
