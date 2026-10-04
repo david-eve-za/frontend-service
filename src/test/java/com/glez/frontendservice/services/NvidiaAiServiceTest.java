@@ -1,5 +1,6 @@
 package com.glez.frontendservice.services;
 
+import com.openai.errors.OpenAIIoException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -96,6 +97,14 @@ class NvidiaAiServiceTest {
             Exception exception = new RuntimeException("RATE LIMIT EXCEEDED");
             boolean result = invokeIsRetryableError(exception);
             assertFalse(result);
+        }
+
+        @Test
+        @DisplayName("Should return true for SDK network errors (OpenAIIoException) even with an unhelpful message")
+        void isRetryableError_withOpenAiIoException_returnsTrue() {
+            Exception exception = new OpenAIIoException("Request failed");
+            boolean result = invokeIsRetryableError(exception);
+            assertTrue(result, "Transient network failures must rotate the model and retry");
         }
     }
 

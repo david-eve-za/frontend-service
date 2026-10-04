@@ -1,5 +1,6 @@
 package com.glez.frontendservice.services;
 
+import com.openai.errors.OpenAIIoException;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -67,6 +68,13 @@ public class NvidiaAiService {
     }
 
     private boolean isRetryableError(Exception e) {
+        // Network-level failures of the OpenAI SDK ("Request failed": reset
+        // connections, DNS hiccups, socket errors mid-response) are
+        // transient by nature: rotate the model and retry instead of
+        // aborting a whole translation pass on a single blip.
+        if (e instanceof OpenAIIoException) {
+            return true;
+        }
         String message = e.getMessage();
         if (message == null) {
             return false;
