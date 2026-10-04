@@ -11,14 +11,32 @@ export const appRoutes: Routes = [
         component: AppLayout,
         children: [
             { path: '', component: Dashboard },
-            { path: 'uikit', loadChildren: () => import('./app/pages/uikit/uikit.routes') },
+            {
+                path: 'uikit',
+                loadChildren: () => import('./app/pages/uikit/uikit.routes'),
+            },
             { path: 'documentation', component: Documentation },
-            { path: 'pages', loadChildren: () => import('./app/pages/pages.routes') },
-            { path: 'book-translator', loadChildren: () => import('./app/pages/book-translator/book-translator.routes') }
-        ]
+            {
+                path: 'pages',
+                loadChildren: () => import('./app/pages/pages.routes'),
+            },
+            {
+                path: 'book-translator',
+                loadChildren: () =>
+                    import('./app/pages/book-translator/book-translator.routes'),
+            },
+            {
+                path: 'pipeline',
+                loadChildren: () =>
+                    import('./app/pages/book-pipeline/book-pipeline.routes'),
+            },
+        ],
     },
     { path: 'landing', component: Landing },
     { path: 'notfound', component: Notfound },
-    { path: 'auth', loadChildren: () => import('./app/pages/auth/auth.routes') },
-    { path: '**', redirectTo: '/notfound' }
+    {
+        path: 'auth',
+        loadChildren: () => import('./app/pages/auth/auth.routes'),
+    },
+    { path: '**', redirectTo: '/notfound' },
 ];

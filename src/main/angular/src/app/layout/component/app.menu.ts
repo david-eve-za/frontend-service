@@ -24,57 +24,81 @@ export class AppMenu {
     ngOnInit() {
         this.model = [
             {
-                label: 'Home',
-                items: [{ label: 'Dashboard', icon: 'pi pi-fw pi-home', routerLink: ['/'] }]
+                label: 'Inicio',
+                items: [
+                    {
+                        label: 'Panel de Estado',
+                        icon: 'pi pi-fw pi-home',
+                        routerLink: ['/'],
+                    },
+                ],
             },
-{
-                label: 'Book Translator',
+            {
+                label: 'Traductor de Libros',
                 icon: 'pi pi-fw pi-language',
                 path: '/book-translator',
                 items: [
                     {
                         label: 'Subir Archivos',
                         icon: 'pi pi-fw pi-upload',
-                        routerLink: ['/book-translator/upload']
+                        routerLink: ['/book-translator/upload'],
                     },
                     {
                         label: 'Gestor de Novelas',
                         icon: 'pi pi-fw pi-book',
-                        routerLink: ['/book-translator/novels']
+                        routerLink: ['/book-translator/novels'],
                     },
                     {
-                        label: 'Translate Book',
-                        icon: 'pi pi-fw pi-file-arrow-right',
-                        routerLink: ['/book-translator']
-                    },
-                    {
-                        label: 'History',
+                        label: 'Historial',
                         icon: 'pi pi-fw pi-history',
-                        routerLink: ['/book-translator/history']
+                        routerLink: ['/book-translator/history'],
                     },
                     {
-                        label: 'Settings',
+                        label: 'Configuración',
                         icon: 'pi pi-fw pi-cog',
-                        routerLink: ['/book-translator/settings']
-                    }
-                ]
+                        routerLink: ['/book-translator/settings'],
+                    },
+                ],
             },
             {
-                label: 'Get Started',
+                label: 'Procesamiento de Libros',
+                icon: 'pi pi-fw pi-sliders-h',
                 items: [
                     {
-                        label: 'Documentation',
-                        icon: 'pi pi-fw pi-book',
-                        routerLink: ['/documentation']
+                        // El paso de división de texto ya existe dentro del
+                        // asistente de carga (paso "Split del Texto").
+                        label: 'Dividir Texto',
+                        icon: 'pi pi-fw pi-list',
+                        routerLink: ['/book-translator/upload'],
                     },
                     {
-                        label: 'View Source',
+                        label: 'Traducir Libro',
+                        icon: 'pi pi-fw pi-language',
+                        routerLink: ['/pipeline/translate-book'],
+                    },
+                    {
+                        label: 'Generar Audiolibro',
+                        icon: 'pi pi-fw pi-volume-up',
+                        routerLink: ['/pipeline/generate-audiobook'],
+                    },
+                ],
+            },
+            {
+                label: 'Primeros Pasos',
+                items: [
+                    {
+                        label: 'Documentación',
+                        icon: 'pi pi-fw pi-book',
+                        routerLink: ['/documentation'],
+                    },
+                    {
+                        label: 'Ver Código Fuente',
                         icon: 'pi pi-fw pi-github',
                         url: 'https://github.com/primefaces/sakai-ng',
-                        target: '_blank'
-                    }
-                ]
-            }
+                        target: '_blank',
+                    },
+                ],
+            },
         ];
     }
 }
