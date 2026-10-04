@@ -129,6 +129,11 @@ public class BookPipelineOrchestrator {
         return runningBooks.contains(bookId);
     }
 
+    /** Snapshot de los libros que esta instancia está procesando ahora. */
+    public Set<UUID> getRunningBookIds() {
+        return Set.copyOf(runningBooks);
+    }
+
     private void runPipeline(UUID bookId, String traceId, ProcessStep targetStep) {
         runExtractStep(bookId, traceId);
         runSplitStep(bookId, traceId);
