@@ -89,6 +89,24 @@ public class BookPipelineOrchestrator {
      */
     @Async("bookProcessingExecutor")
     public CompletableFuture<Void> processBook(UUID bookId, ProcessStep targetStep) {
+        return processBook(bookId, targetStep, null);
+    }
+
+    /**
+     * Same as {@link #processBook(UUID, ProcessStep)} but restricts the
+     * SPLIT step to the selected semantic blocks (Prólogo/Capítulo/Epílogo):
+     * the chunks are always regenerated from the blocks' content, so the
+     * translation only covers those blocks. A null/empty selection keeps
+     * the regular behavior (all pending chunks of the book).
+     *
+     * @param targetStep last pipeline step to execute
+     * @param blockIds   blocks that define the translation scope; null or
+     *                   empty means the whole book
+     * @throws IllegalArgumentException if the book does not exist
+     * @throws IllegalStateException if the book is already being processed
+     */
+    @Async("bookProcessingExecutor")
+    public CompletableFuture<Void> processBook(UUID bookId, ProcessStep targetStep, List<UUID> blockIds) {
         if (!runningBooks.add(bookId)) {
             // Rejected before the try block: the finally clause must not
             // release the lock held by the other run.
@@ -113,7 +131,7 @@ public class BookPipelineOrchestrator {
             book.setLastTraceId(traceId);
             bookRepository.save(book);
 
-            runPipeline(bookId, traceId, targetStep);
+            runPipeline(bookId, traceId, targetStep, blockIds);
             markAwaitingIfStoppedEarly(bookId, targetStep);
             return CompletableFuture.completedFuture(null);
         } catch (RuntimeException e) {
@@ -134,9 +152,9 @@ public class BookPipelineOrchestrator {
         return Set.copyOf(runningBooks);
     }
 
-    private void runPipeline(UUID bookId, String traceId, ProcessStep targetStep) {
+    private void runPipeline(UUID bookId, String traceId, ProcessStep targetStep, List<UUID> blockIds) {
         runExtractStep(bookId, traceId);
-        runSplitStep(bookId, traceId);
+        runSplitStep(bookId, traceId, blockIds);
         if (targetStep == ProcessStep.SPLIT) {
             return;
         }
@@ -182,7 +200,24 @@ public class BookPipelineOrchestrator {
         traceService.skipStep(bookId, ProcessStep.EXTRACT, traceId, "Text already extracted at upload");
     }
 
-    private void runSplitStep(UUID bookId, String traceId) {
+    private void runSplitStep(UUID bookId, String traceId, List<UUID> blockIds) {
+        // Block-scoped split: the chunks are ALWAYS regenerated from the
+        // selected blocks' content, replacing any previous chunks so the
+        // translation covers only the selected scope.
+        if (blockIds != null && !blockIds.isEmpty()) {
+            ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, traceId,
+                    blockIds.size() + " selected block(s)");
+            checkStepAttempts(event);
+            try {
+                bookProcessingService.splitBookIntoChunks(bookId, blockIds);
+                int count = chunksRepository.findByBook(loadBook(bookId)).size();
+                traceService.completeStep(event, count + " chunks created from " + blockIds.size() + " block(s)");
+            } catch (RuntimeException e) {
+                failAndAbort(event, e);
+            }
+            return;
+        }
+
         if (!chunksRepository.findByBook(loadBook(bookId)).isEmpty()) {
             traceService.skipStep(bookId, ProcessStep.SPLIT, traceId, "Chunks already exist");
             return;

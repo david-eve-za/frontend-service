@@ -307,6 +307,36 @@ class BookPipelineOrchestratorTest {
     }
 
     @Test
+    @DisplayName("Block-scoped run regenerates chunks from the selected blocks even when chunks exist")
+    void processBook_withBlockScope_resplitsFromSelectedBlocks() {
+        stubTraceEvents();
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+
+        UUID blockId = UUID.randomUUID();
+        // Existing chunks: the full-book path would SKIP the split; the
+        // block-scoped path must regenerate them anyway.
+        Chunks existing = chunk(ChunkStatus.AWAITING, 0, 0, null);
+        Chunks regenerated = chunk(ChunkStatus.AWAITING, 0, 0, null);
+        when(chunksRepository.findByBook(book))
+                .thenReturn(List.of(existing))  // split check: chunks already exist
+                .thenReturn(List.of(regenerated)) // count after the block-scoped split
+                .thenReturn(List.of(regenerated)); // translate pending evaluation
+
+        when(bookProcessingService.processBookChunksAsync(bookId))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        orchestrator.processBook(bookId, ProcessStep.TRANSLATE, List.of(blockId)).join();
+
+        // The block-scoped split ran (not skipped) with the block ids
+        verify(bookProcessingService).splitBookIntoChunks(bookId, List.of(blockId));
+        verify(bookProcessingService, never()).splitBookIntoChunks(bookId);
+        // Translation proceeded over the regenerated chunks
+        verify(bookProcessingService).processBookChunksAsync(bookId);
+        assertEquals(ProcessingStatus.AWAITING, book.getStatus(),
+                "Run stopped at the TRANSLATE checkpoint must leave the book AWAITING");
+    }
+
+    @Test
     @DisplayName("Legacy attempt inflation from interrupted runs is healed before the retry")
     void processBook_withInflatedLegacyAttempts_healsAndRetries() {
         stubTraceEvents();

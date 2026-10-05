@@ -2,6 +2,7 @@ package com.glez.frontendservice.services;
 
 
 import com.glez.frontendservice.components.SmartTextSplitter;
+import com.glez.frontendservice.dtos.BlockDto;
 import com.glez.frontendservice.model.*;
 import com.glez.frontendservice.repository.BlockRepository;
 import com.glez.frontendservice.repository.BookRepository;
@@ -21,6 +22,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -160,6 +162,92 @@ public class BookProcessingService {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
         book.setFullText(newText);
+        bookRepository.save(book);
+    }
+
+    /**
+     * Bloques semánticos del libro (Prólogo/Capítulo/Epílogo) en orden de
+     * lectura, con un extracto y la longitud para identificarlos en la UI
+     * de selección de alcance de la traducción.
+     */
+    @Transactional(readOnly = true)
+    public List<BlockDto> getBlocksForBook(UUID bookId) {
+        if (!bookRepository.existsById(bookId)) {
+            throw new IllegalArgumentException("Book with ID " + bookId + " not found.");
+        }
+        return blockRepository.findByBookIdOrderByPositionAsc(bookId).stream()
+                .map(block -> new BlockDto(
+                        block.getId(),
+                        block.getBlockType().name(),
+                        block.getBlockNumber(),
+                        block.getPosition(),
+                        buildPreview(block.getContent()),
+                        block.getContent() != null ? block.getContent().length() : 0))
+                .toList();
+    }
+
+    /**
+     * Valida que todos los ids de bloques pertenezcan al libro antes de
+     * disparar la traducción (llamada síncrona desde el controller).
+     */
+    @Transactional(readOnly = true)
+    public void validateBlocksBelongToBook(UUID bookId, List<UUID> blockIds) {
+        long valid = blockRepository.countByBookIdAndIdIn(bookId, blockIds);
+        if (valid != blockIds.size()) {
+            throw new IllegalArgumentException(blockIds.size() - valid
+                    + " of the selected blocks do not belong to book " + bookId + ".");
+        }
+    }
+
+    private static String buildPreview(String content) {
+        if (content == null) {
+            return "";
+        }
+        String collapsed = content.replaceAll("\\s+", " ").trim();
+        return collapsed.length() > 150 ? collapsed.substring(0, 150) + "…" : collapsed;
+    }
+
+    /**
+     * Divide en chunks el contenido concatenado de los bloques seleccionados
+     * (en orden de lectura, sin las etiquetas blockML), reemplazando los
+     * chunks actuales del libro. Es el alcance de "traducir solo algunos
+     * bloques": el resto del pipeline (traducción, audio) opera sobre esos
+     * chunks.
+     */
+    @Transactional
+    public void splitBookIntoChunks(UUID bookId, List<UUID> blockIds) {
+        Book book = bookRepository.findById(bookId)
+                .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
+
+        List<Block> blocks = blockRepository.findAllById(blockIds).stream()
+                .filter(block -> block.getBook() != null && book.getId().equals(block.getBook().getId()))
+                .sorted(Comparator.comparing(Block::getPosition))
+                .toList();
+        if (blocks.isEmpty()) {
+            throw new IllegalArgumentException("None of the selected blocks belong to book " + bookId + ".");
+        }
+
+        String text = blocks.stream()
+                .map(Block::getContent)
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining("\n\n"));
+        if (text.isBlank()) {
+            throw new IllegalArgumentException("The selected blocks have no content to translate.");
+        }
+
+        chunksRepository.deleteAllByBook(book);
+
+        List<String> splitText = smartTextSplitter.split(text);
+        for (int i = 0; i < splitText.size(); i++) {
+            Chunks chunk = new Chunks();
+            chunk.setBook(book);
+            chunk.setOriginalText(splitText.get(i));
+            chunk.setStatus(ChunkStatus.AWAITING);
+            chunk.setPosition(i);
+            chunksRepository.save(chunk);
+        }
+
+        book.setStatus(ProcessingStatus.UPLOADED);
         bookRepository.save(book);
     }
 

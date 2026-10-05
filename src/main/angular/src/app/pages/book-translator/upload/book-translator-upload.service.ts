@@ -51,6 +51,16 @@ export interface BookListItem {
     audioFilePath?: string;
 }
 
+/** Bloque semántico de un libro (GET /api/blocks/{bookId}). */
+export interface BlockItem {
+    id: string;
+    blockType: 'PROLOGUE' | 'CHAPTER' | 'EPILOGUE';
+    blockNumber: number | null;
+    position: number;
+    preview: string;
+    contentLength: number;
+}
+
 /** Chunk de un libro con su texto original y su traducción (GET .../chunks). */
 export interface Chunk {
     id: string;
@@ -138,6 +148,29 @@ export class BookTranslatorUploadService {
         return this.http.get<ChunkPage>(`${this.API_URL}/${bookId}/chunks`, {
             params,
         });
+    }
+
+    getBookBlocks(bookId: string): Observable<BlockItem[]> {
+        return this.http.get<BlockItem[]>(`/api/blocks/${bookId}`);
+    }
+
+    /**
+     * Inicia la traducción de un libro. Con blockIds no vacíos el alcance se
+     * limita a esos bloques: los chunks se regeneran con su contenido.
+     */
+    startTranslation(
+        bookId: string,
+        blockIds: string[],
+    ): Observable<{ message: string }> {
+        let params = new HttpParams().set('to', 'TRANSLATE');
+        if (blockIds.length > 0) {
+            params = params.set('blocks', blockIds.join(','));
+        }
+        return this.http.post<{ message: string }>(
+            `${this.API_URL}/${bookId}/process`,
+            {},
+            { params },
+        );
     }
 
     splitBookIntoChunks(bookId: string): Observable<{ message: string }> {

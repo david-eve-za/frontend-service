@@ -3,14 +3,18 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { SelectModule } from 'primeng/select';
+import { SelectButtonModule } from 'primeng/selectbutton';
+import { CheckboxModule } from 'primeng/checkbox';
 import { ButtonModule } from 'primeng/button';
 import { TagModule } from 'primeng/tag';
 import { ToastModule } from 'primeng/toast';
 import { PaginatorModule } from 'primeng/paginator';
 import { MessageService } from 'primeng/api';
+import { HttpErrorResponse } from '@angular/common/http';
 import {
     BookTranslatorUploadService,
     BookListItem,
+    BlockItem,
     Chunk,
     ChunkPage,
 } from '../book-translator/upload/book-translator-upload.service';
@@ -18,11 +22,14 @@ import {
 /** Tamaño de página de chunks para la vista paralela. */
 const PAGE_SIZE = 10;
 
+/** Alcance de la traducción. */
+type TranslationScope = 'full' | 'blocks';
+
 /**
- * Página Traducir Libro del pipeline: comparación en paralelo del texto
- * original y el texto traducido de un libro, dividido en sus chunks.
- * Solo lectura; la traducción se dispara desde el Gestor de Novelas o el
- * Historial.
+ * Página Traducir Libro del pipeline: selección del documento, del alcance
+ * (libro completo o bloques concretos creados en el split: Prólogo,
+ * Capítulo, Epílogo) e inicio de la traducción, con la comparación en
+ * paralelo del texto original y el traducido por chunk.
  */
 @Component({
     selector: 'app-translate-book',
@@ -32,6 +39,8 @@ const PAGE_SIZE = 10;
         RouterLink,
         FormsModule,
         SelectModule,
+        SelectButtonModule,
+        CheckboxModule,
         ButtonModule,
         TagModule,
         ToastModule,
@@ -91,6 +100,126 @@ const PAGE_SIZE = 10;
                         >{{ completedChunks() }} de
                         {{ page?.totalElements ?? 0 }} chunks traducidos</span
                     >
+                </div>
+            }
+
+            @if (selectedBookId) {
+                <!-- Alcance de la traducción -->
+                <div class="mt-6 pt-4 border-t">
+                    <label class="block text-sm font-medium mb-3"
+                        >Alcance de la traducción</label
+                    >
+                    <p-selectbutton
+                        [options]="scopeOptions"
+                        [(ngModel)]="scope"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                    />
+
+                    @if (scope === 'blocks') {
+                        @if (loadingBlocks) {
+                            <div class="mt-4 p-4 text-center text-gray-500">
+                                <i class="pi pi-spin pi-spinner"></i> Cargando
+                                bloques...
+                            </div>
+                        } @else if (blocks.length === 0) {
+                            <div class="mt-4 p-4 text-center text-gray-500">
+                                Este documento no tiene bloques definidos.
+                                Márcalos en
+                                <a
+                                    routerLink="/pipeline/split-text"
+                                    class="text-blue-600 hover:underline"
+                                    >Dividir Texto</a
+                                >.
+                            </div>
+                        } @else {
+                            <div class="flex flex-wrap gap-2 mt-4 mb-2">
+                                <p-button
+                                    label="Todos"
+                                    icon="pi pi-check-square"
+                                    (click)="selectAllBlocks()"
+                                    styleClass="p-button-sm p-button-outlined p-button-secondary"
+                                    [disabled]="allBlocksSelected"
+                                />
+                                <p-button
+                                    label="Ninguno"
+                                    icon="pi pi-minus-square"
+                                    (click)="deselectAllBlocks()"
+                                    styleClass="p-button-sm p-button-outlined p-button-secondary"
+                                    [disabled]="!anyBlockSelected"
+                                />
+                            </div>
+                            <div
+                                class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-60 overflow-y-auto border rounded-lg p-3 bg-gray-50"
+                            >
+                                @for (
+                                    block of blocks;
+                                    track block.id;
+                                    let i = $index
+                                ) {
+                                    <label
+                                        [attr.for]="'block-' + i"
+                                        class="flex items-start gap-2 cursor-pointer"
+                                    >
+                                        <p-checkbox
+                                            [(ngModel)]="selectedBlockIds"
+                                            [value]="block.id"
+                                            [inputId]="'block-' + i"
+                                        />
+                                        <div class="flex-1 min-w-0">
+                                            <div class="font-medium text-sm">
+                                                {{ blockLabel(block) }}
+                                                <span
+                                                    class="text-xs text-gray-500"
+                                                    >({{
+                                                        formatLength(
+                                                            block.contentLength
+                                                        )
+                                                    }})</span
+                                                >
+                                            </div>
+                                            <div
+                                                class="text-xs text-gray-500 truncate"
+                                            >
+                                                {{ block.preview }}
+                                            </div>
+                                        </div>
+                                    </label>
+                                }
+                            </div>
+                            <div class="mt-2 text-xs text-gray-500">
+                                Los chunks se regeneran con el contenido de los
+                                bloques seleccionados y se traducen solo esos
+                                bloques.
+                            </div>
+                        }
+                    }
+                </div>
+
+                <!-- Iniciar traducción -->
+                <div
+                    class="mt-6 pt-4 border-t flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                >
+                    <span class="text-sm text-gray-500">
+                        @if (scope === 'full') {
+                            Se traducirán todos los chunks pendientes del
+                            documento.
+                        } @else {
+                            Se traducirán
+                            {{ selectedBlockIds.length }} bloque(s)
+                            seleccionado(s).
+                        }
+                    </span>
+                    <p-button
+                        label="Iniciar Traducción"
+                        icon="pi pi-play"
+                        styleClass="p-button-primary"
+                        iconPos="right"
+                        [loading]="starting"
+                        [disabled]="!canStart"
+                        (click)="startTranslation()"
+                    />
                 </div>
             }
         </div>
@@ -188,6 +317,16 @@ export class TranslateBook implements OnInit {
     page: ChunkPage | null = null;
     loading = false;
 
+    scope: TranslationScope = 'full';
+    scopeOptions = [
+        { label: 'Libro completo', value: 'full' },
+        { label: 'Bloques específicos', value: 'blocks' },
+    ];
+    blocks: BlockItem[] = [];
+    selectedBlockIds: string[] = [];
+    loadingBlocks = false;
+    starting = false;
+
     constructor(
         private uploadService: BookTranslatorUploadService,
         private messageService: MessageService,
@@ -235,7 +374,11 @@ export class TranslateBook implements OnInit {
     }
 
     onBookChange() {
+        this.scope = 'full';
+        this.blocks = [];
+        this.selectedBlockIds = [];
         this.loadChunks(0, PAGE_SIZE);
+        this.loadBlocks();
     }
 
     refresh() {
@@ -243,6 +386,9 @@ export class TranslateBook implements OnInit {
             this.page?.pageNumber ?? 0,
             this.page?.pageSize ?? PAGE_SIZE,
         );
+        if (this.scope === 'blocks') {
+            this.loadBlocks();
+        }
     }
 
     onPageChange(event: { first?: number; rows?: number }) {
@@ -250,6 +396,118 @@ export class TranslateBook implements OnInit {
         const rows = event.rows ?? PAGE_SIZE;
         const pageNumber = Math.floor(first / rows);
         this.loadChunks(pageNumber, rows);
+    }
+
+    get allBlocksSelected(): boolean {
+        return (
+            this.blocks.length > 0 &&
+            this.selectedBlockIds.length === this.blocks.length
+        );
+    }
+
+    get anyBlockSelected(): boolean {
+        return this.selectedBlockIds.length > 0;
+    }
+
+    get canStart(): boolean {
+        if (!this.selectedBookId || this.starting) return false;
+        if (this.scope === 'blocks') {
+            return this.blocks.length > 0 && this.anyBlockSelected;
+        }
+        return true;
+    }
+
+    selectAllBlocks() {
+        this.selectedBlockIds = this.blocks.map((block) => block.id);
+    }
+
+    deselectAllBlocks() {
+        this.selectedBlockIds = [];
+    }
+
+    blockLabel(block: BlockItem): string {
+        switch (block.blockType) {
+            case 'PROLOGUE':
+                return 'Prólogo';
+            case 'CHAPTER':
+                return (
+                    'Capítulo' +
+                    (block.blockNumber ? ' ' + block.blockNumber : '')
+                );
+            case 'EPILOGUE':
+                return 'Epílogo';
+            default:
+                return block.blockType;
+        }
+    }
+
+    formatLength(chars: number): string {
+        return chars >= 1000
+            ? (chars / 1000).toFixed(1) + 'K chars'
+            : chars + ' chars';
+    }
+
+    startTranslation() {
+        if (!this.canStart || !this.selectedBookId) return;
+        this.starting = true;
+        const blockIds =
+            this.scope === 'blocks' ? [...this.selectedBlockIds] : [];
+        this.uploadService
+            .startTranslation(this.selectedBookId, blockIds)
+            .subscribe({
+                next: (response) => {
+                    this.starting = false;
+                    this.messageService.add({
+                        severity: 'success',
+                        summary: 'Traducción iniciada',
+                        detail:
+                            response.message ||
+                            'La traducción se está ejecutando en segundo plano.',
+                    });
+                    // Los chunks pueden haberse regenerado (modo bloques).
+                    this.loadChunks(0, this.page?.pageSize ?? PAGE_SIZE);
+                    this.cdr.markForCheck();
+                },
+                error: (err: HttpErrorResponse) => {
+                    this.starting = false;
+                    this.cdr.markForCheck();
+                    if (err.status === 409) {
+                        this.messageService.add({
+                            severity: 'warn',
+                            summary: 'Ya en proceso',
+                            detail: 'El documento ya se está procesando. Espera a que termine la corrida actual.',
+                        });
+                    } else {
+                        this.messageService.add({
+                            severity: 'error',
+                            summary: 'Error',
+                            detail:
+                                err.error?.error ||
+                                'No se pudo iniciar la traducción.',
+                        });
+                    }
+                },
+            });
+    }
+
+    private loadBlocks() {
+        if (!this.selectedBookId) return;
+        this.loadingBlocks = true;
+        this.uploadService.getBookBlocks(this.selectedBookId).subscribe({
+            next: (blocks) => {
+                this.blocks = blocks;
+                this.selectedBlockIds = this.selectedBlockIds.filter((id) =>
+                    blocks.some((b) => b.id === id),
+                );
+                this.loadingBlocks = false;
+                this.cdr.markForCheck();
+            },
+            error: () => {
+                this.loadingBlocks = false;
+                this.blocks = [];
+                this.cdr.markForCheck();
+            },
+        });
     }
 
     private loadChunks(pageNumber: number, pageSize: number) {

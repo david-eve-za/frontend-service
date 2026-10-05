@@ -1,5 +1,6 @@
 package com.glez.frontendservice.controllers;
 
+import com.glez.frontendservice.dtos.BlockDto;
 import com.glez.frontendservice.model.Block;
 import com.glez.frontendservice.model.BlockSaveRequest;
 import com.glez.frontendservice.services.BookProcessingService;
@@ -14,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -25,6 +27,22 @@ import java.util.UUID;
 public class BlockController {
 
     private final BookProcessingService bookProcessingService;
+
+    @Operation(summary = "List the semantic blocks of a document",
+            description = "Blocks (Prologue / Chapter / Epilogue) in reading order with a short preview "
+                    + "and their length, for the translation scope selector.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Block list of the document"),
+            @ApiResponse(responseCode = "404", description = "Document not found", content = @Content)
+    })
+    @GetMapping("/{bookId}")
+    public ResponseEntity<List<BlockDto>> getBlocks(@PathVariable UUID bookId) {
+        try {
+            return ResponseEntity.ok(bookProcessingService.getBlocksForBook(bookId));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
 
     @Operation(summary = "Save semantic blocks of a document", description = "Receives the raw text with blockML tags and the parsed semantic blocks, updates the document text and persists the blocks.")
     @ApiResponses(value = {

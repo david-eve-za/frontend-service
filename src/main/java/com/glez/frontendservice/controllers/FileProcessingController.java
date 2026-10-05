@@ -118,7 +118,9 @@ public class FileProcessingController {
 
     @Operation(summary = "Start or resume the processing pipeline",
             description = "Idempotent: derives the first pending step from the persisted state and resumes from there. "
-                    + "Safe to call again after a failure to continue from the last checkpoint.")
+                    + "Safe to call again after a failure to continue from the last checkpoint. "
+                    + "The optional 'blocks' parameter restricts the split to the given semantic block ids "
+                    + "(comma-separated): the chunks are regenerated from those blocks so only they are translated.")
     @PostMapping("/{bookId}/process")
     public ResponseEntity<Map<String, Object>> processBook(
             @Parameter(description = "ID of the book to process", required = true)
@@ -126,27 +128,60 @@ public class FileProcessingController {
             @Parameter(description = "Optional last pipeline step to run (EXTRACT, SPLIT, TRANSLATE, AUDIO, FINALIZE). "
                     + "Defaults to FINALIZE (full pipeline). Used by the novels manager to run "
                     + "translation and audio as independent stages.")
-            @RequestParam(name = "to", required = false) com.glez.frontendservice.model.ProcessStep targetStep) {
+            @RequestParam(name = "to", required = false) com.glez.frontendservice.model.ProcessStep targetStep,
+            @Parameter(description = "Optional comma-separated ids of the semantic blocks that define the "
+                    + "translation scope (only those blocks are split and translated).")
+            @RequestParam(name = "blocks", required = false) String blockIdsParam) {
         Map<String, Object> response = new HashMap<>();
         try {
             if (bookPipelineOrchestrator.isRunning(bookId)) {
                 response.put("error", "Book " + bookId + " is already being processed.");
                 return ResponseEntity.status(409).body(response);
             }
+            if (!bookRepository.existsById(bookId)) {
+                response.put("error", "Book " + bookId + " not found.");
+                return ResponseEntity.notFound().build();
+            }
+
+            List<UUID> blockIds = parseBlockIds(blockIdsParam);
+            if (!blockIds.isEmpty()) {
+                bookProcessingService.validateBlocksBelongToBook(bookId, blockIds);
+            }
+
             com.glez.frontendservice.model.ProcessStep effectiveTarget =
                     targetStep != null ? targetStep : com.glez.frontendservice.model.ProcessStep.FINALIZE;
-            bookPipelineOrchestrator.processBook(bookId, effectiveTarget);
+            bookPipelineOrchestrator.processBook(bookId, effectiveTarget,
+                    blockIds.isEmpty() ? null : blockIds);
             response.put("message", "Processing started/resumed for book " + bookId
-                    + (targetStep != null ? " up to " + targetStep : ""));
+                    + (targetStep != null ? " up to " + targetStep : "")
+                    + (!blockIds.isEmpty() ? " scoped to " + blockIds.size() + " block(s)" : ""));
             response.put("bookId", bookId);
             return ResponseEntity.accepted().body(response);
         } catch (IllegalArgumentException e) {
             response.put("error", e.getMessage());
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.badRequest().body(response);
         } catch (Exception e) {
             response.put("error", "Error starting processing: " + e.getMessage());
             return ResponseEntity.internalServerError().body(response);
         }
+    }
+
+    /** Parses the comma-separated block ids; empty list when absent. */
+    private List<UUID> parseBlockIds(String blockIdsParam) {
+        if (blockIdsParam == null || blockIdsParam.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(blockIdsParam.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(id -> {
+                    try {
+                        return UUID.fromString(id);
+                    } catch (IllegalArgumentException e) {
+                        throw new IllegalArgumentException("Invalid block id: " + id);
+                    }
+                })
+                .toList();
     }
 
     @Operation(summary = "Get processing timeline",
