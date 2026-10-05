@@ -31,4 +31,7 @@ public interface TranslationTermRepository extends JpaRepository<TranslationTerm
     List<TranslationTerm> findByBookIdOrderBySourceTermAsc(UUID bookId);
 
     List<TranslationTerm> findByNovelIsNullAndBookIsNullOrderBySourceTermAsc();
+
+    /** Términos acotados a un libro (para el borrado del libro). */
+    void deleteAllByBook(com.glez.frontendservice.model.Book book);
 }

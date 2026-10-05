@@ -39,6 +39,7 @@ public class BookProcessingService {
     private final ChunksRepository chunksRepository;
     private final BlockRepository blockRepository;
     private final com.glez.frontendservice.repository.ProcessTraceEventRepository processTraceEventRepository;
+    private final com.glez.frontendservice.repository.TranslationTermRepository translationTermRepository;
     private final GlossaryService glossaryService;
     private final SmartTextSplitter smartTextSplitter;
     private final ApplicationContext applicationContext;
@@ -125,6 +126,7 @@ public class BookProcessingService {
         chunksRepository.deleteAllByBook(book);
         blockRepository.deleteAllByBook(book);
         processTraceEventRepository.deleteAllByBook(book);
+        translationTermRepository.deleteAllByBook(book);
         bookRepository.delete(book);
     }
 

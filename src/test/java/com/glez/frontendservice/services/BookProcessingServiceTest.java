@@ -69,6 +69,9 @@ class BookProcessingServiceTest {
     private GlossaryService glossaryService;
 
     @Mock
+    private com.glez.frontendservice.repository.TranslationTermRepository translationTermRepository;
+
+    @Mock
     private ApplicationContext applicationContext;
 
     private BookProcessingService bookProcessingService;
@@ -81,7 +84,8 @@ class BookProcessingServiceTest {
         bookProcessingService = new BookProcessingService(
             bookRepository, textExtractorService, nvidiaAiService,
             audioGeneratorService, chunksRepository, blockRepository,
-            processTraceEventRepository, glossaryService, smartTextSplitter, applicationContext
+            processTraceEventRepository, translationTermRepository, glossaryService,
+            smartTextSplitter, applicationContext
         );
         
         bookId = UUID.randomUUID();
