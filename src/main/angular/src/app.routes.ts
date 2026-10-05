@@ -4,6 +4,7 @@ import { Dashboard } from './app/pages/dashboard/dashboard';
 import { Documentation } from './app/pages/documentation/documentation';
 import { Landing } from './app/pages/landing/landing';
 import { Notfound } from './app/pages/notfound/notfound';
+import { LogViewer } from './app/pages/logs-viewer/logs-viewer';
 
 export const appRoutes: Routes = [
     {
@@ -11,6 +12,7 @@ export const appRoutes: Routes = [
         component: AppLayout,
         children: [
             { path: '', component: Dashboard },
+            { path: 'logs', component: LogViewer },
             {
                 path: 'uikit',
                 loadChildren: () => import('./app/pages/uikit/uikit.routes'),

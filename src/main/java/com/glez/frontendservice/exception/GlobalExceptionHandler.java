@@ -26,8 +26,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Object> handleGlobalException(Exception ex, WebRequest request) {
-        // Log the exception details for debugging
-        // For example: log.error("An unexpected error occurred: {}", ex.getMessage(), ex);
+        // Los streams SSE (visor de logs en vivo) fallan de forma natural
+        // cuando el cliente se desconecta o la app se apaga: no hay convertidor
+        // para serializar un Map como text/event-stream, así que intentar
+        // responder aquí solo genera ruido. Se relanza para que el contenedor
+        // cierre el stream.
+        if (request.getHeader("Accept") != null
+                && request.getHeader("Accept").contains("text/event-stream")) {
+            throw new RuntimeException(ex);
+        }
 
         Map<String, Object> body = Map.of(
                 "message", "An unexpected error occurred.",

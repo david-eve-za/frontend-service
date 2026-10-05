@@ -31,6 +31,12 @@ export class AppMenu {
                         icon: 'pi pi-fw pi-home',
                         routerLink: ['/'],
                     },
+                    {
+                        // Visor de logs en tiempo real (stream SSE del backend).
+                        label: 'Visor de Logs',
+                        icon: 'pi pi-fw pi-eye',
+                        routerLink: ['/logs'],
+                    },
                 ],
             },
             {
