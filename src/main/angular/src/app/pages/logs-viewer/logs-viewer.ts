@@ -14,6 +14,7 @@ import { FormsModule } from '@angular/forms';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
+import { SelectModule } from 'primeng/select';
 import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
 
@@ -61,6 +62,7 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
         ButtonModule,
         CheckboxModule,
         InputTextModule,
+        SelectModule,
         TagModule,
         TooltipModule,
         DatePipe,
@@ -159,13 +161,17 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
                 </div>
                 <div class="col-span-12 md:col-span-4 lg:col-span-3">
                     <label class="block text-sm font-medium mb-2">Clase</label>
-                    <input
-                        pInputText
-                        type="text"
-                        class="w-full"
-                        placeholder="p.ej. BookPipelineOrchestrator"
+                    <p-select
+                        [options]="classOptions()"
+                        optionLabel="label"
+                        optionValue="value"
                         [ngModel]="classFilter()"
                         (ngModelChange)="classFilter.set($event)"
+                        placeholder="Todas las clases"
+                        styleClass="w-full"
+                        [showClear]="true"
+                        [filter]="true"
+                        filterPlaceHolder="Buscar clase…"
                     />
                 </div>
                 <div class="col-span-12 md:col-span-4 lg:col-span-2">
@@ -268,7 +274,7 @@ export class LogViewer implements OnInit, OnDestroy {
     connection = signal<ConnectionState>('connecting');
     levels = signal<Record<Level, boolean>>({ ...DEFAULT_LEVELS });
     textFilter = signal('');
-    classFilter = signal('');
+    classFilter = signal<string | null>(null);
     traceFilter = signal('');
 
     private source?: EventSource;
@@ -284,15 +290,29 @@ export class LogViewer implements OnInit, OnDestroy {
         return counts;
     });
 
+    /** Clases presentes en los eventos retenidos, con su conteo, ordenadas. */
+    classOptions = computed(() => {
+        const counts = new Map<string, number>();
+        for (const ev of this.events()) {
+            counts.set(ev.logger, (counts.get(ev.logger) ?? 0) + 1);
+        }
+        return Array.from(counts.entries())
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([logger, count]) => ({
+                label: `${logger} (${count})`,
+                value: logger,
+            }));
+    });
+
     filtered = computed(() => {
         const text = this.textFilter().trim().toLowerCase();
-        const cls = this.classFilter().trim().toLowerCase();
+        const cls = this.classFilter();
         const trace = this.traceFilter().trim().toLowerCase();
         const levels = this.levels();
 
         return this.events().filter((ev) => {
             if (!levels[ev.level]) return false;
-            if (cls && !ev.logger.toLowerCase().includes(cls)) return false;
+            if (cls && ev.logger !== cls) return false;
             if (
                 trace &&
                 !Object.values(ev.mdc ?? {}).some((v) =>
