@@ -65,11 +65,11 @@ export class AppMenu {
                 icon: 'pi pi-fw pi-sliders-h',
                 items: [
                     {
-                        // El paso de división de texto ya existe dentro del
-                        // asistente de carga (paso "Split del Texto").
+                        // El paso de división de texto es el editor de bloques
+                        // del pipeline (módulo book-pipeline).
                         label: 'Dividir Texto',
                         icon: 'pi pi-fw pi-list',
-                        routerLink: ['/book-translator/upload'],
+                        routerLink: ['/pipeline/split-text'],
                     },
                     {
                         label: 'Traducir Libro',

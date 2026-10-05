@@ -2,14 +2,14 @@ import { Routes } from '@angular/router';
 import { BookTranslator } from './book-translator';
 import { BookTranslatorHistory } from './history';
 import { BookTranslatorSettings } from './settings';
-import { UploadWizardComponent } from './upload/upload-wizard.component';
+import { UploadStep1FilesComponent } from './upload/upload-step1-files.component';
 import { NovelsManager } from './novels-manager/novels-manager';
 
 export default [
     { path: '', component: BookTranslator },
     { path: 'history', component: BookTranslatorHistory },
     { path: 'settings', component: BookTranslatorSettings },
-    { path: 'upload', component: UploadWizardComponent },
+    { path: 'upload', component: UploadStep1FilesComponent },
     { path: 'novels', component: NovelsManager },
-    { path: '**', redirectTo: '' }
+    { path: '**', redirectTo: '' },
 ] as Routes;

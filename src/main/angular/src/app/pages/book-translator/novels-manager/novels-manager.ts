@@ -465,8 +465,8 @@ export class NovelsManager implements OnInit, OnDestroy {
         summary: 'Texto listo',
         detail: `"${prepared.bookName}" quedó enlazado al volumen; continúa con el split en el editor.`
       });
-      // El split se realiza en el wizard existente (editor blockML).
-      this.router.navigate(['/book-translator/upload'], {
+      // El split se realiza en la página Dividir Texto (editor blockML).
+      this.router.navigate(['/pipeline/split-text'], {
         queryParams: { bookId: prepared.bookId, name: prepared.bookName }
       });
     } catch (err: any) {
