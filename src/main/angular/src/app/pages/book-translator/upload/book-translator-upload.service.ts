@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 export interface UploadResponse {
@@ -51,11 +51,24 @@ export interface BookListItem {
     audioFilePath?: string;
 }
 
-export interface ProcessingConfig {
-    targetLanguage: string;
-    ttsVoice: string;
-    regexPatternIds: string[];
-    splitIntoChunks: boolean;
+/** Chunk de un libro con su texto original y su traducción (GET .../chunks). */
+export interface Chunk {
+    id: string;
+    originalText: string | null;
+    translatedText: string | null;
+    status: 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'AWAITING';
+    position: number;
+}
+
+/** Página de chunks serializada por Spring Data (PaginatedResponse). */
+export interface ChunkPage {
+    content: Chunk[];
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+    last: boolean;
+    first: boolean;
 }
 
 @Injectable({
@@ -114,6 +127,17 @@ export class BookTranslatorUploadService {
 
     getAllBooks(): Observable<BookListItem[]> {
         return this.http.get<BookListItem[]>(`${this.API_URL}/list`);
+    }
+
+    getBookChunks(
+        bookId: string,
+        page: number,
+        size: number,
+    ): Observable<ChunkPage> {
+        const params = new HttpParams().set('page', page).set('size', size);
+        return this.http.get<ChunkPage>(`${this.API_URL}/${bookId}/chunks`, {
+            params,
+        });
     }
 
     splitBookIntoChunks(bookId: string): Observable<{ message: string }> {

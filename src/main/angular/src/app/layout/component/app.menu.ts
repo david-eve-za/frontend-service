@@ -44,6 +44,24 @@ export class AppMenu {
                         routerLink: ['/book-translator/upload'],
                     },
                     {
+                        // Editor de bloques semánticos del pipeline.
+                        label: 'Dividir Texto',
+                        icon: 'pi pi-fw pi-list',
+                        routerLink: ['/pipeline/split-text'],
+                    },
+                    {
+                        // Comparación en paralelo original/traducción por chunk.
+                        label: 'Traducir Libro',
+                        icon: 'pi pi-fw pi-language',
+                        routerLink: ['/pipeline/translate-book'],
+                    },
+                    {
+                        // Opciones de generación de audio del pipeline.
+                        label: 'Generar Audiolibro',
+                        icon: 'pi pi-fw pi-volume-up',
+                        routerLink: ['/pipeline/generate-audiobook'],
+                    },
+                    {
                         label: 'Gestor de Novelas',
                         icon: 'pi pi-fw pi-book',
                         routerLink: ['/book-translator/novels'],
@@ -57,29 +75,6 @@ export class AppMenu {
                         label: 'Configuración',
                         icon: 'pi pi-fw pi-cog',
                         routerLink: ['/book-translator/settings'],
-                    },
-                ],
-            },
-            {
-                label: 'Procesamiento de Libros',
-                icon: 'pi pi-fw pi-sliders-h',
-                items: [
-                    {
-                        // El paso de división de texto es el editor de bloques
-                        // del pipeline (módulo book-pipeline).
-                        label: 'Dividir Texto',
-                        icon: 'pi pi-fw pi-list',
-                        routerLink: ['/pipeline/split-text'],
-                    },
-                    {
-                        label: 'Traducir Libro',
-                        icon: 'pi pi-fw pi-language',
-                        routerLink: ['/pipeline/translate-book'],
-                    },
-                    {
-                        label: 'Generar Audiolibro',
-                        icon: 'pi pi-fw pi-volume-up',
-                        routerLink: ['/pipeline/generate-audiobook'],
                     },
                 ],
             },

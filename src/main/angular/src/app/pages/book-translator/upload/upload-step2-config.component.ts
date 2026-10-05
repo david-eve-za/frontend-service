@@ -3,20 +3,13 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { SelectModule } from 'primeng/select';
-import { CheckboxModule } from 'primeng/checkbox';
 import { ButtonModule } from 'primeng/button';
-import { TagModule } from 'primeng/tag';
-import { TooltipModule } from 'primeng/tooltip';
 import { ToastModule } from 'primeng/toast';
 import { MessageService } from 'primeng/api';
-import { RegexPatternService, RegexPattern } from '../regex-pattern.service';
 
 export interface ProcessingConfig {
     targetLanguage: string;
     ttsVoice: string;
-    regexPatternIds: string[];
-    splitIntoChunks: boolean;
-    generateAudio: boolean;
 }
 
 /** Clave de persistencia local de la configuración de generación de audio. */
@@ -26,6 +19,10 @@ const AUDIOBOOK_CONFIG_KEY = 'audiobook-config';
  * Página Generar Audiolibro del pipeline: configuración de la voz y las
  * demás opciones de generación de audio. La configuración se guarda en
  * localStorage hasta que el backend exponga un endpoint de configuración.
+ *
+ * Los patrones de limpieza no se eligen aquí: el backend aplica
+ * automáticamente todos los patrones habilitados al extraer y almacenar
+ * el texto del archivo (Extraer → Limpiar → Almacenar en BD).
  */
 @Component({
     selector: 'app-upload-step2-config',
@@ -35,10 +32,7 @@ const AUDIOBOOK_CONFIG_KEY = 'audiobook-config';
         RouterLink,
         FormsModule,
         SelectModule,
-        CheckboxModule,
         ButtonModule,
-        TagModule,
-        TooltipModule,
         ToastModule,
     ],
     template: `
@@ -90,79 +84,23 @@ const AUDIOBOOK_CONFIG_KEY = 'audiobook-config';
                 >
             </div>
 
-            <!-- Regex Patterns -->
-            <div class="mb-6">
-                <label class="block text-sm font-medium mb-2"
-                    >Patrones de Limpieza a Aplicar</label
-                >
-                <div class="flex flex-wrap gap-2 mb-2">
-                    <p-button
-                        label="Todos"
-                        icon="pi pi-check-square"
-                        (click)="selectAllPatterns()"
-                        styleClass="p-button-sm p-button-outlined p-button-secondary"
-                        [disabled]="
-                            patterns.length === 0 || allPatternsSelected
-                        "
+            <!-- Automatic cleaning note -->
+            <div
+                class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-gray-600 flex items-start gap-3"
+            >
+                <i class="pi pi-info-circle text-blue-500 mt-0.5"></i>
+                <span>
+                    La limpieza del texto no se configura aquí: al subir un
+                    archivo se aplican automáticamente todos los patrones de
+                    limpieza habilitados en la
+                    <a
+                        routerLink="/book-translator/settings"
+                        class="text-blue-600 hover:underline"
+                        >Configuración</a
                     >
-                    </p-button>
-                    <p-button
-                        label="Ninguno"
-                        icon="pi pi-minus-square"
-                        (click)="deselectAllPatterns()"
-                        styleClass="p-button-sm p-button-outlined p-button-secondary"
-                        [disabled]="
-                            patterns.length === 0 || !anyPatternSelected
-                        "
-                    >
-                    </p-button>
-                </div>
-                <div
-                    class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-60 overflow-y-auto border rounded-lg p-3 bg-gray-50"
-                >
-                    <div
-                        *ngFor="let pattern of patterns"
-                        class="flex items-center gap-2"
-                    >
-                        <p-checkbox
-                            [(ngModel)]="pattern.selected"
-                            [binary]="true"
-                            [disabled]="loadingPatterns"
-                            (ngModelChange)="onPatternChange(pattern)"
-                        >
-                        </p-checkbox>
-                        <div class="flex-1 min-w-0">
-                            <div class="font-medium text-sm truncate">
-                                {{ pattern.displayName }}
-                            </div>
-                            <div class="text-xs text-gray-500 truncate">
-                                {{ pattern.name }}
-                            </div>
-                        </div>
-                        <p-tag
-                            [value]="pattern.patternType"
-                            [severity]="getPatternSeverity(pattern.patternType)"
-                        />
-                    </div>
-                    <div
-                        *ngIf="patterns.length === 0 && !loadingPatterns"
-                        class="col-span-full text-center text-gray-500 py-4"
-                    >
-                        No hay patrones disponibles. Configura patrones en
-                        <a
-                            routerLink="/book-translator/settings"
-                            class="text-blue-600 hover:underline"
-                            >Configuración</a
-                        >.
-                    </div>
-                    <div
-                        *ngIf="loadingPatterns"
-                        class="col-span-full text-center text-gray-500 py-4"
-                    >
-                        <i class="pi pi-spin pi-spinner"></i> Cargando
-                        patrones...
-                    </div>
-                </div>
+                    antes de almacenar el texto en la base de datos (Extraer →
+                    Limpiar → Almacenar).
+                </span>
             </div>
 
             <!-- Action Buttons -->
@@ -185,13 +123,7 @@ export class UploadStep2ConfigComponent implements OnInit {
     config: ProcessingConfig = {
         targetLanguage: 'es',
         ttsVoice: 'Paulina',
-        regexPatternIds: [],
-        splitIntoChunks: true,
-        generateAudio: true,
     };
-
-    patterns: (RegexPattern & { selected: boolean })[] = [];
-    loadingPatterns = true;
 
     languages = [
         { label: 'Español (es)', value: 'es' },
@@ -224,14 +156,12 @@ export class UploadStep2ConfigComponent implements OnInit {
     ];
 
     constructor(
-        private regexPatternService: RegexPatternService,
         private messageService: MessageService,
         private cdr: ChangeDetectorRef,
     ) {}
 
     ngOnInit() {
         this.loadSavedConfig();
-        this.loadPatterns();
     }
 
     /** Recupera la configuración guardada en localStorage, si existe. */
@@ -245,79 +175,6 @@ export class UploadStep2ConfigComponent implements OnInit {
         } catch {
             // Configuración corrupta: se usan los valores por defecto.
         }
-    }
-
-    loadPatterns() {
-        this.loadingPatterns = true;
-        this.regexPatternService.getEnabled().subscribe({
-            next: (patterns) => {
-                this.patterns = patterns.map((p) => ({
-                    ...p,
-                    selected:
-                        this.config.regexPatternIds.includes(p.id!) || false,
-                }));
-                this.loadingPatterns = false;
-                this.cdr.markForCheck();
-            },
-            error: () => {
-                this.loadingPatterns = false;
-                this.patterns = [];
-                this.cdr.markForCheck();
-            },
-        });
-    }
-
-    onPatternChange(pattern: RegexPattern & { selected: boolean }) {
-        if (pattern.selected) {
-            if (!this.config.regexPatternIds.includes(pattern.id!)) {
-                this.config.regexPatternIds.push(pattern.id!);
-            }
-        } else {
-            this.config.regexPatternIds = this.config.regexPatternIds.filter(
-                (id) => id !== pattern.id,
-            );
-        }
-    }
-
-    selectAllPatterns() {
-        for (const pattern of this.patterns) {
-            pattern.selected = true;
-        }
-        this.config.regexPatternIds = this.patterns
-            .map((p) => p.id!)
-            .filter(Boolean);
-    }
-
-    deselectAllPatterns() {
-        for (const pattern of this.patterns) {
-            pattern.selected = false;
-        }
-        this.config.regexPatternIds = [];
-    }
-
-    get allPatternsSelected(): boolean {
-        return (
-            this.patterns.length > 0 && this.patterns.every((p) => p.selected)
-        );
-    }
-
-    get anyPatternSelected(): boolean {
-        return this.patterns.some((p) => p.selected);
-    }
-
-    getPatternSeverity(type: string): 'success' | 'info' | 'warn' | 'danger' {
-        const severityMap: Record<
-            string,
-            'success' | 'info' | 'warn' | 'danger'
-        > = {
-            URL: 'info',
-            SOCIAL_MEDIA: 'success',
-            ISBN: 'warn',
-            PAGE_NUMBER: 'info',
-            WHITESPACE: 'success',
-            CUSTOM: 'info',
-        };
-        return severityMap[type] || 'info';
     }
 
     isValid(): boolean {
