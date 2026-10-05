@@ -155,6 +155,18 @@ export class BookTranslatorUploadService {
     }
 
     /**
+     * Texto etiquetado (blockML) reconstruido a partir de los bloques
+     * persistidos: los tags son solo delimitadores editoriales y jamás se
+     * almacenan; esta vista derivada alimenta el editor de Dividir Texto.
+     * Vacío cuando el documento no tiene bloques.
+     */
+    getRawTaggedText(bookId: string): Observable<string> {
+        return this.http.get(`/api/blocks/${bookId}/raw`, {
+            responseType: 'text',
+        });
+    }
+
+    /**
      * Inicia la traducción de un libro. Con blockIds no vacíos el alcance se
      * limita a esos bloques: los chunks se regeneran con su contenido.
      */

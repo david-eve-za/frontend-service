@@ -46,6 +46,11 @@ public class AudioGeneratorService {
 
         try {
             List<String> chunks = textSplitter.split(textContent, "es",1000);
+            // El TokenTextSplitter descarta textos por debajo de su mínimo
+            // (~350 chars): un bloque corto se sintetiza como pieza única.
+            if (chunks.isEmpty()) {
+                chunks = List.of(textContent);
+            }
 
             // 2. Crear directorio temporal gestionado
             Path tempDir = Files.createTempDirectory("audio_chunks_");
@@ -61,7 +66,10 @@ public class AudioGeneratorService {
                     }
                 }
 
-                if (audioFiles.isEmpty()) return false;
+                if (audioFiles.isEmpty()) {
+                    log.warn("Ningún fragmento de audio pudo generarse para la entrada; ¿falló Edge TTS?");
+                    return false;
+                }
 
                 // 3. Mezclar archivos con ffmpeg
                 return mergeAudioFiles(audioFiles, outputFilename, tempDir);

@@ -42,10 +42,11 @@ class ChunksTest {
             ChunkStatus status = ChunkStatus.COMPLETED;
             Integer position = 5;
 
-            Chunks chunk = new Chunks(id, book, originalText, translatedText, status, position, 2);
+            Chunks chunk = new Chunks(id, book, null, originalText, translatedText, status, position, 2);
 
             assertEquals(id, chunk.getId());
             assertEquals(book, chunk.getBook());
+            assertNull(chunk.getBlock());
             assertEquals(originalText, chunk.getOriginalText());
             assertEquals(translatedText, chunk.getTranslatedText());
             assertEquals(status, chunk.getStatus());

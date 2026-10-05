@@ -189,9 +189,10 @@ type TranslationScope = 'full' | 'blocks';
                                 }
                             </div>
                             <div class="mt-2 text-xs text-gray-500">
-                                Los chunks se regeneran con el contenido de los
-                                bloques seleccionados y se traducen solo esos
-                                bloques.
+                                Los chunks se generan por bloque: solo los
+                                bloques seleccionados se vuelven a trocear (el
+                                resto conserva sus chunks y traducciones), y el
+                                audio final se crea por bloque.
                             </div>
                         }
                     }

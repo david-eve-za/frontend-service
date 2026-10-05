@@ -359,13 +359,24 @@ export class UploadStep3SplitComponent implements OnInit {
         const book = this.activeBook;
         if (!book || book.loaded) return;
         this.loadingText = true;
-        this.uploadService.getBookFullText(book.bookId).subscribe({
-            next: (text) => {
-                book.text = text ?? '';
-                book.loaded = true;
-                this.loadingText = false;
-                this.cdr.markForCheck();
+        // Los tags blockML no se almacenan: el editor carga primero el
+        // texto etiquetado derivado de los bloques (si existen) y cae al
+        // fullText limpio para documentos sin bloques.
+        this.uploadService.getRawTaggedText(book.bookId).subscribe({
+            next: (tagged) => {
+                if (tagged && tagged.trim().length > 0) {
+                    this.finishLoading(book, tagged);
+                } else {
+                    this.loadCleanFullText(book);
+                }
             },
+            error: () => this.loadCleanFullText(book),
+        });
+    }
+
+    private loadCleanFullText(book: SplitBookState) {
+        this.uploadService.getBookFullText(book.bookId).subscribe({
+            next: (text) => this.finishLoading(book, text ?? ''),
             error: () => {
                 this.loadingText = false;
                 this.messageService.add({
@@ -376,6 +387,13 @@ export class UploadStep3SplitComponent implements OnInit {
                 this.cdr.markForCheck();
             },
         });
+    }
+
+    private finishLoading(book: SplitBookState, text: string) {
+        book.text = text;
+        book.loaded = true;
+        this.loadingText = false;
+        this.cdr.markForCheck();
     }
 
     private buildOpeningTag(): string {

@@ -44,6 +44,25 @@ public class BlockController {
         }
     }
 
+    @Operation(summary = "Reconstructed tagged text of a document",
+            description = "Raw text with blockML tags derived on demand from the persisted blocks "
+                    + "(tags are editorial delimiters only: they are never stored). Used by the "
+                    + "split editor to re-edit the block marks. Empty when the document has no blocks.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Tagged text"),
+            @ApiResponse(responseCode = "404", description = "Document not found", content = @Content)
+    })
+    @GetMapping("/{bookId}/raw")
+    public ResponseEntity<String> getRawTaggedText(@PathVariable UUID bookId) {
+        try {
+            return ResponseEntity.ok()
+                    .contentType(org.springframework.http.MediaType.TEXT_PLAIN)
+                    .body(bookProcessingService.buildTaggedText(bookId));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
     @Operation(summary = "Save semantic blocks of a document", description = "Receives the raw text with blockML tags and the parsed semantic blocks, updates the document text and persists the blocks.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Blocks saved successfully",

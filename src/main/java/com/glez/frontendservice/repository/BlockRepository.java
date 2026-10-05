@@ -24,4 +24,8 @@ public interface BlockRepository extends JpaRepository<Block, UUID> {
     /** Cuenta cuántos de los ids pertenecen realmente al libro. */
     @Query("select count(b) from Block b where b.id in :blockIds and b.book.id = :bookId")
     long countByBookIdAndIdIn(@Param("bookId") UUID bookId, @Param("blockIds") Collection<UUID> blockIds);
+
+    /** Bloques que aún no tienen audio, en orden de lectura. */
+    @Query("select b from Block b where b.book.id = :bookId and b.audioFilePath is null order by b.position asc")
+    List<Block> findBookIdWithoutAudio(@Param("bookId") UUID bookId);
 }

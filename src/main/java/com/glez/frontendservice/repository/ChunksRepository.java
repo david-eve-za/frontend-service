@@ -1,6 +1,7 @@
 package com.glez.frontendservice.repository;
 
 
+import com.glez.frontendservice.model.Block;
 import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.Chunks;
 import org.springframework.data.domain.Page;
@@ -18,4 +19,10 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
     void deleteAllByBook(Book book);
     long countByBook(Book book);
     long countByBookAndStatus(Book book, com.glez.frontendservice.model.ChunkStatus status);
+
+    /** Chunks de un bloque concreto, en orden de posición dentro del bloque. */
+    List<Chunks> findByBlockOrderByPositionAsc(Block block);
+
+    /** Elimina los chunks de un bloque (regeneración por bloque). */
+    void deleteAllByBlock(Block block);
 }

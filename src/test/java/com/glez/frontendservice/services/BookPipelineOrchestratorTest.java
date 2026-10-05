@@ -42,6 +42,9 @@ class BookPipelineOrchestratorTest {
     private ChunksRepository chunksRepository;
 
     @Mock
+    private com.glez.frontendservice.repository.BlockRepository blockRepository;
+
+    @Mock
     private BookProcessingService bookProcessingService;
 
     @Mock
@@ -61,7 +64,8 @@ class BookPipelineOrchestratorTest {
     @BeforeEach
     void setUp() throws Exception {
         orchestrator = new BookPipelineOrchestrator(
-                bookRepository, chunksRepository, bookProcessingService, audioGeneratorService, traceService);
+                bookRepository, chunksRepository, blockRepository, bookProcessingService,
+                audioGeneratorService, traceService);
         setField(orchestrator, "maxAttempts", 3);
 
         bookId = UUID.randomUUID();
@@ -194,7 +198,9 @@ class BookPipelineOrchestratorTest {
         verify(traceService).skipStep(eq(bookId), eq(ProcessStep.EXTRACT), anyString(), anyString());
 
         // SPLIT executed
-        verify(bookProcessingService).splitBookIntoChunks(bookId);
+        // Full-book split goes through the block-aware 2-arg call (null =
+        // all blocks when they exist, whole text otherwise)
+        verify(bookProcessingService).splitBookIntoChunks(bookId, null);
 
         // TRANSLATE: attempts are not consumed upfront anymore; a successful
         // run never touches the counters
@@ -404,6 +410,69 @@ class BookPipelineOrchestratorTest {
 
         verify(bookProcessingService).processBookChunksAsync(bookId);
         verify(traceService, never()).failStep(any(), any());
+    }
+
+    @Test
+    @DisplayName("Block books generate one audio file per block inside the audiolibro directory")
+    void processBook_blockBook_generatesAudioPerBlock() throws Exception {
+        stubTraceEvents();
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        book.setStatus(ProcessingStatus.AWAITING);
+        // Audio files go inside the JUnit temp dir so the test never
+        // writes into the repository working directory.
+        book.setName(tempDir.resolve("mi-libro").toString());
+
+        // Two blocks: prologue + chapter 1
+        com.glez.frontendservice.model.Block prologue = new com.glez.frontendservice.model.Block();
+        prologue.setId(UUID.randomUUID());
+        prologue.setBook(book);
+        prologue.setBlockType(com.glez.frontendservice.model.Block.BlockType.PROLOGUE);
+        prologue.setBlockNumber(1);
+        prologue.setPosition(0);
+        com.glez.frontendservice.model.Block chapter = new com.glez.frontendservice.model.Block();
+        chapter.setId(UUID.randomUUID());
+        chapter.setBook(book);
+        chapter.setBlockType(com.glez.frontendservice.model.Block.BlockType.CHAPTER);
+        chapter.setBlockNumber(1);
+        chapter.setPosition(1);
+        when(blockRepository.findByBookIdOrderByPositionAsc(bookId)).thenReturn(List.of(prologue, chapter));
+
+        // Translated chunks per block (and for the translate step's evaluation)
+        Chunks prologueChunk = chunk(ChunkStatus.COMPLETED, 0, 1, "prólogo traducido");
+        Chunks chapterChunk = chunk(ChunkStatus.COMPLETED, 0, 1, "capítulo traducido");
+        when(chunksRepository.findByBook(book)).thenReturn(List.of(prologueChunk, chapterChunk));
+        when(chunksRepository.findByBlockOrderByPositionAsc(prologue)).thenReturn(List.of(prologueChunk));
+        when(chunksRepository.findByBlockOrderByPositionAsc(chapter)).thenReturn(List.of(chapterChunk));
+
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+            Path output = inv.getArgument(1);
+            if (output.getParent() != null) {
+                Files.createDirectories(output.getParent());
+            }
+            Files.writeString(output, "fake mp3");
+            return true;
+        });
+        when(bookRepository.save(any(Book.class))).thenReturn(book);
+
+        orchestrator.processBook(bookId).join();
+
+        // One audio call per block, with per-block files inside the audiolibro directory
+        org.mockito.ArgumentCaptor<Path> paths = org.mockito.ArgumentCaptor.forClass(Path.class);
+        verify(audioGeneratorService, times(2)).processTextToAudio(anyString(), paths.capture());
+        List<Path> captured = paths.getAllValues();
+        org.junit.jupiter.api.Assertions.assertTrue(captured.get(0).toString()
+                .endsWith("01 - Prologo.mp3"), captured.get(0).toString());
+        org.junit.jupiter.api.Assertions.assertTrue(captured.get(1).toString()
+                .endsWith("02 - Capitulo 01.mp3"), captured.get(1).toString());
+        org.junit.jupiter.api.Assertions.assertTrue(captured.get(0).getParent().toString()
+                .endsWith("mi-libro - audiolibro"), captured.get(0).toString());
+
+        // Each block persists its audio path and the book points to the directory
+        org.junit.jupiter.api.Assertions.assertNotNull(prologue.getAudioFilePath());
+        org.junit.jupiter.api.Assertions.assertNotNull(chapter.getAudioFilePath());
+        org.junit.jupiter.api.Assertions.assertTrue(book.getAudioFilePath().endsWith("mi-libro - audiolibro"));
+        verify(traceService).completeStep(any(), org.mockito.ArgumentMatchers.argThat(
+                (String details) -> details != null && details.contains("2 block audio(s) generated")));
     }
 
     @Test

@@ -38,6 +38,7 @@ public class BookProcessingService {
     private final AudioGeneratorService audioGeneratorService;
     private final ChunksRepository chunksRepository;
     private final BlockRepository blockRepository;
+    private final com.glez.frontendservice.repository.ProcessTraceEventRepository processTraceEventRepository;
     private final SmartTextSplitter smartTextSplitter;
     private final ApplicationContext applicationContext;
 
@@ -122,6 +123,7 @@ public class BookProcessingService {
 
         chunksRepository.deleteAllByBook(book);
         blockRepository.deleteAllByBook(book);
+        processTraceEventRepository.deleteAllByBook(book);
         bookRepository.delete(book);
     }
 
@@ -131,18 +133,22 @@ public class BookProcessingService {
         return book.getFullText();
     }
 
+    /**
+     * Guarda los bloques semánticos del libro. Las etiquetas blockML son
+     * delimitadores puramente editoriales: NO se almacenan ni se traducen.
+     * El fullText del libro se reconstruye limpio (solo el contenido de
+     * los bloques, sin tags); el texto etiquetado se deriva bajo demanda
+     * para el editor con {@link #buildTaggedText(UUID)}.
+     */
     @Transactional
     public int saveBlocks(UUID bookId, String rawText, List<BlockSaveRequest.BlockItem> blocks) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
 
-        if (rawText != null) {
-            book.setFullText(rawText);
-        }
-
         blockRepository.deleteAllByBook(book);
 
         int position = 0;
+        StringBuilder cleanText = new StringBuilder();
         for (BlockSaveRequest.BlockItem item : blocks) {
             Block block = new Block();
             block.setBook(book);
@@ -151,10 +157,50 @@ public class BookProcessingService {
             block.setContent(item.content());
             block.setPosition(position++);
             blockRepository.save(block);
+
+            if (item.content() != null && !item.content().isBlank()) {
+                if (cleanText.length() > 0) {
+                    cleanText.append("\n\n");
+                }
+                cleanText.append(item.content());
+            }
         }
 
+        // Texto limpio: los tags jamás se persisten ni llegan al traductor.
+        book.setFullText(cleanText.toString());
         bookRepository.save(book);
         return position;
+    }
+
+    /**
+     * Reconstruye el texto etiquetado (blockML) a partir de los bloques
+     * persistidos, para que el editor de Dividir Texto pueda re-editar
+     * las marcas. Es una vista derivada: el texto almacenado sigue
+     * estando limpio.
+     */
+    @Transactional(readOnly = true)
+    public String buildTaggedText(UUID bookId) {
+        if (!bookRepository.existsById(bookId)) {
+            throw new IllegalArgumentException("Book with ID " + bookId + " not found.");
+        }
+        StringBuilder tagged = new StringBuilder();
+        for (Block block : blockRepository.findByBookIdOrderByPositionAsc(bookId)) {
+            if (tagged.length() > 0) {
+                tagged.append("\n\n");
+            }
+            switch (block.getBlockType()) {
+                case PROLOGUE -> tagged.append("<<<PROLOGUE>>>");
+                case CHAPTER -> tagged.append("<<<CHAPTER id=\"").append(block.getBlockNumber()).append("\">>>");
+                case EPILOGUE -> tagged.append("<<<EPILOGUE>>>");
+            }
+            tagged.append(block.getContent() != null ? block.getContent() : "");
+            switch (block.getBlockType()) {
+                case PROLOGUE -> tagged.append("<<</PROLOGUE>>>");
+                case CHAPTER -> tagged.append("<<</CHAPTER>>>");
+                case EPILOGUE -> tagged.append("<<</EPILOGUE>>>");
+            }
+        }
+        return tagged.toString();
     }
 
     @Transactional
@@ -208,56 +254,61 @@ public class BookProcessingService {
     }
 
     /**
-     * Divide en chunks el contenido concatenado de los bloques seleccionados
-     * (en orden de lectura, sin las etiquetas blockML), reemplazando los
-     * chunks actuales del libro. Es el alcance de "traducir solo algunos
-     * bloques": el resto del pipeline (traducción, audio) opera sobre esos
-     * chunks.
+     * Divide el libro en chunks para traducir. Si el libro tiene bloques
+     * semánticos, los chunks se generan POR BLOQUE (cada bloque se trocea
+     * por separado y sus chunks quedan enlazados al bloque), nunca sobre el
+     * texto completo; solo se regeneran los chunks de los bloques indicados
+     * (null = todos), preservando el trabajo del resto. Sin bloques, se
+     * mantiene la ruta legada de texto completo (que ahora está limpio de
+     * tags).
      */
     @Transactional
     public void splitBookIntoChunks(UUID bookId, List<UUID> blockIds) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
 
-        List<Block> blocks = blockRepository.findAllById(blockIds).stream()
-                .filter(block -> block.getBook() != null && book.getId().equals(block.getBook().getId()))
-                .sorted(Comparator.comparing(Block::getPosition))
-                .toList();
-        if (blocks.isEmpty()) {
-            throw new IllegalArgumentException("None of the selected blocks belong to book " + bookId + ".");
+        List<Block> blocks = targetBlocks(book, blockIds);
+        if (!blocks.isEmpty()) {
+            for (Block block : blocks) {
+                if (block.getContent() == null || block.getContent().isBlank()) {
+                    continue; // Bloque vacío: no genera chunks ni audio
+                }
+                chunksRepository.deleteAllByBlock(block);
+                List<String> splitText = smartTextSplitter.split(block.getContent());
+                int position = 0;
+                for (String text : splitText) {
+                    Chunks chunk = new Chunks();
+                    chunk.setBook(book);
+                    chunk.setBlock(block);
+                    chunk.setOriginalText(text);
+                    chunk.setStatus(ChunkStatus.AWAITING);
+                    chunk.setPosition(position++);
+                    chunksRepository.save(chunk);
+                }
+            }
+            book.setStatus(ProcessingStatus.UPLOADED);
+            bookRepository.save(book);
+            return;
         }
 
-        String text = blocks.stream()
-                .map(Block::getContent)
-                .filter(Objects::nonNull)
-                .collect(Collectors.joining("\n\n"));
-        if (text.isBlank()) {
-            throw new IllegalArgumentException("The selected blocks have no content to translate.");
-        }
-
-        chunksRepository.deleteAllByBook(book);
-
-        List<String> splitText = smartTextSplitter.split(text);
-        for (int i = 0; i < splitText.size(); i++) {
-            Chunks chunk = new Chunks();
-            chunk.setBook(book);
-            chunk.setOriginalText(splitText.get(i));
-            chunk.setStatus(ChunkStatus.AWAITING);
-            chunk.setPosition(i);
-            chunksRepository.save(chunk);
-        }
-
-        book.setStatus(ProcessingStatus.UPLOADED);
-        bookRepository.save(book);
+        // Ruta legada: libro sin bloques → texto completo (limpio de tags).
+        splitWholeText(book);
     }
 
+    /**
+     * Divide el texto completo del libro en chunks (libros sin bloques
+     * semánticos).
+     */
     @Transactional
     public void splitBookIntoChunks(UUID bookId) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
+        splitWholeText(book);
+    }
 
+    private void splitWholeText(Book book) {
         if (book.getFullText() == null || book.getFullText().isEmpty()) {
-            throw new IllegalArgumentException("Book with ID " + bookId + " has no full text to chunk.");
+            throw new IllegalArgumentException("Book with ID " + book.getId() + " has no full text to chunk.");
         }
 
         chunksRepository.deleteAllByBook(book);
@@ -276,6 +327,28 @@ public class BookProcessingService {
 
         book.setStatus(ProcessingStatus.UPLOADED);
         bookRepository.save(book);
+    }
+
+    /**
+     * Bloques objetivo de una división: los ids indicados (validando que
+     * pertenezcan al libro) o todos los del libro cuando no se indica
+     * selección.
+     */
+    private List<Block> targetBlocks(Book book, List<UUID> blockIds) {
+        List<Block> allBlocks = blockRepository.findByBookIdOrderByPositionAsc(book.getId());
+        if (allBlocks.isEmpty()) {
+            return List.of();
+        }
+        if (blockIds == null || blockIds.isEmpty()) {
+            return allBlocks;
+        }
+        List<Block> selected = allBlocks.stream()
+                .filter(block -> blockIds.contains(block.getId()))
+                .toList();
+        if (selected.isEmpty()) {
+            throw new IllegalArgumentException("None of the selected blocks belong to book " + book.getId() + ".");
+        }
+        return selected;
     }
 
     @Async("bookProcessingExecutor")

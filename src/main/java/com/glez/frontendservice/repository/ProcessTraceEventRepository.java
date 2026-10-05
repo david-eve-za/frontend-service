@@ -15,4 +15,6 @@ public interface ProcessTraceEventRepository extends JpaRepository<ProcessTraceE
 
     List<ProcessTraceEvent> findByBookAndStepOrderByStartedAtDesc(Book book,
                                                                    com.glez.frontendservice.model.ProcessStep step);
+
+    void deleteAllByBook(Book book);
 }

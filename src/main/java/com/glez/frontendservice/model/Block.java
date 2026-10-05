@@ -40,4 +40,11 @@ public class Block {
 
     @Column(nullable = false)
     private Integer position;
+
+    /**
+     * Archivo de audio generado para este bloque (p. ej.
+     * "libro - audiolibro/02 - Capitulo 01.mp3"); null hasta que se genere.
+     */
+    @Column(name = "audio_file_path")
+    private String audioFilePath;
 }

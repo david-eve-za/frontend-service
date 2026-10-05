@@ -63,6 +63,9 @@ class BookProcessingServiceTest {
     private SmartTextSplitter smartTextSplitter;
 
     @Mock
+    private com.glez.frontendservice.repository.ProcessTraceEventRepository processTraceEventRepository;
+
+    @Mock
     private ApplicationContext applicationContext;
 
     private BookProcessingService bookProcessingService;
@@ -73,8 +76,9 @@ class BookProcessingServiceTest {
     @BeforeEach
     void setUp() {
         bookProcessingService = new BookProcessingService(
-            bookRepository, textExtractorService, nvidiaAiService, 
-            audioGeneratorService, chunksRepository, blockRepository, smartTextSplitter, applicationContext
+            bookRepository, textExtractorService, nvidiaAiService,
+            audioGeneratorService, chunksRepository, blockRepository,
+            processTraceEventRepository, smartTextSplitter, applicationContext
         );
         
         bookId = UUID.randomUUID();

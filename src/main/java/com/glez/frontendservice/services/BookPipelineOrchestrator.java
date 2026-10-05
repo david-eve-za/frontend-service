@@ -1,11 +1,13 @@
 package com.glez.frontendservice.services;
 
+import com.glez.frontendservice.model.Block;
 import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.Chunks;
 import com.glez.frontendservice.model.ChunkStatus;
 import com.glez.frontendservice.model.ProcessStep;
 import com.glez.frontendservice.model.ProcessTraceEvent;
 import com.glez.frontendservice.model.ProcessingStatus;
+import com.glez.frontendservice.repository.BlockRepository;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.repository.ChunksRepository;
 import org.slf4j.Logger;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -40,6 +43,7 @@ public class BookPipelineOrchestrator {
 
     private final BookRepository bookRepository;
     private final ChunksRepository chunksRepository;
+    private final BlockRepository blockRepository;
     private final BookProcessingService bookProcessingService;
     private final AudioGeneratorService audioGeneratorService;
     private final ProcessingTraceService traceService;
@@ -55,11 +59,13 @@ public class BookPipelineOrchestrator {
 
     public BookPipelineOrchestrator(BookRepository bookRepository,
                                     ChunksRepository chunksRepository,
+                                    BlockRepository blockRepository,
                                     BookProcessingService bookProcessingService,
                                     AudioGeneratorService audioGeneratorService,
                                     ProcessingTraceService traceService) {
         this.bookRepository = bookRepository;
         this.chunksRepository = chunksRepository;
+        this.blockRepository = blockRepository;
         this.bookProcessingService = bookProcessingService;
         this.audioGeneratorService = audioGeneratorService;
         this.traceService = traceService;
@@ -244,7 +250,9 @@ public class BookPipelineOrchestrator {
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, traceId, null);
         checkStepAttempts(event, manual);
         try {
-            bookProcessingService.splitBookIntoChunks(bookId);
+            // Sin selección explícita: si el libro tiene bloques se trocea
+            // por bloque (todos); sin bloques, texto completo (legado).
+            bookProcessingService.splitBookIntoChunks(bookId, null);
             int count = chunksRepository.findByBook(loadBook(bookId)).size();
             traceService.completeStep(event, count + " chunks created");
         } catch (RuntimeException e) {
@@ -367,11 +375,24 @@ public class BookPipelineOrchestrator {
     }
 
     /**
-     * AUDIO regenerates the audio file only when it has not been produced
-     * yet (no persisted path or the file disappeared from disk).
+     * AUDIO genera un archivo por bloque semántico (Prólogo, Capítulo N,
+     * Epílogo), no un único audio del libro: cada bloque se arma con las
+     * traducciones de SUS chunks (enlazados al bloque en el split) y
+     * produce su propio mp3 dentro del directorio de audiolibro del libro.
+     * Cuando todos los bloques tienen audio, el libro apunta al directorio.
+     *
+     * <p>Los libros sin bloques mantienen la ruta legada: un único mp3 con
+     * todo el texto traducido.
      */
     private void runAudioStep(UUID bookId, String traceId, boolean manual) {
         Book book = loadBook(bookId);
+        List<Block> blocks = blockRepository.findByBookIdOrderByPositionAsc(bookId);
+
+        if (!blocks.isEmpty()) {
+            runPerBlockAudioStep(book, blocks, traceId, manual);
+            return;
+        }
+
         if (book.getAudioFilePath() != null && Files.exists(Path.of(book.getAudioFilePath()))) {
             traceService.skipStep(bookId, ProcessStep.AUDIO, traceId,
                     "Audio already generated at " + book.getAudioFilePath());
@@ -400,6 +421,121 @@ public class BookPipelineOrchestrator {
         } catch (RuntimeException e) {
             failAndAbort(event, e);
         }
+    }
+
+    /**
+     * Audio por bloque: un mp3 por cada bloque con chunks traducidos, en
+     * orden de lectura. Los bloques con audio ya presente en disco se
+     * saltan; el libro se considera con audio completo cuando todos sus
+     * bloques tienen archivo.
+     */
+    private void runPerBlockAudioStep(Book book, List<Block> blocks, String traceId, boolean manual) {
+        UUID bookId = book.getId();
+        long pending = blocks.stream()
+                .filter(block -> !blockHasAudioOnDisk(block))
+                .filter(block -> !chunksOf(block).isEmpty())
+                .count();
+        long allPresent = blocks.stream().filter(block -> blockHasAudioOnDisk(block)).count();
+        if (pending == 0 && allPresent == blocks.size()) {
+            traceService.skipStep(bookId, ProcessStep.AUDIO, traceId,
+                    "All " + blocks.size() + " block audios already generated");
+            return;
+        }
+
+        ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.AUDIO, traceId,
+                blocks.size() + " blocks, " + (blocks.size() - allPresent) + " pending audio");
+        checkStepAttempts(event, manual);
+
+        try {
+            Path audioDir = blockAudioDirectory(book);
+            try {
+                Files.createDirectories(audioDir);
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            int generated = 0;
+            List<String> skipped = new ArrayList<>();
+            for (Block block : blocks) {
+                List<Chunks> blockChunks = chunksOf(block);
+                if (blockChunks.isEmpty()) {
+                    skipped.add(blockLabel(block) + " (sin chunks)");
+                    continue;
+                }
+                if (blockHasAudioOnDisk(block)) {
+                    skipped.add(blockLabel(block) + " (ya generado)");
+                    continue;
+                }
+                List<Chunks> untranslated = blockChunks.stream()
+                        .filter(chunk -> chunk.getStatus() != ChunkStatus.COMPLETED)
+                        .toList();
+                if (!untranslated.isEmpty()) {
+                    throw new IllegalStateException("Block " + blockLabel(block)
+                            + " has " + untranslated.size() + " untranslated chunk(s); translate before generating audio");
+                }
+
+                String translatedText = blockChunks.stream()
+                        .sorted(Comparator.comparingInt(Chunks::getPosition))
+                        .map(Chunks::getTranslatedText)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.joining("\n\n"));
+
+                Path outputPath = audioDir.resolve(blockAudioFileName(blocks, block));
+                boolean ok = audioGeneratorService.processTextToAudio(translatedText, outputPath);
+                if (!ok) {
+                    throw new IllegalStateException("Audio generation failed for block " + blockLabel(block));
+                }
+                block.setAudioFilePath(outputPath.toString());
+                blockRepository.save(block);
+                generated++;
+            }
+
+            boolean allDone = blocks.stream().allMatch(this::blockHasAudioOnDisk);
+            if (allDone) {
+                book.setAudioFilePath(audioDir.toString());
+                bookRepository.save(book);
+            }
+            traceService.completeStep(event, generated + " block audio(s) generated in " + audioDir
+                    + (skipped.isEmpty() ? "" : "; skipped: " + String.join(", ", skipped)));
+        } catch (RuntimeException e) {
+            failAndAbort(event, e);
+        }
+    }
+
+    private List<Chunks> chunksOf(Block block) {
+        return chunksRepository.findByBlockOrderByPositionAsc(block);
+    }
+
+    private boolean blockHasAudioOnDisk(Block block) {
+        return block.getAudioFilePath() != null && Files.exists(Path.of(block.getAudioFilePath()));
+    }
+
+    /** Etiqueta legible en español del bloque para archivos de audio. */
+    private String blockLabel(Block block) {
+        return switch (block.getBlockType()) {
+            case PROLOGUE -> "Prologo";
+            case CHAPTER -> "Capitulo " + String.format("%02d", block.getBlockNumber() != null
+                    ? block.getBlockNumber() : block.getPosition());
+            case EPILOGUE -> "Epilogo";
+        };
+    }
+
+    /** Directorio del audiolibro del libro: "<base> - audiolibro". */
+    static Path blockAudioDirectory(Book book) {
+        return Path.of(bookBaseName(book) + " - audiolibro");
+    }
+
+    /** Archivo de audio de un bloque: "<orden> - <etiqueta>.mp3". */
+    private String blockAudioFileName(List<Block> blocks, Block block) {
+        int order = blocks.indexOf(block) + 1;
+        return String.format("%02d - %s.mp3", order, blockLabel(block));
+    }
+
+    /** Nombre base del libro sin extensión. */
+    static String bookBaseName(Book book) {
+        String name = book.getName() != null ? book.getName() : "book";
+        int dot = name.lastIndexOf('.');
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        return (dot > slash) ? name.substring(0, dot) : name;
     }
 
     private void runFinalizeStep(UUID bookId, String traceId, boolean manual) {
@@ -468,11 +604,7 @@ public class BookPipelineOrchestrator {
      * extension so ffmpeg can pick the output muxer.
      */
     static Path audioPathFor(Book book) {
-        String name = book.getName() != null ? book.getName() : "book";
-        int dot = name.lastIndexOf('.');
-        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
-        String base = (dot > slash) ? name.substring(0, dot) : name;
-        return Path.of(base + ".mp3");
+        return Path.of(bookBaseName(book) + ".mp3");
     }
 
     private Book loadBook(UUID bookId) {
