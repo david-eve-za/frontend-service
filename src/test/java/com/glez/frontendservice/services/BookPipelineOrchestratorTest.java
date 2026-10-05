@@ -337,6 +337,76 @@ class BookPipelineOrchestratorTest {
     }
 
     @Test
+    @DisplayName("A manual run proceeds past an exhausted step budget with a warning")
+    void processBook_manualRun_bypassesStepBudget() {
+        // startStep reports attempt 4: the budget (3) is exhausted
+        when(traceService.startStep(eq(bookId), any(), anyString(), any()))
+                .thenAnswer(inv -> traceEvent(inv.getArgument(1), 4));
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        lenient().when(bookRepository.save(any(Book.class))).thenReturn(book);
+
+        Chunks awaiting = chunk(ChunkStatus.AWAITING, 0, 0, null);
+        when(chunksRepository.findByBook(book))
+                .thenReturn(List.of(awaiting)) // split check: chunks exist -> skip
+                .thenReturn(List.of(awaiting)) // translate pending evaluation
+                .thenReturn(List.of(awaiting)); // (no re-read needed on success)
+
+        when(bookProcessingService.processBookChunksAsync(bookId))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        // 2-arg overload = manual (user-triggered): must NOT abort
+        orchestrator.processBook(bookId, ProcessStep.TRANSLATE).join();
+
+        verify(bookProcessingService).processBookChunksAsync(bookId);
+        verify(traceService, never()).failStep(any(), any());
+        verify(traceService).completeStep(any(), eq("All chunks translated"));
+    }
+
+    @Test
+    @DisplayName("An automatic run still aborts when the step budget is exhausted")
+    void processBook_automaticRun_abortsOnStepBudget() {
+        when(traceService.startStep(eq(bookId), any(), anyString(), any()))
+                .thenAnswer(inv -> traceEvent(inv.getArgument(1), 4));
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+
+        Chunks awaiting = chunk(ChunkStatus.AWAITING, 0, 0, null);
+        when(chunksRepository.findByBook(book))
+                .thenReturn(List.of(awaiting)) // split check -> skip
+                .thenReturn(List.of(awaiting)); // translate pending
+
+        // 1-arg overload = automatic (startup recovery): must abort
+        assertThrows(RuntimeException.class, () -> orchestrator.processBook(bookId).join());
+
+        verify(traceService).failStep(any(), any());
+        assertEquals(ProcessingStatus.FAILED, book.getStatus());
+        verify(bookProcessingService, never()).processBookChunksAsync(bookId);
+    }
+
+    @Test
+    @DisplayName("A manual run retries chunks that exhausted their attempts")
+    void processBook_manualRun_bypassesExhaustedChunks() {
+        stubTraceEvents();
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        // Three genuine failures back the exhausted counters
+        when(traceService.countGenuineAttempts(any(Book.class), eq(ProcessStep.TRANSLATE)))
+                .thenReturn(3);
+
+        Chunks exhausted = chunk(ChunkStatus.FAILED, 0, 3, null);
+        when(chunksRepository.findByBook(book))
+                .thenReturn(List.of(exhausted)) // split check -> skip
+                .thenReturn(List.of(exhausted)) // translate pending (heal target = 3, no clamp)
+                .thenReturn(List.of(exhausted)); // no failed re-read on success
+
+        when(bookProcessingService.processBookChunksAsync(bookId))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        orchestrator.processBook(bookId, ProcessStep.TRANSLATE).join();
+
+        verify(bookProcessingService).processBookChunksAsync(bookId);
+        verify(traceService, never()).failStep(any(), any());
+    }
+
+    @Test
     @DisplayName("Legacy attempt inflation from interrupted runs is healed before the retry")
     void processBook_withInflatedLegacyAttempts_healsAndRetries() {
         stubTraceEvents();

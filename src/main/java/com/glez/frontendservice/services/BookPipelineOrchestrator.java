@@ -75,7 +75,7 @@ public class BookPipelineOrchestrator {
      */
     @Async("bookProcessingExecutor")
     public CompletableFuture<Void> processBook(UUID bookId) {
-        return processBook(bookId, ProcessStep.FINALIZE);
+        return processBook(bookId, ProcessStep.FINALIZE, null, false);
     }
 
     /**
@@ -89,7 +89,7 @@ public class BookPipelineOrchestrator {
      */
     @Async("bookProcessingExecutor")
     public CompletableFuture<Void> processBook(UUID bookId, ProcessStep targetStep) {
-        return processBook(bookId, targetStep, null);
+        return processBook(bookId, targetStep, null, true);
     }
 
     /**
@@ -107,6 +107,25 @@ public class BookPipelineOrchestrator {
      */
     @Async("bookProcessingExecutor")
     public CompletableFuture<Void> processBook(UUID bookId, ProcessStep targetStep, List<UUID> blockIds) {
+        return processBook(bookId, targetStep, blockIds, true);
+    }
+
+    /**
+     * Full entry point. The retry budgets exist to stop automatic-resume
+     * loops of a failing book, not to veto explicit user intent: manual
+     * runs (UI buttons, novels manager) proceed past the guards with a
+     * warning, while automatic runs (startup recovery) are aborted.
+     *
+     * @param targetStep last pipeline step to execute
+     * @param blockIds   blocks that define the translation scope; null or
+     *                   empty means the whole book
+     * @param manual     true for user-triggered runs (guards warn and
+     *                   proceed), false for automatic resume (guards abort)
+     * @throws IllegalArgumentException if the book does not exist
+     * @throws IllegalStateException if the book is already being processed
+     */
+    @Async("bookProcessingExecutor")
+    public CompletableFuture<Void> processBook(UUID bookId, ProcessStep targetStep, List<UUID> blockIds, boolean manual) {
         if (!runningBooks.add(bookId)) {
             // Rejected before the try block: the finally clause must not
             // release the lock held by the other run.
@@ -131,7 +150,7 @@ public class BookPipelineOrchestrator {
             book.setLastTraceId(traceId);
             bookRepository.save(book);
 
-            runPipeline(bookId, traceId, targetStep, blockIds);
+            runPipeline(bookId, traceId, targetStep, blockIds, manual);
             markAwaitingIfStoppedEarly(bookId, targetStep);
             return CompletableFuture.completedFuture(null);
         } catch (RuntimeException e) {
@@ -152,21 +171,21 @@ public class BookPipelineOrchestrator {
         return Set.copyOf(runningBooks);
     }
 
-    private void runPipeline(UUID bookId, String traceId, ProcessStep targetStep, List<UUID> blockIds) {
+    private void runPipeline(UUID bookId, String traceId, ProcessStep targetStep, List<UUID> blockIds, boolean manual) {
         runExtractStep(bookId, traceId);
-        runSplitStep(bookId, traceId, blockIds);
+        runSplitStep(bookId, traceId, blockIds, manual);
         if (targetStep == ProcessStep.SPLIT) {
             return;
         }
-        runTranslateStep(bookId, traceId);
+        runTranslateStep(bookId, traceId, manual);
         if (targetStep == ProcessStep.TRANSLATE) {
             return;
         }
-        runAudioStep(bookId, traceId);
+        runAudioStep(bookId, traceId, manual);
         if (targetStep == ProcessStep.AUDIO) {
             return;
         }
-        runFinalizeStep(bookId, traceId);
+        runFinalizeStep(bookId, traceId, manual);
     }
 
     /**
@@ -200,14 +219,14 @@ public class BookPipelineOrchestrator {
         traceService.skipStep(bookId, ProcessStep.EXTRACT, traceId, "Text already extracted at upload");
     }
 
-    private void runSplitStep(UUID bookId, String traceId, List<UUID> blockIds) {
+    private void runSplitStep(UUID bookId, String traceId, List<UUID> blockIds, boolean manual) {
         // Block-scoped split: the chunks are ALWAYS regenerated from the
         // selected blocks' content, replacing any previous chunks so the
         // translation covers only the selected scope.
         if (blockIds != null && !blockIds.isEmpty()) {
             ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, traceId,
                     blockIds.size() + " selected block(s)");
-            checkStepAttempts(event);
+            checkStepAttempts(event, manual);
             try {
                 bookProcessingService.splitBookIntoChunks(bookId, blockIds);
                 int count = chunksRepository.findByBook(loadBook(bookId)).size();
@@ -223,7 +242,7 @@ public class BookPipelineOrchestrator {
             return;
         }
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, traceId, null);
-        checkStepAttempts(event);
+        checkStepAttempts(event, manual);
         try {
             bookProcessingService.splitBookIntoChunks(bookId);
             int count = chunksRepository.findByBook(loadBook(bookId)).size();
@@ -242,7 +261,7 @@ public class BookPipelineOrchestrator {
      * by a crash or restart does not consume the retry budget, and a
      * chunk's attempts only grow when its translation actually fails.
      */
-    private void runTranslateStep(UUID bookId, String traceId) {
+    private void runTranslateStep(UUID bookId, String traceId, boolean manual) {
         Book book = loadBook(bookId);
         List<Chunks> chunks = chunksRepository.findByBook(book);
 
@@ -268,14 +287,20 @@ public class BookPipelineOrchestrator {
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.TRANSLATE, traceId,
                 pending.size() + "/" + chunks.size() + " chunks pending");
-        checkStepAttempts(event);
+        checkStepAttempts(event, manual);
 
         List<Chunks> exhausted = pending.stream()
                 .filter(c -> c.getAttempts() >= maxAttempts)
                 .toList();
         if (!exhausted.isEmpty()) {
-            failAndAbort(event, new IllegalStateException(exhausted.size() + " chunk(s) exhausted the maximum of "
-                    + maxAttempts + " translation attempts (e.g. chunk " + exhausted.get(0).getId() + ")"));
+            if (manual) {
+                log.warn("{} chunk(s) exhausted the maximum of {} translation attempts (e.g. chunk {}); "
+                        + "manual run proceeds anyway", exhausted.size(), maxAttempts, exhausted.get(0).getId());
+            } else {
+                failAndAbort(event, new IllegalStateException(exhausted.size()
+                        + " chunk(s) exhausted the maximum of " + maxAttempts + " translation attempts (e.g. chunk "
+                        + exhausted.get(0).getId() + ")"));
+            }
         }
 
         // Re-queue stale statuses for the async pass; attempts are NOT
@@ -302,11 +327,22 @@ public class BookPipelineOrchestrator {
             }
             String detail = !failed.isEmpty()
                     ? failed.size() + " chunks failed to translate (e.g. chunk " + failed.get(0).getId() + ")"
+                            + (rootCauseMessage(e).map(cause -> ": " + cause).orElse(""))
                     : e.getMessage();
             failAndAbort(event, new IllegalStateException(detail != null ? detail : e.toString(), e));
         }
 
         traceService.completeStep(event, "All chunks translated");
+    }
+
+    /** Deepest cause message of an exception chain, for the trace detail. */
+    private static java.util.Optional<String> rootCauseMessage(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        return message == null ? java.util.Optional.empty() : java.util.Optional.of(message);
     }
 
     /**
@@ -334,7 +370,7 @@ public class BookPipelineOrchestrator {
      * AUDIO regenerates the audio file only when it has not been produced
      * yet (no persisted path or the file disappeared from disk).
      */
-    private void runAudioStep(UUID bookId, String traceId) {
+    private void runAudioStep(UUID bookId, String traceId, boolean manual) {
         Book book = loadBook(bookId);
         if (book.getAudioFilePath() != null && Files.exists(Path.of(book.getAudioFilePath()))) {
             traceService.skipStep(bookId, ProcessStep.AUDIO, traceId,
@@ -343,7 +379,7 @@ public class BookPipelineOrchestrator {
         }
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.AUDIO, traceId, null);
-        checkStepAttempts(event);
+        checkStepAttempts(event, manual);
 
         try {
             String fullTranslatedText = chunksRepository.findByBook(book).stream()
@@ -366,9 +402,9 @@ public class BookPipelineOrchestrator {
         }
     }
 
-    private void runFinalizeStep(UUID bookId, String traceId) {
+    private void runFinalizeStep(UUID bookId, String traceId, boolean manual) {
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.FINALIZE, traceId, null);
-        checkStepAttempts(event);
+        checkStepAttempts(event, manual);
         try {
             Book book = loadBook(bookId);
             book.setStatus(ProcessingStatus.COMPLETED);
@@ -380,11 +416,20 @@ public class BookPipelineOrchestrator {
     }
 
     /**
-     * Aborts the run when a step has exceeded the configured maximum
-     * number of attempts (guards against infinite resume loops).
+     * Aborts the run when a step has exceeded the configured maximum number
+     * of attempts (guards against infinite resume loops). Manual runs are
+     * explicit user intent: they proceed past the budget with a warning —
+     * their events carry attempt > max, which never counts toward the
+     * budget, so a manual failure stays non-counting while automatic
+     * resume remains protected.
      */
-    private void checkStepAttempts(ProcessTraceEvent event) {
+    private void checkStepAttempts(ProcessTraceEvent event, boolean manual) {
         if (event.getAttempt() > maxAttempts) {
+            if (manual) {
+                log.warn("Step {} budget exceeded ({} of {} attempts); manual run proceeds anyway",
+                        event.getStep(), event.getAttempt() - 1, maxAttempts);
+                return;
+            }
             failAndAbort(event, new IllegalStateException("Step " + event.getStep()
                     + " exceeded the maximum of " + maxAttempts + " attempts"));
         }

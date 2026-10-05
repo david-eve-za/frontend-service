@@ -96,7 +96,7 @@ class ProcessingTraceServiceTest {
     }
 
     @Test
-    @DisplayName("Attempt counter counts only genuine attempts: skips SKIPPED, interrupted STARTED and blocked pseudo-events")
+    @DisplayName("Attempt counter counts only FAILED attempts: skips COMPLETED, SKIPPED, interrupted STARTED and blocked pseudo-events")
     void startStep_countsAttempts_ignoringNonGenuineEvents() {
         Book book = book();
         when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
@@ -123,7 +123,32 @@ class ProcessingTraceServiceTest {
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, "trace-2", null);
 
-        assertEquals(3, event.getAttempt());
+        assertEquals(2, event.getAttempt(),
+                "COMPLETED does not count; one genuine FAILED (attempt 2, within budget) => next attempt is 2");
+    }
+
+    @Test
+    @DisplayName("A successful step never consumes the budget: three COMPLETED events count as zero")
+    void startStep_afterSuccessfulRuns_countsZero() {
+        Book book = book();
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        ProcessTraceEvent done1 = new ProcessTraceEvent();
+        done1.setStatus(TraceEventStatus.COMPLETED);
+        done1.setAttempt(1);
+        ProcessTraceEvent done2 = new ProcessTraceEvent();
+        done2.setStatus(TraceEventStatus.COMPLETED);
+        done2.setAttempt(2);
+        ProcessTraceEvent done3 = new ProcessTraceEvent();
+        done3.setStatus(TraceEventStatus.COMPLETED);
+        done3.setAttempt(3);
+        when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(any(), any()))
+                .thenReturn(List.of(done1, done2, done3));
+        when(traceEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, "trace-2", null);
+
+        assertEquals(1, event.getAttempt(),
+                "Block-scoped re-runs of a successful step must not exhaust the budget");
     }
 
     @Test

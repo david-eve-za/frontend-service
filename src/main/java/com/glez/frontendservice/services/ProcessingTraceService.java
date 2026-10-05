@@ -160,32 +160,27 @@ public class ProcessingTraceService {
     }
 
     /**
-     * Number of genuine attempts recorded for a step: concluded runs that
-     * failed (or completed and later needed a re-run). Interrupted runs
-     * and blocked pseudo-attempts never count, so restarts or crashes
-     * cannot exhaust the retry budget.
+     * Number of genuine failures recorded for a step: concluded runs that
+     * FAILED. Interrupted runs, successful runs and blocked pseudo-attempts
+     * never count, so restarts or crashes cannot exhaust the retry budget.
      */
     public int countGenuineAttempts(Book book, ProcessStep step) {
         return countPreviousAttempts(book, step);
     }
 
     /**
-     * Counts only genuine step attempts, excluding:
-     * <ul>
-     * <li>SKIPPED events (the step never ran),</li>
-     * <li>STARTED events left open by runs interrupted by a crash or
-     * restart (they are not translation failures; the per-book run lock
-     * guarantees any open STARTED event at count time is stale),</li>
-     * <li>events with attempt > max attempts: those are the
-     * pseudo-failures recorded when the budget guard aborts a run before
-     * it starts. A genuine attempt can never exceed the budget, so this
-     * filter is exact and also self-heals legacy blocked events.</li>
-     * </ul>
+     * Counts only genuine step failures: concluded runs that FAILED.
+     * Interrupted runs, successful runs and blocked pseudo-attempts never
+     * count, so restarts, crashes — or intentional re-runs of a step that
+     * already worked (e.g. block-scoped splits) — cannot exhaust the retry
+     * budget. Events with attempt > max are the pseudo-failures recorded
+     * when the budget guard aborts a run before it starts; a genuine
+     * attempt can never exceed the budget, so excluding them is exact and
+     * also self-heals legacy blocked events.
      */
     private int countPreviousAttempts(Book book, ProcessStep step) {
         return (int) traceEventRepository.findByBookAndStepOrderByStartedAtDesc(book, step).stream()
-                .filter(e -> e.getStatus() != TraceEventStatus.SKIPPED)
-                .filter(e -> e.getStatus() != TraceEventStatus.STARTED)
+                .filter(e -> e.getStatus() == TraceEventStatus.FAILED)
                 .filter(e -> e.getAttempt() != null && e.getAttempt() <= maxAttempts)
                 .count();
     }
