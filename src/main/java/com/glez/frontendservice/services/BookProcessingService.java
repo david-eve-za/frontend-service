@@ -39,6 +39,7 @@ public class BookProcessingService {
     private final ChunksRepository chunksRepository;
     private final BlockRepository blockRepository;
     private final com.glez.frontendservice.repository.ProcessTraceEventRepository processTraceEventRepository;
+    private final GlossaryService glossaryService;
     private final SmartTextSplitter smartTextSplitter;
     private final ApplicationContext applicationContext;
 
@@ -353,7 +354,8 @@ public class BookProcessingService {
 
     @Async("bookProcessingExecutor")
     @Transactional
-    public CompletableFuture<Void> translateChunkAsync(UUID chunkId) {
+    public CompletableFuture<Void> translateChunkAsync(UUID chunkId,
+                                                       List<com.glez.frontendservice.model.TranslationTerm> glossary) {
         Chunks chunk = chunksRepository.findById(chunkId)
                 .orElseThrow(() -> new IllegalArgumentException("Chunk with ID " + chunkId + " not found."));
 
@@ -365,7 +367,7 @@ public class BookProcessingService {
         chunksRepository.save(chunk);
 
         try {
-            String translated = nvidiaAiService.translateChunk(chunk.getOriginalText(), "en", "es");
+            String translated = nvidiaAiService.translateChunk(chunk.getOriginalText(), "en", "es", glossary);
             chunk.setTranslatedText(translated);
             chunk.setStatus(ChunkStatus.COMPLETED);
         } catch (Exception e) {
@@ -384,10 +386,16 @@ public class BookProcessingService {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
 
+        // El glosario (globales + serie + libro) se carga/extrae UNA vez
+        // por corrida y se inyecta en el prompt de cada chunk para que la
+        // traducción sea consistente en todo el libro y la serie.
+        List<com.glez.frontendservice.model.TranslationTerm> glossary =
+                glossaryService.getOrCreateGlossary(book);
+
         List<Chunks> chunks = chunksRepository.findByBook(book);
         List<CompletableFuture<?>> futures = chunks.stream()
                 .filter(c -> c.getStatus() == ChunkStatus.AWAITING)
-                .map(c -> translateChunkAsync(c.getId()))
+                .map(c -> translateChunkAsync(c.getId(), glossary))
                 .collect(Collectors.toList());
 
         activeTasks.put(bookId, futures);

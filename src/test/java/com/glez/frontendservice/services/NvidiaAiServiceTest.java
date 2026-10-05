@@ -154,12 +154,52 @@ class NvidiaAiServiceTest {
     }
 
     private String invokeBuildTranslationPrompt(String sourceLang, String targetLang, String text) {
+        return invokeBuildTranslationPrompt(sourceLang, targetLang, text, java.util.List.of());
+    }
+
+    private String invokeBuildTranslationPrompt(String sourceLang, String targetLang, String text,
+                                                java.util.List<com.glez.frontendservice.model.TranslationTerm> glossary) {
         try {
-            java.lang.reflect.Method method = NvidiaAiService.class.getDeclaredMethod("buildTranslationPrompt", String.class, String.class, String.class);
+            java.lang.reflect.Method method = NvidiaAiService.class.getDeclaredMethod(
+                    "buildTranslationPrompt", String.class, String.class, String.class, java.util.List.class);
             method.setAccessible(true);
-            return (String) method.invoke(nvidiaAiService, sourceLang, targetLang, text);
+            return (String) method.invoke(nvidiaAiService, sourceLang, targetLang, text, glossary);
         } catch (Exception ex) {
             throw new RuntimeException("Failed to invoke buildTranslationPrompt method", ex);
+        }
+    }
+
+    @Nested
+    @DisplayName("Glossary prompt tests")
+    class GlossaryPromptTests {
+
+        private com.glez.frontendservice.model.TranslationTerm term(String source, String target) {
+            com.glez.frontendservice.model.TranslationTerm term =
+                    new com.glez.frontendservice.model.TranslationTerm();
+            term.setSourceTerm(source);
+            term.setTargetTerm(target);
+            return term;
+        }
+
+        @Test
+        @DisplayName("The prompt injects the glossary terms with their established translations")
+        void buildTranslationPrompt_withGlossary_injectsTerms() {
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Text",
+                    java.util.List.of(term("the Angel Lord", "el Señor de los Ángeles")));
+
+            assertTrue(prompt.contains("Use EXACTLY these established translations"));
+            assertTrue(prompt.contains("- \"the Angel Lord\" -> \"el Señor de los Ángeles\""));
+        }
+
+        @Test
+        @DisplayName("Without glossary the prompt omits the glossary block but keeps the literary style")
+        void buildTranslationPrompt_withoutGlossary_keepsStyle() {
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Text");
+
+            assertFalse(prompt.contains("Use EXACTLY these established translations"));
+            assertTrue(prompt.contains("expert literary translator"),
+                    "The role/style guidance must always be present to avoid literal translations");
+            assertTrue(prompt.contains("Restructure sentences"));
         }
     }
 }

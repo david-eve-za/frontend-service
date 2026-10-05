@@ -66,6 +66,9 @@ class BookProcessingServiceTest {
     private com.glez.frontendservice.repository.ProcessTraceEventRepository processTraceEventRepository;
 
     @Mock
+    private GlossaryService glossaryService;
+
+    @Mock
     private ApplicationContext applicationContext;
 
     private BookProcessingService bookProcessingService;
@@ -78,7 +81,7 @@ class BookProcessingServiceTest {
         bookProcessingService = new BookProcessingService(
             bookRepository, textExtractorService, nvidiaAiService,
             audioGeneratorService, chunksRepository, blockRepository,
-            processTraceEventRepository, smartTextSplitter, applicationContext
+            processTraceEventRepository, glossaryService, smartTextSplitter, applicationContext
         );
         
         bookId = UUID.randomUUID();
@@ -416,13 +419,13 @@ class BookProcessingServiceTest {
 
             when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
             when(chunksRepository.save(any(Chunks.class))).thenAnswer(invocation -> invocation.getArgument(0));
-            when(nvidiaAiService.translateChunk(anyString(), anyString(), anyString())).thenReturn("Translated text");
+            when(nvidiaAiService.translateChunk(anyString(), anyString(), anyString(), any())).thenReturn("Translated text");
 
-            CompletableFuture<Void> future = bookProcessingService.translateChunkAsync(chunkId);
+            CompletableFuture<Void> future = bookProcessingService.translateChunkAsync(chunkId, java.util.List.of());
             future.get(); // Wait for completion
 
             verify(chunksRepository).save(argThat(c -> c.getStatus() == ChunkStatus.PROCESSING));
-            verify(nvidiaAiService).translateChunk("Original text to translate", "en", "es");
+            verify(nvidiaAiService).translateChunk(eq("Original text to translate"), eq("en"), eq("es"), any());
             verify(chunksRepository, atLeastOnce()).save(argThat(c -> c.getStatus() == ChunkStatus.COMPLETED && 
                 c.getTranslatedText().equals("Translated text")));
         }
@@ -438,9 +441,9 @@ class BookProcessingServiceTest {
 
             when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
             when(chunksRepository.save(any(Chunks.class))).thenAnswer(invocation -> invocation.getArgument(0));
-            lenient().when(nvidiaAiService.translateChunk(anyString(), anyString(), anyString())).thenThrow(new RuntimeException("Translation failed"));
+            lenient().when(nvidiaAiService.translateChunk(anyString(), anyString(), anyString(), any())).thenThrow(new RuntimeException("Translation failed"));
 
-            CompletableFuture<Void> future = bookProcessingService.translateChunkAsync(chunkId);
+            CompletableFuture<Void> future = bookProcessingService.translateChunkAsync(chunkId, java.util.List.of());
             
             assertThrows(Exception.class, future::get);
 
@@ -454,7 +457,7 @@ class BookProcessingServiceTest {
             when(chunksRepository.findById(chunkId)).thenReturn(Optional.empty());
 
             IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, 
-                () -> bookProcessingService.translateChunkAsync(chunkId).get());
+                () -> bookProcessingService.translateChunkAsync(chunkId, java.util.List.of()).get());
 
             assertTrue(exception.getMessage().contains("Chunk with ID " + chunkId + " not found"));
         }
@@ -470,7 +473,7 @@ class BookProcessingServiceTest {
             when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
 
             IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, 
-                () -> bookProcessingService.translateChunkAsync(chunkId).get());
+                () -> bookProcessingService.translateChunkAsync(chunkId, java.util.List.of()).get());
 
             assertTrue(exception.getMessage().contains("has no original text to translate"));
         }
@@ -493,7 +496,7 @@ class BookProcessingServiceTest {
 
             // Spy on the service to avoid actual async execution
             BookProcessingService spyService = spy(bookProcessingService);
-            doReturn(CompletableFuture.completedFuture(null)).when(spyService).translateChunkAsync(any(UUID.class));
+            doReturn(CompletableFuture.completedFuture(null)).when(spyService).translateChunkAsync(any(UUID.class), any());
 
             CompletableFuture<Void> future = spyService.processBookChunksAsync(bookId);
 

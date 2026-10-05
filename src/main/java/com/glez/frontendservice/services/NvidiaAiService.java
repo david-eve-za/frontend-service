@@ -92,23 +92,51 @@ public class NvidiaAiService {
     }
 
     public String translateChunk(String text, String sourceLang, String targetLang) {
-        String prompt = buildTranslationPrompt(sourceLang, targetLang, text);
+        return translateChunk(text, sourceLang, targetLang, List.of());
+    }
+
+    /**
+     * Traduce con el glosario de la serie/libro inyectado en el prompt:
+     * los términos con traducción establecida deben respetarse y el
+     * estilo prima la naturalidad sobre la literalidad.
+     */
+    public String translateChunk(String text, String sourceLang, String targetLang,
+                                  List<com.glez.frontendservice.model.TranslationTerm> glossary) {
+        String prompt = buildTranslationPrompt(sourceLang, targetLang, text, glossary);
         return callModelWithRotation(prompt);
     }
 
     public String translateBook(String fullText, String sourceLang, String targetLang, int chunkSize) {
-        String prompt = buildTranslationPrompt(sourceLang, targetLang, fullText);
+        String prompt = buildTranslationPrompt(sourceLang, targetLang, fullText, List.of());
         return callModelWithRotation(prompt);
     }
 
-    private String buildTranslationPrompt(String sourceLang, String targetLang, String text) {
+    private String buildTranslationPrompt(String sourceLang, String targetLang, String text,
+                                          List<com.glez.frontendservice.model.TranslationTerm> glossary) {
+        StringBuilder glossaryBlock = new StringBuilder();
+        if (glossary != null && !glossary.isEmpty()) {
+            glossaryBlock.append("\nUse EXACTLY these established translations for the given terms, ")
+                    .append("adapting them naturally to number, gender and conjugation ")
+                    .append("(never re-translate them literally):\n");
+            for (com.glez.frontendservice.model.TranslationTerm term : glossary) {
+                glossaryBlock.append("- \"").append(term.getSourceTerm())
+                        .append("\" -> \"").append(term.getTargetTerm()).append("\"\n");
+            }
+            glossaryBlock.append('\n');
+        }
+
         return String.format("""
+                You are an expert literary translator specializing in fantasy light novels.
                 Translate the following text from %s to %s.
+
+                Style: prioritize natural, idiomatic Spanish that reads like a
+                professionally published novel. Restructure sentences whenever
+                the literal order would sound unnatural in Spanish%s
                 Maintain the original formatting, structure, and meaning.
                 Do not add any explanations or notes.
-                
+
                 Text to translate:
                 %s
-                """, sourceLang, targetLang, text);
+                """, sourceLang, targetLang, glossaryBlock.toString(), text);
     }
 }
