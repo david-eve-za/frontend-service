@@ -19,17 +19,20 @@ public class NvidiaAiService {
     private final List<String> modelNames;
     private final AtomicInteger currentModelIndex = new AtomicInteger(0);
     private final int maxRetries;
+    private final NvidiaRateLimiter rateLimiter;
 
     public NvidiaAiService(
             OpenAiChatModel chatModel,
             @Value("${app.nvidia.models}") String models,
-            @Value("${app.nvidia.max-retries:3}") int maxRetries) {
+            @Value("${app.nvidia.max-retries:3}") int maxRetries,
+            NvidiaRateLimiter rateLimiter) {
         this.chatModel = chatModel;
         this.modelNames = Arrays.stream(models.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
         this.maxRetries = maxRetries;
+        this.rateLimiter = rateLimiter;
     }
 
     public String callModelWithRotation(String prompt) {
@@ -38,6 +41,9 @@ public class NvidiaAiService {
 
         while (attempts < totalModels * maxRetries) {
             String currentModel = modelNames.get(currentModelIndex.get());
+            // Cada intento es una solicitud a la API: respeta la cuota
+            // global (RPM) antes de disparar la llamada.
+            rateLimiter.acquire();
             try {
                 ChatClient client = ChatClient.create(chatModel);
                 ChatResponse response = client.prompt()

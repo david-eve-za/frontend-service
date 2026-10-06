@@ -37,7 +37,7 @@ class AudioGeneratorServiceTest {
 
     @BeforeEach
     void setUp() {
-        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient);
+        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient, 3);
     }
 
     @Nested

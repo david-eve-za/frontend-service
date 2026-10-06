@@ -53,11 +53,19 @@ app:
     pitch: "+0Hz"
     connect-timeout: 10
     receive-timeout: 60
+    # Fragmentos de TTS sintetizados en paralelo (virtual threads) por
+    # bloque de audio, con este tope suave hacia el endpoint de Edge TTS.
+    tts-concurrency: 3
   nvidia:
     # Modelos vivos en integrate.api.nvidia.com (los anteriores llegaron a EOL):
     # openai/gpt-oss-20b traduce limpio; nemotron-3-super como respaldo en rotación.
     models: "openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b"
     max-retries: 3
+    # Cuota de la API de NVIDIA en solicitudes por minuto. El pipeline
+    # completo (traducción con reintentos/rotación y extracción del
+    # glosario) pasa por este limitador: los virtual threads aparcan
+    # gratis mientras esperan cupo.
+    rate-limit-rpm: 30
   nlp:
     model-path: classpath:/model
     models:
