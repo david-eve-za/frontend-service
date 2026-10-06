@@ -51,6 +51,7 @@ public class GlossaryController {
                     + "el término es global. Si ya existe el sourceTerm en el alcance, se actualiza su traducción.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Término guardado"),
+            @ApiResponse(responseCode = "400", description = "sourceTerm o targetTerm ausentes"),
             @ApiResponse(responseCode = "404", description = "Novel o libro desconocido")
     })
     @PostMapping
@@ -61,29 +62,41 @@ public class GlossaryController {
             return ResponseEntity.badRequest().build();
         }
 
-        TranslationTerm term = new TranslationTerm();
-        String novelId = body.get("novelId");
-        String bookId = body.get("bookId");
-        if (novelId != null && !novelId.isBlank()) {
-            Novel novel = novelRepository.findById(UUID.fromString(novelId))
-                    .orElse(null);
-            if (novel == null) {
-                return ResponseEntity.notFound().build();
+        UUID novelId = parseId(body.get("novelId"));
+        UUID bookId = parseId(body.get("bookId"));
+
+        // Upsert: si el término ya existe en el alcance, se actualiza su
+        // traducción en lugar de chocar con la restricción de unicidad.
+        TranslationTerm term = termRepository
+                .findByScopeAndSourceTerm(novelId, bookId, sourceTerm.trim())
+                .orElseGet(TranslationTerm::new);
+        if (term.getId() == null) {
+            if (novelId != null) {
+                Novel novel = novelRepository.findById(novelId).orElse(null);
+                if (novel == null) {
+                    return ResponseEntity.notFound().build();
+                }
+                term.setNovel(novel);
+            } else if (bookId != null) {
+                Book book = bookRepository.findById(bookId).orElse(null);
+                if (book == null) {
+                    return ResponseEntity.notFound().build();
+                }
+                term.setBook(book);
             }
-            term.setNovel(novel);
-        } else if (bookId != null && !bookId.isBlank()) {
-            Book book = bookRepository.findById(UUID.fromString(bookId))
-                    .orElse(null);
-            if (book == null) {
-                return ResponseEntity.notFound().build();
-            }
-            term.setBook(book);
+            term.setSourceTerm(sourceTerm.trim());
+            term.setCreatedAt(Instant.now());
         }
-        term.setSourceTerm(sourceTerm.trim());
         term.setTargetTerm(targetTerm.trim());
-        term.setCreatedAt(Instant.now());
         term.setUpdatedAt(Instant.now());
         return ResponseEntity.ok(termRepository.save(term));
+    }
+
+    private static UUID parseId(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return UUID.fromString(raw.trim());
     }
 
     @Operation(summary = "Elimina un término del glosario")

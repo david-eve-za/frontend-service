@@ -78,6 +78,12 @@ export class AppMenu {
                         routerLink: ['/book-translator/history'],
                     },
                     {
+                        // Curación de términos con traducción establecida.
+                        label: 'Glosario de Traducción',
+                        icon: 'pi pi-fw pi-spell-check',
+                        routerLink: ['/book-translator/glossary'],
+                    },
+                    {
                         label: 'Configuración',
                         icon: 'pi pi-fw pi-cog',
                         routerLink: ['/book-translator/settings'],

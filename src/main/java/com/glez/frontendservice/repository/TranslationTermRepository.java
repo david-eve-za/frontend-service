@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -34,4 +35,12 @@ public interface TranslationTermRepository extends JpaRepository<TranslationTerm
 
     /** Términos acotados a un libro (para el borrado del libro). */
     void deleteAllByBook(com.glez.frontendservice.model.Book book);
+
+    /** Término existente de un alcance con ese sourceTerm (upsert). */
+    @Query("select t from TranslationTerm t where lower(t.sourceTerm) = lower(:sourceTerm) "
+            + "and ((t.novel is null and :novelId is null) or t.novel.id = :novelId) "
+            + "and ((t.book is null and :bookId is null) or t.book.id = :bookId)")
+    Optional<TranslationTerm> findByScopeAndSourceTerm(@Param("novelId") UUID novelId,
+                                                       @Param("bookId") UUID bookId,
+                                                       @Param("sourceTerm") String sourceTerm);
 }
