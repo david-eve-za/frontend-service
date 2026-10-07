@@ -6,6 +6,7 @@ import com.glez.frontendservice.tts.EdgeTtsClient;
 import com.glez.frontendservice.tts.EdgeTtsException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedWriter;
@@ -15,18 +16,28 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class AudioGeneratorService {
 
     private final SmartTextSplitter textSplitter;
     private final EdgeTtsClient edgeTtsClient;
+    private final Semaphore ttsConcurrency;
+    private final ExecutorService ttsExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private static final Logger log = LoggerFactory.getLogger(AudioGeneratorService.class);
 
 
-    public AudioGeneratorService(SmartTextSplitter textSplitter, EdgeTtsClient edgeTtsClient) {
+    public AudioGeneratorService(SmartTextSplitter textSplitter,
+                                 EdgeTtsClient edgeTtsClient,
+                                 @Value("${app.audio.tts-concurrency:3}") int ttsConcurrency) {
         this.textSplitter = textSplitter;
         this.edgeTtsClient = edgeTtsClient;
+        this.ttsConcurrency = new Semaphore(Math.max(1, ttsConcurrency), true);
     }
 
     // Mapa de normalización idéntico a tu versión Python
@@ -54,15 +65,34 @@ public class AudioGeneratorService {
 
             // 2. Crear directorio temporal gestionado
             Path tempDir = Files.createTempDirectory("audio_chunks_");
-            List<Path> audioFiles = new ArrayList<>();
 
             try {
-                for (int i = 0; i < chunks.size(); i++) {
-                    String normalized = normalizeText(chunks.get(i));
-                    Path chunkPath = tempDir.resolve(String.format("chunk_%04d.mp3", i));
-
-                    if (textToAudio(normalized, chunkPath)) {
-                        audioFiles.add(chunkPath);
+                // 2b. Sintetizar los fragmentos en paralelo con virtual
+                // threads, con un tope suave de concurrencia hacia Edge
+                // TTS (p.ej. 3 simultáneas) y conservando el orden de
+                // mezcla posterior.
+                int total = chunks.size();
+                @SuppressWarnings("unchecked")
+                CompletableFuture<Path>[] futures = new CompletableFuture[total];
+                for (int i = 0; i < total; i++) {
+                    final int index = i;
+                    final String normalized = normalizeText(chunks.get(i));
+                    futures[i] = CompletableFuture.supplyAsync(() -> {
+                        ttsConcurrency.acquireUninterruptibly();
+                        try {
+                            Path chunkPath = tempDir.resolve(String.format("chunk_%04d.mp3", index));
+                            return textToAudio(normalized, chunkPath) ? chunkPath : null;
+                        } finally {
+                            ttsConcurrency.release();
+                        }
+                    }, ttsExecutor);
+                }
+                CompletableFuture.allOf(futures).get(10, TimeUnit.MINUTES);
+                List<Path> audioFiles = new ArrayList<>(total);
+                for (CompletableFuture<Path> future : futures) {
+                    Path path = future.getNow(null);
+                    if (path != null) {
+                        audioFiles.add(path);
                     }
                 }
 

@@ -2,8 +2,8 @@ package com.glez.frontendservice.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.scheduling.annotation.EnableAsync;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -32,17 +32,21 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addViewController("/documentation/**").setViewName("forward:/index.html");
     }
 
+    /**
+     * Executor del pipeline sobre JAVA 21 VIRTUAL THREADS: todo el trabajo
+     * es I/O (API de NVIDIA, Edge TTS, LLM), así que cada tarea aparca
+     * gratis durante las esperas en lugar de inmovilizar un hilo de
+     * plataforma. La concurrencia NO la limita este executor sino la
+     * cuota de la API (NvidiaRateLimiter, RPM) — el patrón recomendado
+     * para virtual threads: hilos ilimitados, I/O gobernado por el
+     * recurso externo. El MdcTaskDecorator preserva el contexto
+     * bookId/traceId/step en cada virtual thread para el Visor de Logs.
+     */
     @Bean("bookProcessingExecutor")
     public Executor bookProcessingExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(4);
-        executor.setMaxPoolSize(8);
-        executor.setQueueCapacity(100);
-        executor.setThreadNamePrefix("book-processing-");
+        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor("book-processing-");
+        executor.setVirtualThreads(true);
         executor.setTaskDecorator(new MdcTaskDecorator());
-        executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(60);
-        executor.initialize();
         return executor;
     }
 }

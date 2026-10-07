@@ -41,6 +41,7 @@ public class BookProcessingService {
     private final com.glez.frontendservice.repository.ProcessTraceEventRepository processTraceEventRepository;
     private final com.glez.frontendservice.repository.TranslationTermRepository translationTermRepository;
     private final GlossaryService glossaryService;
+    private final ChunkTranslationService chunkTranslationService;
     private final SmartTextSplitter smartTextSplitter;
     private final ApplicationContext applicationContext;
 
@@ -356,34 +357,6 @@ public class BookProcessingService {
 
     @Async("bookProcessingExecutor")
     @Transactional
-    public CompletableFuture<Void> translateChunkAsync(UUID chunkId,
-                                                       List<com.glez.frontendservice.model.TranslationTerm> glossary) {
-        Chunks chunk = chunksRepository.findById(chunkId)
-                .orElseThrow(() -> new IllegalArgumentException("Chunk with ID " + chunkId + " not found."));
-
-        if (chunk.getOriginalText() == null || chunk.getOriginalText().isEmpty()) {
-            throw new IllegalArgumentException("Chunk with ID " + chunkId + " has no original text to translate.");
-        }
-
-        chunk.setStatus(ChunkStatus.PROCESSING);
-        chunksRepository.save(chunk);
-
-        try {
-            String translated = nvidiaAiService.translateChunk(chunk.getOriginalText(), "en", "es", glossary);
-            chunk.setTranslatedText(translated);
-            chunk.setStatus(ChunkStatus.COMPLETED);
-        } catch (Exception e) {
-            chunk.setStatus(ChunkStatus.FAILED);
-            System.err.println("Error translating chunk " + chunkId + ": " + e.getMessage());
-            throw new RuntimeException("Translation failed for chunk " + chunkId, e);
-        } finally {
-            chunksRepository.save(chunk);
-        }
-        return CompletableFuture.completedFuture(null);
-    }
-
-    @Async("bookProcessingExecutor")
-    @Transactional
     public CompletableFuture<Void> processBookChunksAsync(UUID bookId) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
@@ -395,13 +368,16 @@ public class BookProcessingService {
                 glossaryService.getOrCreateGlossary(book);
 
         List<Chunks> chunks = chunksRepository.findByBook(book);
+        // Despacho a través del PROXY (bean separado, nunca
+        // auto-invocación): cada chunk traduce en su propio virtual
+        // thread, en paralelo, con la cuota RPM gobernando el ritmo.
         List<CompletableFuture<?>> futures = chunks.stream()
                 .filter(c -> c.getStatus() == ChunkStatus.AWAITING)
-                .map(c -> translateChunkAsync(c.getId(), glossary))
+                .map(c -> chunkTranslationService.translateChunk(c.getId(), glossary))
                 .collect(Collectors.toList());
 
         activeTasks.put(bookId, futures);
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]));
     }
 
     public PaginatedResponse<ChunkDto> getBookChunks(UUID bookId, Pageable pageable) {

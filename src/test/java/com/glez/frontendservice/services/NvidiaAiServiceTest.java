@@ -17,10 +17,12 @@ class NvidiaAiServiceTest {
 
     private NvidiaAiService nvidiaAiService;
 
+    private final NvidiaRateLimiter rateLimiter = new NvidiaRateLimiter(0);
+
     @BeforeEach
     void setUp() {
         // We don't need to mock the ChatModel for testing private methods
-        nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3);
+        nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3, rateLimiter);
     }
 
     @Nested

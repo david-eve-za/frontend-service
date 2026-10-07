@@ -43,15 +43,18 @@ public class GlossaryService {
     private final BlockRepository blockRepository;
     private final NovelVolumeRepository volumeRepository;
     private final OpenAiChatModel chatModel;
+    private final NvidiaRateLimiter rateLimiter;
 
     public GlossaryService(TranslationTermRepository termRepository,
                            BlockRepository blockRepository,
                            NovelVolumeRepository volumeRepository,
-                           OpenAiChatModel chatModel) {
+                           OpenAiChatModel chatModel,
+                           NvidiaRateLimiter rateLimiter) {
         this.termRepository = termRepository;
         this.blockRepository = blockRepository;
         this.volumeRepository = volumeRepository;
         this.chatModel = chatModel;
+        this.rateLimiter = rateLimiter;
     }
 
     /** Par de términos devuelto por el LLM en la extracción. */
@@ -118,6 +121,8 @@ public class GlossaryService {
             return List.of();
         }
 
+        // La extracción también consume cuota de la API de NVIDIA.
+        rateLimiter.acquire();
         String prompt = """
                 You are building a translation glossary for a fantasy book series.
                 From the chapter titles and the excerpt below, extract the recurring

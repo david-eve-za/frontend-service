@@ -48,7 +48,7 @@ class AudioGeneratorServiceIT {
         setField(edgeTtsClient, "pitch", "+0Hz");
         setField(edgeTtsClient, "connectTimeoutSeconds", 10);
         setField(edgeTtsClient, "receiveTimeoutSeconds", 60);
-        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient);
+        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient, 3);
     }
 
     @Test

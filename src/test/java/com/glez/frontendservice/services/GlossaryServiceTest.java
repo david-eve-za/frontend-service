@@ -46,6 +46,9 @@ class GlossaryServiceTest {
     @Mock
     private OpenAiChatModel chatModel;
 
+    @Mock
+    private NvidiaRateLimiter rateLimiter;
+
     private GlossaryService glossaryService;
 
     private Book book;
@@ -62,7 +65,7 @@ class GlossaryServiceTest {
     @BeforeEach
     void setUp() {
         glossaryService = new GlossaryService(termRepository, blockRepository,
-                volumeRepository, chatModel);
+                volumeRepository, chatModel, rateLimiter);
 
         book = new Book();
         book.setId(UUID.randomUUID());
