@@ -30,10 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Deep links and reloads on client routes returned a JSON 500**: `/pipeline/translate-book` (and `/logs`) are Angular client-side routes, but the SPA fallback in `WebConfig` only covered a hardcoded prefix list — a reload or bookmark on any pipeline route fell through to the static-resource handler and surfaced `NoResourceFoundException` as `{message: "An unexpected error occurred.", details: "No static resource pipeline/translate-book ..."}`. `GlobalExceptionHandler` now handles `NoResourceFoundException` explicitly: every non-API, non-asset path (no `/api`, `/api-docs`, `/swagger-ui`, `/h2-console`, `/error` prefix, no file extension) forwards to `index.html` so the Angular router boots into the right page; genuine misses (unknown API endpoints, broken asset links) get a proper 404 JSON instead of the generic 500. Verified live: `/pipeline/translate-book` and `/logs` serve the app shell (200), `/api/unknown` returns 404 JSON, and the catalog API keeps working.
 - **Re-sync could drop volume metadata**: the batched upsert only persisted brand-new volumes, so the refresh of `label`, `translatorGroup` and the `removedFromSource` reset of existing rows relied on dirty checking and could be silently lost; every touched row is now persisted and flushed explicitly.
 - **Sequential self-invocation defect**: `processBookChunksAsync` called `translateChunkAsync` via `this.`, bypassing the `@Async` proxy — so chunks translated sequentially despite the async annotations. Chunk translation now goes through the `ChunkTranslationService` proxy.
 
-Measured on a two-chunk book: ~44s total with two interleaved virtual threads vs ~88s sequential. 78/78 tests green, including the new `NvidiaRateLimiter` and `ChunkTranslationService` suites. Database pass verified with 334/334 tests green (11 of them the new H2 integration suite).
+Measured on a two-chunk book: ~44s total with two interleaved virtual threads vs ~88s sequential. 78/78 tests green, including the new `NvidiaRateLimiter` and `ChunkTranslationService` suites. Database pass verified with 334/334 tests green (11 of them the new H2 integration suite); the SPA deep-link fix brings the suite to 340/340.
 
 ## Prior work
 

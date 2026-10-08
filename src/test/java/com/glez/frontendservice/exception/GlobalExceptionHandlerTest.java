@@ -10,7 +10,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.ModelAndView;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -84,7 +87,7 @@ class GlobalExceptionHandlerTest {
         void handleGlobalException_withNullMessage_throwsNPE() {
             Exception exception = new RuntimeException((String) null);
 
-            assertThrows(NullPointerException.class, () -> 
+            assertThrows(NullPointerException.class, () ->
                 exceptionHandler.handleGlobalException(exception, webRequest));
         }
 
@@ -102,6 +105,89 @@ class GlobalExceptionHandlerTest {
                 assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
                 assertNotNull(response.getBody());
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("handleNoResourceFound method tests (SPA fallback)")
+    class HandleNoResourceFoundTests {
+
+        private HttpServletRequest request(String uri) {
+            jakarta.servlet.http.HttpServletRequest servlet = mock(jakarta.servlet.http.HttpServletRequest.class);
+            Mockito.when(servlet.getRequestURI()).thenReturn(uri);
+            return servlet;
+        }
+
+        @Test
+        @DisplayName("Client-route deep links forward to the SPA shell (index.html)")
+        void handleNoResourceFound_clientRoute_forwardsToSpa() {
+            NoResourceFoundException exception =
+                    new NoResourceFoundException(org.springframework.http.HttpMethod.GET, "/pipeline/translate-book", "pipeline/translate-book");
+
+            Object result = exceptionHandler.handleNoResourceFound(exception,
+                    request("/pipeline/translate-book"));
+
+            assertInstanceOf(ModelAndView.class, result, "Deep links must render the app shell");
+            assertEquals("forward:/index.html", ((ModelAndView) result).getViewName());
+        }
+
+        @Test
+        @DisplayName("The logs viewer route is also a client route")
+        void handleNoResourceFound_logsRoute_forwardsToSpa() {
+            NoResourceFoundException exception =
+                    new NoResourceFoundException(org.springframework.http.HttpMethod.GET, "/logs", "logs");
+
+            Object result = exceptionHandler.handleNoResourceFound(exception, request("/logs"));
+
+            assertInstanceOf(ModelAndView.class, result);
+            assertEquals("forward:/index.html", ((ModelAndView) result).getViewName());
+        }
+
+        @Test
+        @DisplayName("Unknown API endpoints get a proper 404 JSON (not the SPA shell)")
+        void handleNoResourceFound_apiPath_returns404Json() {
+            NoResourceFoundException exception =
+                    new NoResourceFoundException(org.springframework.http.HttpMethod.GET, "/api/unknown", "api/unknown");
+
+            ResponseEntity<Object> response = (ResponseEntity<Object>) exceptionHandler
+                    .handleNoResourceFound(exception, request("/api/unknown"));
+
+            assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) response.getBody();
+            assertEquals("Not found.", body.get("message"));
+        }
+
+        @Test
+        @DisplayName("Asset-like paths (file extension) 404 instead of masking broken links")
+        void handleNoResourceFound_assetPath_returns404Json() {
+            NoResourceFoundException exception =
+                    new NoResourceFoundException(org.springframework.http.HttpMethod.GET, "/favicon.ico", "favicon.ico");
+
+            ResponseEntity<Object> response = (ResponseEntity<Object>) exceptionHandler
+                    .handleNoResourceFound(exception, request("/favicon.ico"));
+
+            assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        }
+
+        @Test
+        @DisplayName("isClientRoute: backend-owned prefixes are never client routes")
+        void isClientRoute_ownedPrefixes_areFalse() {
+            assertFalse(GlobalExceptionHandler.isClientRoute("/api/novels-manager"));
+            assertFalse(GlobalExceptionHandler.isClientRoute("/api-docs"));
+            assertFalse(GlobalExceptionHandler.isClientRoute("/swagger-ui/index.html"));
+            assertFalse(GlobalExceptionHandler.isClientRoute("/h2-console"));
+            assertFalse(GlobalExceptionHandler.isClientRoute("/error"));
+            assertFalse(GlobalExceptionHandler.isClientRoute(null));
+        }
+
+        @Test
+        @DisplayName("isClientRoute: app sections are client routes")
+        void isClientRoute_appPaths_areTrue() {
+            assertTrue(GlobalExceptionHandler.isClientRoute("/pipeline/translate-book"));
+            assertTrue(GlobalExceptionHandler.isClientRoute("/pipeline/split-text"));
+            assertTrue(GlobalExceptionHandler.isClientRoute("/logs"));
+            assertTrue(GlobalExceptionHandler.isClientRoute("/book-translator/glossary"));
         }
     }
 }
