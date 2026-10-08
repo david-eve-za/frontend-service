@@ -68,9 +68,7 @@ class ProcessingTraceServiceTest {
     @DisplayName("startStep persists a STARTED event, moves the checkpoint and populates MDC")
     void startStep_persistsEvent_updatesCheckpoint_andSetsMdc() {
         Book book = book();
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
-        when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(any(), any()))
-                .thenReturn(List.of());
+        lenient().when(bookRepository.getReferenceById(bookId)).thenReturn(book);
         when(traceEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.TRANSLATE, "trace-1", "2/10 chunks");
@@ -83,11 +81,8 @@ class ProcessingTraceServiceTest {
         assertEquals("2/10 chunks", event.getDetails());
         assertNotNull(event.getStartedAt());
 
-        // Book checkpoint updated
-        ArgumentCaptor<Book> bookCaptor = ArgumentCaptor.forClass(Book.class);
-        verify(bookRepository).save(bookCaptor.capture());
-        assertEquals(ProcessStep.TRANSLATE, bookCaptor.getValue().getCurrentStep());
-        assertEquals("trace-1", bookCaptor.getValue().getLastTraceId());
+        // Book checkpoint moved with the bulk update (no CLOB load)
+        verify(bookRepository).updateCheckpoint(bookId, ProcessStep.TRANSLATE, "trace-1");
 
         // MDC correlation context
         assertEquals(bookId.toString(), MDC.get(ProcessingTraceService.MDC_BOOK_ID));
@@ -96,53 +91,29 @@ class ProcessingTraceServiceTest {
     }
 
     @Test
-    @DisplayName("Attempt counter counts only FAILED attempts: skips COMPLETED, SKIPPED, interrupted STARTED and blocked pseudo-events")
-    void startStep_countsAttempts_ignoringNonGenuineEvents() {
+    @DisplayName("Attempt counter comes from countFailedAttempts (FAILED events within the budget)")
+    void startStep_countsAttempts_fromTheFailureCountQuery() {
+        // The FAILED / attempt <= max filtering lives in the repository
+        // COUNT query; the service only adds 1 to it.
         Book book = book();
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
-        ProcessTraceEvent completed = new ProcessTraceEvent();
-        completed.setStatus(TraceEventStatus.COMPLETED);
-        completed.setAttempt(1);
-        ProcessTraceEvent failed = new ProcessTraceEvent();
-        failed.setStatus(TraceEventStatus.FAILED);
-        failed.setAttempt(2);
-        ProcessTraceEvent skipped = new ProcessTraceEvent();
-        skipped.setStatus(TraceEventStatus.SKIPPED);
-        skipped.setAttempt(3);
-        // Run interrupted by a crash/restart: an open STARTED event is not a failure
-        ProcessTraceEvent interrupted = new ProcessTraceEvent();
-        interrupted.setStatus(TraceEventStatus.STARTED);
-        interrupted.setAttempt(3);
-        // Legacy pseudo-failure recorded by the budget guard: attempt > max can never be genuine
-        ProcessTraceEvent blocked = new ProcessTraceEvent();
-        blocked.setStatus(TraceEventStatus.FAILED);
-        blocked.setAttempt(4);
-        when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(any(), any()))
-                .thenReturn(List.of(completed, failed, skipped, interrupted, blocked));
+        lenient().when(bookRepository.getReferenceById(bookId)).thenReturn(book);
+        when(traceEventRepository.countFailedAttempts(bookId, ProcessStep.SPLIT, TraceEventStatus.FAILED, 3))
+                .thenReturn(1L);
         when(traceEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, "trace-2", null);
 
         assertEquals(2, event.getAttempt(),
-                "COMPLETED does not count; one genuine FAILED (attempt 2, within budget) => next attempt is 2");
+                "One genuine FAILED attempt (within budget) => next attempt is 2");
     }
 
     @Test
-    @DisplayName("A successful step never consumes the budget: three COMPLETED events count as zero")
+    @DisplayName("A successful step never consumes the budget: zero failures count as zero")
     void startStep_afterSuccessfulRuns_countsZero() {
         Book book = book();
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
-        ProcessTraceEvent done1 = new ProcessTraceEvent();
-        done1.setStatus(TraceEventStatus.COMPLETED);
-        done1.setAttempt(1);
-        ProcessTraceEvent done2 = new ProcessTraceEvent();
-        done2.setStatus(TraceEventStatus.COMPLETED);
-        done2.setAttempt(2);
-        ProcessTraceEvent done3 = new ProcessTraceEvent();
-        done3.setStatus(TraceEventStatus.COMPLETED);
-        done3.setAttempt(3);
-        when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(any(), any()))
-                .thenReturn(List.of(done1, done2, done3));
+        lenient().when(bookRepository.getReferenceById(bookId)).thenReturn(book);
+        when(traceEventRepository.countFailedAttempts(bookId, ProcessStep.SPLIT, TraceEventStatus.FAILED, 3))
+                .thenReturn(0L);
         when(traceEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.SPLIT, "trace-2", null);
@@ -154,17 +125,10 @@ class ProcessingTraceServiceTest {
     @Test
     @DisplayName("countGenuineAttempts exposes the same filter for the chunk heal")
     void countGenuineCounts_onlyGenuineEvents() {
-        Book book = book();
-        ProcessTraceEvent genuineFailure = new ProcessTraceEvent();
-        genuineFailure.setStatus(TraceEventStatus.FAILED);
-        genuineFailure.setAttempt(1);
-        ProcessTraceEvent interrupted = new ProcessTraceEvent();
-        interrupted.setStatus(TraceEventStatus.STARTED);
-        interrupted.setAttempt(2);
-        when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(book, ProcessStep.TRANSLATE))
-                .thenReturn(List.of(genuineFailure, interrupted));
+        when(traceEventRepository.countFailedAttempts(bookId, ProcessStep.TRANSLATE, TraceEventStatus.FAILED, 3))
+                .thenReturn(1L);
 
-        assertEquals(1, traceService.countGenuineAttempts(book, ProcessStep.TRANSLATE));
+        assertEquals(1, traceService.countGenuineAttempts(bookId, ProcessStep.TRANSLATE));
     }
 
     @Test
@@ -205,9 +169,7 @@ class ProcessingTraceServiceTest {
     @Test
     @DisplayName("skipStep records a SKIPPED event with the reason")
     void skipStep_recordsReason() {
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book()));
-        when(traceEventRepository.findByBookAndStepOrderByStartedAtDesc(any(), any()))
-                .thenReturn(List.of());
+        lenient().when(bookRepository.getReferenceById(bookId)).thenReturn(book());
         when(traceEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         traceService.skipStep(bookId, ProcessStep.EXTRACT, "trace-3", "already extracted");
@@ -223,7 +185,8 @@ class ProcessingTraceServiceTest {
     @DisplayName("getTimeline returns the events mapped to DTOs in order")
     void getTimeline_mapsEventsToDtos() {
         Book book = book();
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        when(bookRepository.existsById(bookId)).thenReturn(true);
+        when(bookRepository.getReferenceById(bookId)).thenReturn(book);
         ProcessTraceEvent first = new ProcessTraceEvent();
         first.setId(UUID.randomUUID());
         first.setTraceId("t1");
@@ -245,7 +208,7 @@ class ProcessingTraceServiceTest {
     @Test
     @DisplayName("getTimeline throws for unknown books")
     void getTimeline_withUnknownBook_throws() {
-        when(bookRepository.findById(bookId)).thenReturn(Optional.empty());
+        when(bookRepository.existsById(bookId)).thenReturn(false);
         assertThrows(IllegalArgumentException.class, () -> traceService.getTimeline(bookId));
     }
 

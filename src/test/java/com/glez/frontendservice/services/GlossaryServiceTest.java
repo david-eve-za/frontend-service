@@ -27,6 +27,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -142,7 +143,7 @@ class GlossaryServiceTest {
         List<TranslationTerm> terms = glossaryService.getOrCreateGlossary(book);
 
         assertTrue(terms.isEmpty(), "A failed extraction must not block translation");
-        verify(termRepository, never()).save(any(TranslationTerm.class));
+        verify(termRepository, never()).saveAll(anyList());
     }
 
     @Test
@@ -158,11 +159,15 @@ class GlossaryServiceTest {
 
         List<TranslationTerm> terms = glossaryService.getOrCreateGlossary(book);
 
-        ArgumentCaptor<TranslationTerm> captor = ArgumentCaptor.forClass(TranslationTerm.class);
-        verify(termRepository).save(captor.capture());
-        assertEquals("the Angel Lord", captor.getValue().getSourceTerm());
-        assertEquals("el Señor de los Ángeles", captor.getValue().getTargetTerm());
-        assertEquals(novel.getId(), captor.getValue().getNovel().getId(),
+        // One batched saveAll (single transaction + JDBC batching)
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<TranslationTerm>> captor =
+                ArgumentCaptor.forClass((Class) List.class);
+        verify(termRepository).saveAll(captor.capture());
+        TranslationTerm saved = captor.getValue().get(0);
+        assertEquals("the Angel Lord", saved.getSourceTerm());
+        assertEquals("el Señor de los Ángeles", saved.getTargetTerm());
+        assertEquals(novel.getId(), saved.getNovel().getId(),
                 "Terms of a series-linked book are scoped to the novel for inter-volume consistency");
         assertEquals(1, terms.size());
     }
@@ -180,9 +185,12 @@ class GlossaryServiceTest {
 
         glossaryService.getOrCreateGlossary(book);
 
-        ArgumentCaptor<TranslationTerm> captor = ArgumentCaptor.forClass(TranslationTerm.class);
-        verify(termRepository).save(captor.capture());
-        assertNull(captor.getValue().getNovel());
-        assertEquals(book.getId(), captor.getValue().getBook().getId());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<TranslationTerm>> captor =
+                ArgumentCaptor.forClass((Class) List.class);
+        verify(termRepository).saveAll(captor.capture());
+        TranslationTerm saved = captor.getValue().get(0);
+        assertNull(saved.getNovel());
+        assertEquals(book.getId(), saved.getBook().getId());
     }
 }

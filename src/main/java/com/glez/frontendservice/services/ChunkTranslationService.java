@@ -8,7 +8,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.List;
@@ -39,9 +38,15 @@ public class ChunkTranslationService {
      * Traduce un chunk inyectando el glosario de la serie/libro en el
      * prompt. Falla con RuntimeException para que el join de la corrida la
      * detecte; el estado FAILED se persiste por chunk.
+     *
+     * <p>SIN {@code @Transactional}: cada guardado corre en su propia
+     * transacción corta (la del repositorio), de modo que la conexión del
+     * pool se libera ANTES de la llamada a la API de NVIDIA — que puede
+     * tardar segundos o minutos con la cuota de 30 RPM. Mantener la
+     * transacción abierta durante el LLM pinneaba una conexión de Hikari
+     * por chunk paralelo y agotaba el pool.</p>
      */
     @Async("bookProcessingExecutor")
-    @Transactional
     public CompletableFuture<Void> translateChunk(UUID chunkId, List<TranslationTerm> glossary) {
         Chunks chunk = chunksRepository.findById(chunkId)
                 .orElseThrow(() -> new IllegalArgumentException("Chunk with ID " + chunkId + " not found."));

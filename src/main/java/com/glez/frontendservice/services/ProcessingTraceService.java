@@ -50,23 +50,22 @@ public class ProcessingTraceService {
 
     /**
      * Records the beginning of a step attempt and points the book's
-     * checkpoint (currentStep) at it.
+     * checkpoint (currentStep) at it. Neither the book entity nor its
+     * full_text CLOB is loaded: the checkpoint moves with a bulk update
+     * and the event keeps an uninitialized FK reference.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public ProcessTraceEvent startStep(UUID bookId, ProcessStep step, String traceId, String details) {
-        Book book = bookRepository.findById(bookId)
-                .orElseThrow(() -> new IllegalArgumentException("Book " + bookId + " not found"));
+        bookRepository.updateCheckpoint(bookId, step, traceId);
 
-        book.setCurrentStep(step);
-        book.setLastTraceId(traceId);
-        bookRepository.save(book);
+        Book book = bookRepository.getReferenceById(bookId);
 
         ProcessTraceEvent event = new ProcessTraceEvent();
         event.setBook(book);
         event.setTraceId(traceId);
         event.setStep(step);
         event.setStatus(TraceEventStatus.STARTED);
-        event.setAttempt(countPreviousAttempts(book, step) + 1);
+        event.setAttempt((int) countFailedAttempts(bookId, step) + 1);
         event.setStartedAt(Instant.now());
         event.setDetails(details);
         event = traceEventRepository.save(event);
@@ -109,15 +108,14 @@ public class ProcessingTraceService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void skipStep(UUID bookId, ProcessStep step, String traceId, String reason) {
-        Book book = bookRepository.findById(bookId)
-                .orElseThrow(() -> new IllegalArgumentException("Book " + bookId + " not found"));
+        Book book = bookRepository.getReferenceById(bookId);
 
         ProcessTraceEvent event = new ProcessTraceEvent();
         event.setBook(book);
         event.setTraceId(traceId);
         event.setStep(step);
         event.setStatus(TraceEventStatus.SKIPPED);
-        event.setAttempt(countPreviousAttempts(book, step) + 1);
+        event.setAttempt((int) countFailedAttempts(bookId, step) + 1);
         event.setStartedAt(Instant.now());
         event.setFinishedAt(Instant.now());
         event.setDetails(reason);
@@ -128,12 +126,15 @@ public class ProcessingTraceService {
     }
 
     /**
-     * Full processing timeline of a book, oldest first.
+     * Full processing timeline of a book, oldest first. The book is only
+     * referenced by id (FK proxy): the CLOB is never loaded.
      */
     @Transactional(readOnly = true)
     public List<TraceEventDto> getTimeline(UUID bookId) {
-        Book book = bookRepository.findById(bookId)
-                .orElseThrow(() -> new IllegalArgumentException("Book " + bookId + " not found"));
+        if (!bookRepository.existsById(bookId)) {
+            throw new IllegalArgumentException("Book " + bookId + " not found");
+        }
+        Book book = bookRepository.getReferenceById(bookId);
         return traceEventRepository.findByBookOrderByStartedAtAscIdAsc(book).stream()
                 .map(e -> new TraceEventDto(e.getId(), e.getTraceId(), e.getStep(), e.getStatus(),
                         e.getAttempt(), e.getStartedAt(), e.getFinishedAt(),
@@ -163,9 +164,11 @@ public class ProcessingTraceService {
      * Number of genuine failures recorded for a step: concluded runs that
      * FAILED. Interrupted runs, successful runs and blocked pseudo-attempts
      * never count, so restarts or crashes cannot exhaust the retry budget.
+     * Single COUNT query with the covering (book, step, started_at) index.
      */
-    public int countGenuineAttempts(Book book, ProcessStep step) {
-        return countPreviousAttempts(book, step);
+    public int countGenuineAttempts(UUID bookId, ProcessStep step) {
+        return (int) traceEventRepository.countFailedAttempts(
+                bookId, step, TraceEventStatus.FAILED, maxAttempts);
     }
 
     /**
@@ -178,11 +181,9 @@ public class ProcessingTraceService {
      * attempt can never exceed the budget, so excluding them is exact and
      * also self-heals legacy blocked events.
      */
-    private int countPreviousAttempts(Book book, ProcessStep step) {
-        return (int) traceEventRepository.findByBookAndStepOrderByStartedAtDesc(book, step).stream()
-                .filter(e -> e.getStatus() == TraceEventStatus.FAILED)
-                .filter(e -> e.getAttempt() != null && e.getAttempt() <= maxAttempts)
-                .count();
+    private long countFailedAttempts(UUID bookId, ProcessStep step) {
+        return traceEventRepository.countFailedAttempts(
+                bookId, step, TraceEventStatus.FAILED, maxAttempts);
     }
 
     private static String truncate(Throwable error) {

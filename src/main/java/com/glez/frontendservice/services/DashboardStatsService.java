@@ -2,15 +2,12 @@ package com.glez.frontendservice.services;
 
 import com.glez.frontendservice.dtos.DashboardStatsDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.BookStatsDto;
-import com.glez.frontendservice.dtos.DashboardStatsDto.CatalogStatsDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.ChunkStatsDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.DatabaseStatusDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.ProcessStatusDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.RunningProcessDto;
 import com.glez.frontendservice.dtos.NovelsCatalogSyncStatus;
 import com.glez.frontendservice.model.ProcessingStatus;
-import com.glez.frontendservice.repository.NovelRepository;
-import com.glez.frontendservice.repository.NovelVolumeRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,8 +40,7 @@ public class DashboardStatsService {
     private final JdbcTemplate jdbcTemplate;
     private final BookPipelineOrchestrator pipelineOrchestrator;
     private final NovelsCatalogSyncService catalogSyncService;
-    private final NovelRepository novelRepository;
-    private final NovelVolumeRepository novelVolumeRepository;
+    private final CatalogStatsService catalogStatsService;
 
     @Value("${spring.datasource.url}")
     private String datasourceUrl;
@@ -76,7 +72,9 @@ public class DashboardStatsService {
                     processStatus(books),
                     bookStats(books),
                     chunkStats(books),
-                    new CatalogStatsDto(novelRepository.count(), novelVolumeRepository.count()));
+                    // Cached counts (Caffeine "catalogCounts"): the dashboard
+                    // polls every 15s; the sync evicts them when it finishes.
+                    catalogStatsService.catalogStats());
         } catch (Exception e) {
             // Un panel de monitoreo debe degradarse, no fallar: se reporta la
             // caída con métricas vacías para que la UI siempre pueda renderizar.
@@ -94,7 +92,7 @@ public class DashboardStatsService {
         ProcessStatusDto processes = new ProcessStatusDto(List.of(), catalogSyncService.getStatus());
         BookStatsDto books = new BookStatsDto(0, 0, 0, 0, 0, Map.of());
         ChunkStatsDto chunks = new ChunkStatsDto(0, 0);
-        CatalogStatsDto catalog = new CatalogStatsDto(0, 0);
+        DashboardStatsDto.CatalogStatsDto catalog = new DashboardStatsDto.CatalogStatsDto(0, 0);
         return new DashboardStatsDto(database, processes, books, chunks, catalog);
     }
 

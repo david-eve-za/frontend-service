@@ -15,6 +15,13 @@ import java.util.UUID;
  * para libros sin bloques (ruta legada de texto completo).
  */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
+@Table(indexes = {
+        // countByBookAndStatus / pending-chunk scans: one lookup instead of
+        // FK scan + row filter.
+        @Index(name = "idx_chunks_book_status", columnList = "book_id, status"),
+        // findByBlockOrderByPositionAsc: ordered index scan per block.
+        @Index(name = "idx_chunks_block_position", columnList = "block_id, position")})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

@@ -5,6 +5,8 @@ import com.glez.frontendservice.repository.RegexPatternRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -96,11 +98,18 @@ public class RegexPatternService {
         return regexPatternRepository.findAll();
     }
 
+    /**
+     * Patrones habilitados para limpieza de texto: se leen en CADA
+     * extracción/subida, de modo que viven en la caché "regexPatterns"
+     * (evictada por completo en cada mutación CRUD).
+     */
+    @Cacheable("regexPatterns")
     @Transactional(readOnly = true)
     public List<RegexPattern> getEnabledPatterns() {
         return regexPatternRepository.findByEnabledTrueOrderByOrderIndexAsc();
     }
 
+    @Cacheable("regexPatterns")
     @Transactional(readOnly = true)
     public List<RegexPattern> getEnabledPatternsByType(RegexPattern.PatternType type) {
         return regexPatternRepository.findByPatternType(type);
@@ -117,6 +126,7 @@ public class RegexPatternService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = "regexPatterns", allEntries = true)
     public RegexPattern createPattern(RegexPattern pattern) {
         validatePattern(pattern.getPattern());
         if (regexPatternRepository.existsByName(pattern.getName())) {
@@ -126,6 +136,7 @@ public class RegexPatternService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = "regexPatterns", allEntries = true)
     public RegexPattern updatePattern(UUID id, RegexPattern updatedPattern) {
         RegexPattern existing = regexPatternRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Pattern not found with id: " + id));
@@ -152,11 +163,13 @@ public class RegexPatternService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = "regexPatterns", allEntries = true)
     public void deletePattern(UUID id) {
         regexPatternRepository.deleteById(id);
     }
 
     @Transactional
+    @CacheEvict(cacheNames = "regexPatterns", allEntries = true)
     public RegexPattern togglePattern(UUID id) {
         RegexPattern pattern = regexPatternRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Pattern not found with id: " + id));
@@ -164,6 +177,11 @@ public class RegexPatternService {
         return regexPatternRepository.save(pattern);
     }
 
+    /**
+     * Patrones para la limpieza de texto: misma caché que los habilitados
+     * (devuelve exactamente los mismos datos) con evict por CRUD.
+     */
+    @Cacheable("regexPatterns")
     @Transactional(readOnly = true)
     public List<RegexPattern> getPatternsForTextCleaning() {
         return regexPatternRepository.findByEnabledTrueOrderByOrderIndexAsc()

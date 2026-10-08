@@ -77,4 +77,14 @@ public class NovelVolume {
 
     @OneToMany(mappedBy = "volume", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<NovelVolumeFile> files = new ArrayList<>();
+
+    /**
+     * Id del Book enlazado SIN inicializar el proxy lazy: Hibernate expone
+     * el identificador sin tocar la base, así el gestor de novelas puede
+     * agrupar por book_id sin cargar cada Book (y su CLOB full_text).
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public UUID getBookIdOrNull() {
+        return book != null ? book.getId() : null;
+    }
 }

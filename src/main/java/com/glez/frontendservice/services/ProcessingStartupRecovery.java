@@ -10,6 +10,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * On application startup, automatically resumes the pipeline of every book
@@ -40,18 +41,20 @@ public class ProcessingStartupRecovery {
             log.info("Auto-resume disabled (app.processing.auto-resume=false)");
             return;
         }
-        List<com.glez.frontendservice.model.Book> recoverable = bookRepository.findByStatusIn(
+        // Id projection: resuming must not load every failed/interrupted
+        // book entity with its multi-megabyte full_text CLOB.
+        List<UUID> recoverable = bookRepository.findIdsByStatusIn(
                 List.of(ProcessingStatus.PROCESSING, ProcessingStatus.FAILED));
         if (recoverable.isEmpty()) {
             log.info("No books to resume on startup");
             return;
         }
         log.info("Resuming {} book(s) interrupted by a previous run", recoverable.size());
-        for (com.glez.frontendservice.model.Book book : recoverable) {
+        for (UUID bookId : recoverable) {
             try {
-                orchestrator.processBook(book.getId());
+                orchestrator.processBook(bookId);
             } catch (Exception e) {
-                log.error("Could not resume book {}", book.getId(), e);
+                log.error("Could not resume book {}", bookId, e);
             }
         }
     }

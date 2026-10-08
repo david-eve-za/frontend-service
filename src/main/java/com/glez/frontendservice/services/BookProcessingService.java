@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -114,8 +115,9 @@ public class BookProcessingService {
 
     @Transactional
     public void deleteBook(UUID bookId) {
-        Book book = bookRepository.findById(bookId)
-                .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
+        if (!bookRepository.existsById(bookId)) {
+            throw new IllegalArgumentException("Book with ID " + bookId + " not found.");
+        }
 
         List<CompletableFuture<?>> futures = activeTasks.remove(bookId);
         if (futures != null) {
@@ -124,11 +126,14 @@ public class BookProcessingService {
             }
         }
 
-        chunksRepository.deleteAllByBook(book);
-        blockRepository.deleteAllByBook(book);
-        processTraceEventRepository.deleteAllByBook(book);
-        translationTermRepository.deleteAllByBook(book);
-        bookRepository.delete(book);
+        // Bulk deletes in JPQL: none of them loads the chunk/block/trace/
+        // term rows (nor the book CLOB) before deleting, in contrast with
+        // the derived deleteAllBy* methods.
+        chunksRepository.deleteByBookIdInBulk(bookId);
+        blockRepository.deleteByBookIdInBulk(bookId);
+        processTraceEventRepository.deleteByBookIdInBulk(bookId);
+        translationTermRepository.deleteByBookIdInBulk(bookId);
+        bookRepository.deleteByIdInBulk(bookId);
     }
 
     public String getFullText(UUID bookId) {
@@ -149,10 +154,11 @@ public class BookProcessingService {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
 
-        blockRepository.deleteAllByBook(book);
+        blockRepository.deleteByBookIdInBulk(bookId);
 
         int position = 0;
         StringBuilder cleanText = new StringBuilder();
+        List<Block> toSave = new ArrayList<>(blocks.size());
         for (BlockSaveRequest.BlockItem item : blocks) {
             Block block = new Block();
             block.setBook(book);
@@ -160,7 +166,7 @@ public class BookProcessingService {
             block.setBlockNumber(item.id());
             block.setContent(item.content());
             block.setPosition(position++);
-            blockRepository.save(block);
+            toSave.add(block);
 
             if (item.content() != null && !item.content().isBlank()) {
                 if (cleanText.length() > 0) {
@@ -169,6 +175,9 @@ public class BookProcessingService {
                 cleanText.append(item.content());
             }
         }
+        // One saveAll: a single transaction + JDBC-batched INSERTs instead
+        // of one round-trip per block (a novel can carry hundreds).
+        blockRepository.saveAll(toSave);
 
         // Texto limpio: los tags jamás se persisten ni llegan al traductor.
         book.setFullText(cleanText.toString());
@@ -273,11 +282,12 @@ public class BookProcessingService {
 
         List<Block> blocks = targetBlocks(book, blockIds);
         if (!blocks.isEmpty()) {
+            List<Chunks> toSave = new ArrayList<>();
             for (Block block : blocks) {
                 if (block.getContent() == null || block.getContent().isBlank()) {
                     continue; // Bloque vacío: no genera chunks ni audio
                 }
-                chunksRepository.deleteAllByBlock(block);
+                chunksRepository.deleteByBlockIdInBulk(block.getId());
                 List<String> splitText = smartTextSplitter.split(block.getContent());
                 int position = 0;
                 for (String text : splitText) {
@@ -287,9 +297,12 @@ public class BookProcessingService {
                     chunk.setOriginalText(text);
                     chunk.setStatus(ChunkStatus.AWAITING);
                     chunk.setPosition(position++);
-                    chunksRepository.save(chunk);
+                    toSave.add(chunk);
                 }
             }
+            // Chunks de todos los bloques en un saveAll: transacción única
+            // + INSERTs con JDBC batching (antes: uno por chunk).
+            chunksRepository.saveAll(toSave);
             book.setStatus(ProcessingStatus.UPLOADED);
             bookRepository.save(book);
             return;
@@ -315,10 +328,11 @@ public class BookProcessingService {
             throw new IllegalArgumentException("Book with ID " + book.getId() + " has no full text to chunk.");
         }
 
-        chunksRepository.deleteAllByBook(book);
+        chunksRepository.deleteByBookIdInBulk(book.getId());
 
         List<String> splitText = smartTextSplitter.split(book.getFullText());
 
+        List<Chunks> toSave = new ArrayList<>(splitText.size());
         for (int i = 0; i < splitText.size(); i++) {
             String text = splitText.get(i);
             Chunks chunk = new Chunks();
@@ -326,8 +340,9 @@ public class BookProcessingService {
             chunk.setOriginalText(text);
             chunk.setStatus(ChunkStatus.AWAITING);
             chunk.setPosition(i);
-            chunksRepository.save(chunk);
+            toSave.add(chunk);
         }
+        chunksRepository.saveAll(toSave);
 
         book.setStatus(ProcessingStatus.UPLOADED);
         bookRepository.save(book);
@@ -355,8 +370,10 @@ public class BookProcessingService {
         return selected;
     }
 
+    // SIN @Transactional: la extracción del glosario (llamada LLM + espera
+    // del rate limiter) y el despacho no deben pinear una conexión del
+    // pool; cada repositorio usa su propia transacción corta.
     @Async("bookProcessingExecutor")
-    @Transactional
     public CompletableFuture<Void> processBookChunksAsync(UUID bookId) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
@@ -367,13 +384,16 @@ public class BookProcessingService {
         List<com.glez.frontendservice.model.TranslationTerm> glossary =
                 glossaryService.getOrCreateGlossary(book);
 
-        List<Chunks> chunks = chunksRepository.findByBook(book);
+        // Solo los IDs de los chunks AWAITING: no se materializa ningún
+        // original_text/translated_text CLOB para el despacho (cada chunk
+        // se recarga por id dentro de su propia transacción de traducción).
+        List<UUID> pendingChunkIds = chunksRepository.findIdsByBookIdAndStatus(
+                bookId, com.glez.frontendservice.model.ChunkStatus.AWAITING);
         // Despacho a través del PROXY (bean separado, nunca
         // auto-invocación): cada chunk traduce en su propio virtual
         // thread, en paralelo, con la cuota RPM gobernando el ritmo.
-        List<CompletableFuture<?>> futures = chunks.stream()
-                .filter(c -> c.getStatus() == ChunkStatus.AWAITING)
-                .map(c -> chunkTranslationService.translateChunk(c.getId(), glossary))
+        List<CompletableFuture<?>> futures = pendingChunkIds.stream()
+                .map(chunkId -> chunkTranslationService.translateChunk(chunkId, glossary))
                 .collect(Collectors.toList());
 
         activeTasks.put(bookId, futures);

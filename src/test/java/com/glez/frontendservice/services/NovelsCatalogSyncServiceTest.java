@@ -5,7 +5,6 @@ import com.glez.frontendservice.dtos.NovelsCatalogSyncStatus;
 import com.glez.frontendservice.model.Novel;
 import com.glez.frontendservice.model.NovelVolume;
 import com.glez.frontendservice.model.NovelVolumeFile;
-import com.glez.frontendservice.model.NovelVolumeFile;
 import com.glez.frontendservice.repository.NovelRepository;
 import com.glez.frontendservice.repository.NovelVolumeFileRepository;
 import com.glez.frontendservice.repository.NovelVolumeRepository;
@@ -16,6 +15,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
+import org.springframework.cache.CacheManager;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -63,6 +63,7 @@ class NovelsCatalogSyncServiceTest {
         apiClient = mock(ElscioneApiClient.class);
         service = new NovelsCatalogSyncService(apiClient, novelRepository, volumeRepository,
                 fileRepository, new NovelFileNameParser(),
+                new org.springframework.cache.concurrent.ConcurrentMapCacheManager(),
                 "https://server.elscione.com" + BASE, 3, true, false, 0, 10);
     }
 
@@ -216,8 +217,8 @@ class NovelsCatalogSyncServiceTest {
             return List.of();
         });
         NovelsCatalogSyncService enabled = new NovelsCatalogSyncService(apiClient, novelRepository,
-                volumeRepository, fileRepository, new NovelFileNameParser(),
-                "https://server.elscione.com" + BASE, 3, true, true, 0, 10);
+                volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
+                "https://server.elscione.com" + BASE, 3, true, true, 0, 10d);
 
         enabled.syncOnStartup();
 
@@ -250,7 +251,7 @@ class NovelsCatalogSyncServiceTest {
         when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
         when(apiClient.listContents(BASE + "NovelB/")).thenReturn(List.of());
         NovelsCatalogSyncService batched = new NovelsCatalogSyncService(apiClient, novelRepository,
-                volumeRepository, fileRepository, new NovelFileNameParser(),
+                volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
                 "https://server.elscione.com" + BASE, 3, true, false, 2, 0.02); // pausa de 1.2s
 
         long start = System.currentTimeMillis();
@@ -270,8 +271,8 @@ class NovelsCatalogSyncServiceTest {
         when(apiClient.listContents(BASE)).thenReturn(List.of(dir(BASE + "NovelA/")));
         when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
         NovelsCatalogSyncService slow = new NovelsCatalogSyncService(apiClient, novelRepository,
-                volumeRepository, fileRepository, new NovelFileNameParser(),
-                "https://server.elscione.com" + BASE, 3, true, false, 1, 10);
+                volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
+                "https://server.elscione.com" + BASE, 3, true, false, 1, 10d);
 
         long start = System.currentTimeMillis();
         slow.startSync();
@@ -291,8 +292,8 @@ class NovelsCatalogSyncServiceTest {
         when(apiClient.listContents(BASE)).thenReturn(List.of(dir(BASE + "NovelA/")));
         when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
         NovelsCatalogSyncService boundary = new NovelsCatalogSyncService(apiClient, novelRepository,
-                volumeRepository, fileRepository, new NovelFileNameParser(),
-                "https://server.elscione.com" + BASE, 3, true, false, 2, 10); // pausa de 10 min reales
+                volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
+                "https://server.elscione.com" + BASE, 3, true, false, 2, 10d); // pausa de 10 min reales
 
         long start = System.currentTimeMillis();
         boundary.startSync();

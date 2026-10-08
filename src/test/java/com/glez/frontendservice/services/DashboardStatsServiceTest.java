@@ -4,8 +4,6 @@ import com.glez.frontendservice.dtos.DashboardStatsDto;
 import com.glez.frontendservice.dtos.NovelsCatalogSyncStatus;
 import com.glez.frontendservice.model.ProcessStep;
 import com.glez.frontendservice.model.ProcessingStatus;
-import com.glez.frontendservice.repository.NovelRepository;
-import com.glez.frontendservice.repository.NovelVolumeRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,10 +41,7 @@ class DashboardStatsServiceTest {
     private NovelsCatalogSyncService catalogSyncService;
 
     @Mock
-    private NovelRepository novelRepository;
-
-    @Mock
-    private NovelVolumeRepository novelVolumeRepository;
+    private CatalogStatsService catalogStatsService;
 
     private JdbcTemplate jdbcTemplate;
     private DashboardStatsService service;
@@ -77,7 +72,7 @@ class DashboardStatsServiceTest {
                 )""");
 
         service = new DashboardStatsService(jdbcTemplate, pipelineOrchestrator, catalogSyncService,
-                novelRepository, novelVolumeRepository);
+                catalogStatsService);
         setField("datasourceUrl", JDBC_URL);
     }
 
@@ -126,8 +121,8 @@ class DashboardStatsServiceTest {
 
         when(pipelineOrchestrator.getRunningBookIds()).thenReturn(Set.of(book2));
         when(catalogSyncService.getStatus()).thenReturn(NovelsCatalogSyncStatus.idle());
-        when(novelRepository.count()).thenReturn(7L);
-        when(novelVolumeRepository.count()).thenReturn(19L);
+        when(catalogStatsService.catalogStats()).thenReturn(
+                new DashboardStatsDto.CatalogStatsDto(7L, 19L));
 
         DashboardStatsDto stats = service.getStats();
 
@@ -161,7 +156,7 @@ class DashboardStatsServiceTest {
         DataSource failingDataSource = mock(DataSource.class);
         when(failingDataSource.getConnection()).thenThrow(new RuntimeException("connection refused"));
         service = new DashboardStatsService(new JdbcTemplate(failingDataSource), pipelineOrchestrator,
-                catalogSyncService, novelRepository, novelVolumeRepository);
+                catalogSyncService, catalogStatsService);
         setField("datasourceUrl", JDBC_URL);
         when(catalogSyncService.getStatus()).thenReturn(NovelsCatalogSyncStatus.idle());
 
@@ -180,8 +175,8 @@ class DashboardStatsServiceTest {
     void emptyDatabaseYieldsZeros() {
         when(pipelineOrchestrator.getRunningBookIds()).thenReturn(Set.of());
         when(catalogSyncService.getStatus()).thenReturn(NovelsCatalogSyncStatus.idle());
-        when(novelRepository.count()).thenReturn(0L);
-        when(novelVolumeRepository.count()).thenReturn(0L);
+        when(catalogStatsService.catalogStats()).thenReturn(
+                new DashboardStatsDto.CatalogStatsDto(0L, 0L));
 
         DashboardStatsDto stats = service.getStats();
 
