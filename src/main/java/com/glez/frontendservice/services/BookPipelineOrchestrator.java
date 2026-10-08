@@ -2,14 +2,15 @@ package com.glez.frontendservice.services;
 
 import com.glez.frontendservice.model.Block;
 import com.glez.frontendservice.model.Book;
-import com.glez.frontendservice.model.Chunks;
 import com.glez.frontendservice.model.ChunkStatus;
+import com.glez.frontendservice.model.Chunks;
 import com.glez.frontendservice.model.ProcessStep;
 import com.glez.frontendservice.model.ProcessTraceEvent;
 import com.glez.frontendservice.model.ProcessingStatus;
 import com.glez.frontendservice.repository.BlockRepository;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.repository.ChunksRepository;
+import com.glez.frontendservice.repository.ChunksRepository.ChunkStatusView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,6 +22,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -139,22 +141,23 @@ public class BookPipelineOrchestrator {
             throw new IllegalStateException("Book " + bookId + " is already being processed");
         }
         try {
-            Book book = bookRepository.findById(bookId)
+            // Light projection (no full_text CLOB) for the entry guards;
+            // the PROCESSING transition is a bulk update.
+            BookRepository.BookStatusView state = bookRepository.findStatusViews(List.of(bookId)).stream()
+                    .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("Book " + bookId + " not found"));
 
-            if (book.getStatus() == ProcessingStatus.COMPLETED) {
+            if (state.getStatus() == ProcessingStatus.COMPLETED) {
                 log.info("Book {} is already completed; nothing to do", bookId);
                 return CompletableFuture.completedFuture(null);
             }
-            if (book.getStatus() == ProcessingStatus.STOPPED) {
+            if (state.getStatus() == ProcessingStatus.STOPPED) {
                 log.info("Book {} is stopped; resume ignored", bookId);
                 return CompletableFuture.completedFuture(null);
             }
 
             String traceId = UUID.randomUUID().toString().replace("-", "");
-            book.setStatus(ProcessingStatus.PROCESSING);
-            book.setLastTraceId(traceId);
-            bookRepository.save(book);
+            bookRepository.updateStatusAndTrace(bookId, ProcessingStatus.PROCESSING, traceId);
 
             runPipeline(bookId, traceId, targetStep, blockIds, manual);
             markAwaitingIfStoppedEarly(bookId, targetStep);
@@ -197,27 +200,24 @@ public class BookPipelineOrchestrator {
     /**
      * When the run stopped at a checkpoint (targetStep before FINALIZE), the
      * book must not stay PROCESSING: mark it AWAITING so the UI reflects that
-     * it is waiting for the user to trigger the next stage.
+     * it is waiting for the user to trigger the next stage. Bulk update:
+     * the book entity (and its CLOB) is not loaded for the transition.
      */
     private void markAwaitingIfStoppedEarly(UUID bookId, ProcessStep targetStep) {
         if (targetStep == ProcessStep.FINALIZE) {
             return;
         }
-        bookRepository.findById(bookId).ifPresent(book -> {
-            if (book.getStatus() == ProcessingStatus.PROCESSING) {
-                book.setStatus(ProcessingStatus.AWAITING);
-                bookRepository.save(book);
-            }
-        });
+        bookRepository.updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.AWAITING);
     }
 
     /**
      * EXTRACT cannot be re-executed (the uploaded file is not persisted),
-     * so it only validates that the extracted text exists.
+     * so it only validates that the extracted text exists. The check runs
+     * in SQL (LENGTH(TRIM(full_text))) so the multi-megabyte CLOB is
+     * never loaded just to test for blankness.
      */
     private void runExtractStep(UUID bookId, String traceId) {
-        Book book = bookRepository.findById(bookId).orElseThrow();
-        if (book.getFullText() == null || book.getFullText().isBlank()) {
+        if (!bookRepository.hasExtractedText(bookId)) {
             ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.EXTRACT, traceId, null);
             failAndAbort(event, new IllegalStateException(
                     "The book has no extracted text. Upload the file again: the original file is not persisted."));
@@ -235,7 +235,7 @@ public class BookPipelineOrchestrator {
             checkStepAttempts(event, manual);
             try {
                 bookProcessingService.splitBookIntoChunks(bookId, blockIds);
-                int count = chunksRepository.findByBook(loadBook(bookId)).size();
+                long count = chunksRepository.countByBookId(bookId);
                 traceService.completeStep(event, count + " chunks created from " + blockIds.size() + " block(s)");
             } catch (RuntimeException e) {
                 failAndAbort(event, e);
@@ -243,7 +243,7 @@ public class BookPipelineOrchestrator {
             return;
         }
 
-        if (!chunksRepository.findByBook(loadBook(bookId)).isEmpty()) {
+        if (chunksRepository.countByBookId(bookId) > 0) {
             traceService.skipStep(bookId, ProcessStep.SPLIT, traceId, "Chunks already exist");
             return;
         }
@@ -253,7 +253,7 @@ public class BookPipelineOrchestrator {
             // Sin selección explícita: si el libro tiene bloques se trocea
             // por bloque (todos); sin bloques, texto completo (legado).
             bookProcessingService.splitBookIntoChunks(bookId, null);
-            int count = chunksRepository.findByBook(loadBook(bookId)).size();
+            long count = chunksRepository.countByBookId(bookId);
             traceService.completeStep(event, count + " chunks created");
         } catch (RuntimeException e) {
             failAndAbort(event, e);
@@ -268,10 +268,13 @@ public class BookPipelineOrchestrator {
      * <p>Attempt accounting counts only GENUINE failures: a run interrupted
      * by a crash or restart does not consume the retry budget, and a
      * chunk's attempts only grow when its translation actually fails.
+     *
+     * <p>The step works on a light (id, status, attempts) projection and
+     * bulk updates: no chunk text is loaded unless it is dispatched for
+     * translation (the translation service re-reads each chunk by id).</p>
      */
     private void runTranslateStep(UUID bookId, String traceId, boolean manual) {
-        Book book = loadBook(bookId);
-        List<Chunks> chunks = chunksRepository.findByBook(book);
+        List<ChunkStatusView> chunks = chunksRepository.findStatusViewsByBookId(bookId);
 
         if (chunks.isEmpty()) {
             ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.TRANSLATE, traceId, null);
@@ -279,7 +282,7 @@ public class BookPipelineOrchestrator {
                     + "; the SPLIT step did not produce any chunk."));
         }
 
-        List<Chunks> pending = chunks.stream()
+        List<ChunkStatusView> pending = chunks.stream()
                 .filter(c -> c.getStatus() == ChunkStatus.AWAITING
                         || c.getStatus() == ChunkStatus.FAILED
                         || c.getStatus() == ChunkStatus.PROCESSING)
@@ -291,14 +294,17 @@ public class BookPipelineOrchestrator {
             return;
         }
 
-        healLegacyChunkAttempts(book, pending);
+        int genuineFailures = traceService.countGenuineAttempts(bookId, ProcessStep.TRANSLATE);
 
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.TRANSLATE, traceId,
                 pending.size() + "/" + chunks.size() + " chunks pending");
         checkStepAttempts(event, manual);
 
-        List<Chunks> exhausted = pending.stream()
-                .filter(c -> c.getAttempts() >= maxAttempts)
+        // Heal inflated legacy counters (only ever reduces) via one bulk
+        // update; the effective attempts are then min(attempts, genuine).
+        chunksRepository.healAttempts(bookId, PENDING_STATUSES, genuineFailures);
+        List<ChunkStatusView> exhausted = pending.stream()
+                .filter(c -> effectiveAttempts(c, genuineFailures) >= maxAttempts)
                 .toList();
         if (!exhausted.isEmpty()) {
             if (manual) {
@@ -311,36 +317,38 @@ public class BookPipelineOrchestrator {
             }
         }
 
-        // Re-queue stale statuses for the async pass; attempts are NOT
-        // consumed upfront anymore (only genuine failures count).
-        for (Chunks chunk : pending) {
-            if (chunk.getStatus() != ChunkStatus.AWAITING) {
-                chunk.setStatus(ChunkStatus.AWAITING);
-                chunksRepository.save(chunk);
-            }
-        }
+        // Re-queue stale statuses for the async pass in one bulk update;
+        // attempts are NOT consumed upfront anymore (genuine failures only).
+        chunksRepository.requeueByStatus(bookId,
+                List.of(ChunkStatus.FAILED, ChunkStatus.PROCESSING), ChunkStatus.AWAITING);
 
         try {
             bookProcessingService.processBookChunksAsync(bookId).join();
         } catch (RuntimeException e) {
-            // The failed statuses roll back with the translation
-            // transaction, so every chunk that is not COMPLETED genuinely
-            // failed in this run: record one attempt for each of them.
-            List<Chunks> failed = chunksRepository.findByBook(loadBook(bookId)).stream()
-                    .filter(c -> c.getStatus() != ChunkStatus.COMPLETED)
-                    .toList();
-            for (Chunks chunk : failed) {
-                chunk.setAttempts(chunk.getAttempts() + 1);
-                chunksRepository.save(chunk);
-            }
-            String detail = !failed.isEmpty()
-                    ? failed.size() + " chunks failed to translate (e.g. chunk " + failed.get(0).getId() + ")"
+            // Chunks are translated OUTSIDE any transaction (each save is
+            // its own short transaction), so every chunk that is not
+            // COMPLETED genuinely failed in this run: record one attempt
+            // for each of them (single bulk update + id scan for the
+            // trace detail).
+            int failedCount = chunksRepository.incrementFailedAttempts(bookId, ChunkStatus.COMPLETED);
+            String detail = failedCount > 0
+                    ? failedCount + " chunks failed to translate (e.g. chunk "
+                            + chunksRepository.findIdsByBookIdAndStatusNot(bookId, ChunkStatus.COMPLETED)
+                            .stream().findFirst().orElse(null) + ")"
                             + (rootCauseMessage(e).map(cause -> ": " + cause).orElse(""))
                     : e.getMessage();
             failAndAbort(event, new IllegalStateException(detail != null ? detail : e.toString(), e));
         }
 
         traceService.completeStep(event, "All chunks translated");
+    }
+
+    private static final List<ChunkStatus> PENDING_STATUSES =
+            List.of(ChunkStatus.AWAITING, ChunkStatus.FAILED, ChunkStatus.PROCESSING);
+
+    /** Post-heal attempt count: the heal bulk update clamps to genuineFailures. */
+    private static int effectiveAttempts(ChunkStatusView chunk, int genuineFailures) {
+        return Math.min(chunk.getAttempts() != null ? chunk.getAttempts() : 0, genuineFailures);
     }
 
     /** Deepest cause message of an exception chain, for the trace detail. */
@@ -351,27 +359,6 @@ public class BookPipelineOrchestrator {
         }
         String message = current.getMessage();
         return message == null ? java.util.Optional.empty() : java.util.Optional.of(message);
-    }
-
-    /**
-     * Heals legacy chunk attempt counters. Attempts used to be incremented
-     * on every started run — including runs interrupted by restarts or
-     * crashes — so books processed before the genuine-failure accounting
-     * can carry inflated values that block the retry guard forever.
-     * Clamps every pending chunk down to the number of genuinely failed
-     * TRANSLATE runs, which is an upper bound of the failures any single
-     * chunk could have lived through. Only ever reduces; idempotent.
-     */
-    private void healLegacyChunkAttempts(Book book, List<Chunks> pending) {
-        int genuineFailures = traceService.countGenuineAttempts(book, ProcessStep.TRANSLATE);
-        for (Chunks chunk : pending) {
-            if (chunk.getAttempts() != null && chunk.getAttempts() > genuineFailures) {
-                log.info("Healing inflated attempts of chunk {}: {} -> {} (book {})",
-                        chunk.getId(), chunk.getAttempts(), genuineFailures, book.getId());
-                chunk.setAttempts(genuineFailures);
-                chunksRepository.save(chunk);
-            }
-        }
     }
 
     /**
@@ -427,15 +414,19 @@ public class BookPipelineOrchestrator {
      * Audio por bloque: un mp3 por cada bloque con chunks traducidos, en
      * orden de lectura. Los bloques con audio ya presente en disco se
      * saltan; el libro se considera con audio completo cuando todos sus
-     * bloques tienen archivo.
+     * bloques tienen archivo. Los chunks de TODOS los bloques se cargan
+     * en una sola consulta (antes: dos por bloque).
      */
     private void runPerBlockAudioStep(Book book, List<Block> blocks, String traceId, boolean manual) {
         UUID bookId = book.getId();
+        Map<UUID, List<Chunks>> chunksByBlock = chunksRepository.findBlockChunksByBookId(bookId).stream()
+                .collect(Collectors.groupingBy(chunk -> chunk.getBlock().getId()));
+
         long pending = blocks.stream()
                 .filter(block -> !blockHasAudioOnDisk(block))
-                .filter(block -> !chunksOf(block).isEmpty())
+                .filter(block -> !chunksByBlock.getOrDefault(block.getId(), List.of()).isEmpty())
                 .count();
-        long allPresent = blocks.stream().filter(block -> blockHasAudioOnDisk(block)).count();
+        long allPresent = blocks.stream().filter(this::blockHasAudioOnDisk).count();
         if (pending == 0 && allPresent == blocks.size()) {
             traceService.skipStep(bookId, ProcessStep.AUDIO, traceId,
                     "All " + blocks.size() + " block audios already generated");
@@ -456,7 +447,7 @@ public class BookPipelineOrchestrator {
             int generated = 0;
             List<String> skipped = new ArrayList<>();
             for (Block block : blocks) {
-                List<Chunks> blockChunks = chunksOf(block);
+                List<Chunks> blockChunks = chunksByBlock.getOrDefault(block.getId(), List.of());
                 if (blockChunks.isEmpty()) {
                     skipped.add(blockLabel(block) + " (sin chunks)");
                     continue;
@@ -501,10 +492,6 @@ public class BookPipelineOrchestrator {
         }
     }
 
-    private List<Chunks> chunksOf(Block block) {
-        return chunksRepository.findByBlockOrderByPositionAsc(block);
-    }
-
     private boolean blockHasAudioOnDisk(Block block) {
         return block.getAudioFilePath() != null && Files.exists(Path.of(block.getAudioFilePath()));
     }
@@ -542,9 +529,11 @@ public class BookPipelineOrchestrator {
         ProcessTraceEvent event = traceService.startStep(bookId, ProcessStep.FINALIZE, traceId, null);
         checkStepAttempts(event, manual);
         try {
-            Book book = loadBook(bookId);
-            book.setStatus(ProcessingStatus.COMPLETED);
-            bookRepository.save(book);
+            // Bulk status transition: the book entity (and its CLOB) is
+            // not loaded to flip the status. The run set PROCESSING at
+            // entry, so the guarded update only skips truly concurrent
+            // status changes.
+            bookRepository.updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.COMPLETED);
             traceService.completeStep(event, "Book processing completed");
         } catch (RuntimeException e) {
             failAndAbort(event, e);
@@ -587,13 +576,9 @@ public class BookPipelineOrchestrator {
 
     private void markBookFailed(UUID bookId, String traceId, Exception cause) {
         try {
-            Book book = bookRepository.findById(bookId).orElse(null);
-            if (book == null) {
-                return;
-            }
-            book.setStatus(ProcessingStatus.FAILED);
-            book.setLastTraceId(traceId);
-            bookRepository.save(book);
+            // Bulk update: no book entity (and no CLOB) is loaded for the
+            // failure marking.
+            bookRepository.updateStatusAndTrace(bookId, ProcessingStatus.FAILED, traceId);
         } catch (Exception e) {
             log.error("Could not persist FAILED status for book {}", bookId, e);
         }

@@ -12,13 +12,38 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    # SQL logging goes to stdout with no level control and adds overhead to
+    # every query; the H2 console (/h2-console) and the in-app log viewer
+    # cover SQL debugging. Set to true only while tuning queries.
+    show-sql: false
+    open-in-view: false
+    properties:
+      # JDBC batching: UUID primary keys are generated client-side, so
+      # insert batching applies to every hot write path (chunk split,
+      # block save, glossary terms, catalog sync upserts).
+      hibernate:
+        jdbc:
+          batch_size: 25
+        order_inserts: true
+        order_updates: true
+  cache:
+    type: caffeine
+    # regexPatterns: enabled cleaning patterns read on EVERY text
+    #   extraction/save (long-lived, explicitly evicted on CRUD).
+    # catalogCounts: novel/volume COUNT(*) for the dashboard (short TTL,
+    #   also evicted when a catalog sync run finishes).
+    cache-names: regexPatterns,catalogCounts
+    caffeine:
+      spec: "maximumSize=500,expireAfterWrite=30s"
   h2:
     console:
       enabled: true
       path: /h2-console
   datasource:
-    url: jdbc:h2:file:./H2-FrontEnd-Service
+    # CACHE_SIZE in KB (default 16384 = 16MB): the H2 file holds ~24MB of
+    # data, so a 64MB page cache keeps the whole hot database (catalog +
+    # chunk texts) in memory instead of re-reading pages from disk.
+    url: jdbc:h2:file:./H2-FrontEnd-Service;CACHE_SIZE=65536
     driverClassName: org.h2.Driver
     username: sa
     password:

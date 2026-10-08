@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Database optimization pass (queries, indexes, caches)**:
+  - **Query-driven composite indexes**, declared on the entities and guaranteed on the long-lived H2 file by the new `DatabaseIndexInitializer` (idempotent `CREATE INDEX IF NOT EXISTS` + `ANALYZE` on startup): `novel(title)`, `blocks(book_id, position)`, `chunks(book_id, status)`, `chunks(block_id, position)` and `process_trace_event(book_id, step, started_at)` — each annotated with the query pattern it serves.
+  - **Caffeine cache layer** (`CacheConfig` + `spring.cache`): `regexPatterns` (cleaning patterns read on every text extraction, evicted by the pattern CRUD) and `catalogCounts` (dashboard novel/volume COUNTs, evicted whenever a catalog sync run finishes), replacing the hand-rolled racy 60-second TTL pattern cache in `TextExtractorService`.
+  - **`OptimizedQueriesTest`**: a `@DataJpaTest` integration suite (11 tests) that exercises every new projection, bulk update and bulk delete against real H2 and asserts the composite indexes exist in the schema.
 - **Shared NVIDIA rate limiter** (`NvidiaRateLimiter`, `app.nvidia.rate-limit-rpm: 30`): token bucket with full initial capacity and one permit every `60/rpm` seconds; `acquire()` blocks (virtual threads park) until quota is free. Applied at both API chokepoints — every model attempt in `NvidiaAiService.callModelWithRotation` (including retries and key rotation) and glossary extraction in `GlossaryService` — so translation, retries and extraction share one orchestrated budget across the whole pipeline. `rpm <= 0` disables the limiter.
 - **Configurable parallel TTS** (`app.audio.tts-concurrency: 3`): `AudioGeneratorService` synthesizes a block's internal ~1000-char TTS fragments concurrently toward the Edge TTS endpoint and merges them in order afterwards.
 - **`ChunkTranslationService`**: dedicated bean for per-chunk translation, invoked through the Spring async proxy.
@@ -15,13 +19,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - **Virtual-thread executor**: `bookProcessingExecutor` switches from a 4–8 platform-thread `ThreadPoolTaskExecutor` to `SimpleAsyncTaskExecutor` with `setVirtualThreads(true)` (Java 21). Pipeline tasks — orchestrator runs, chunk translations, audio — park for free during NVIDIA/Edge-TTS/LLM waits instead of pinning platform threads. The `MdcTaskDecorator` is preserved, so every log line still carries `bookId`/`traceId`/`step` for the Visor de Logs.
-- **Truly parallel chunk translation**: every pending chunk translates on its own virtual thread with the glossary injected, paced by the shared limiter. Per-chunk transaction semantics are unchanged (FAILED-status rollback per chunk, join-based error detection).
+- **Truly parallel chunk translation**: every pending chunk translates on its own virtual thread with the glossary injected, paced by the shared limiter.
+- **LOB-free pipeline reads**: `Book.fullText` (up to ~578 KB per book) used to ride along with every `findById` — orchestrator entry/steps, `startStep`/`skipStep` checkpoints, the `/list` and `/{id}/status` endpoints, startup recovery and the glossary FK link. All of those now read light projections (`findStatusViews`, `findBookListViews`, `hasExtractedText` via `LENGTH(TRIM(full_text))` in SQL) or move state with bulk updates (`updateCheckpoint`, `updateStatusWhen`, `updateStatusAndTrace`, per-block `updateAudioFilePath`); trace attempt counting is a single `COUNT` instead of loading every event, and the glossary links its Book FK via `getReferenceById`.
+- **TRANSLATE step on light projections**: pending-chunk evaluation reads only (id, status, attempts); stale requeue, legacy attempt healing and post-failure accounting are single bulk UPDATEs; the dispatch list is an id-only query. Chunk texts are loaded solely by the translating virtual thread, and the per-block audio step loads all blocks' chunks in ONE query.
+- **No DB transaction around LLM calls**: `translateChunk` and `processBookChunksAsync` no longer declare `@Transactional`, so no Hikari connection stays pinned during the NVIDIA API call (seconds to minutes at 30 RPM); each persistence step runs in its own short transaction. This removes the connection-pool saturation risk of the parallel chunk translation.
+- **N+1 elimination in the novels manager**: one grouped volume-count query per catalog page (was one COUNT per novel), one grouped total/completed chunk-count query per page (was two COUNTs per volume), one `findByVolumeIdIn` for all files (was one query per volume) and batched book status views — no per-volume lazy `Book` load of the `full_text` CLOB anymore.
+- **Batched catalog sync**: volumes and files accumulate and flush in one `saveAllAndFlush` per kind instead of one `saveAndFlush` round-trip per row; novels that disappear from the source are marked with a single bulk UPDATE instead of paging every novel and saving each volume.
+- **JDBC batching + dirty-write hygiene**: `hibernate.jdbc.batch_size=25` with `order_inserts`/`order_updates`, `@DynamicUpdate` on hot entities, and `saveAll` for chunks/blocks/glossary terms (was one `save` per row). Derived `deleteAllBy*` became bulk `deleteBy*InBulk` JPQL deletes (no entity loading before delete), all `@Modifying` operations use `flushAutomatically`/`clearAutomatically` so the persistence context never serves stale rows.
+- **Database/runtime tuning**: `spring.jpa.show-sql: false`, `spring.jpa.open-in-view: false`, and the H2 URL gains `CACHE_SIZE=65536` (64 MB page cache for the ~24 MB database, default was 16 MB).
 
 ### Fixed
 
+- **Re-sync could drop volume metadata**: the batched upsert only persisted brand-new volumes, so the refresh of `label`, `translatorGroup` and the `removedFromSource` reset of existing rows relied on dirty checking and could be silently lost; every touched row is now persisted and flushed explicitly.
 - **Sequential self-invocation defect**: `processBookChunksAsync` called `translateChunkAsync` via `this.`, bypassing the `@Async` proxy — so chunks translated sequentially despite the async annotations. Chunk translation now goes through the `ChunkTranslationService` proxy.
 
-Measured on a two-chunk book: ~44s total with two interleaved virtual threads vs ~88s sequential. 78/78 tests green, including the new `NvidiaRateLimiter` and `ChunkTranslationService` suites.
+Measured on a two-chunk book: ~44s total with two interleaved virtual threads vs ~88s sequential. 78/78 tests green, including the new `NvidiaRateLimiter` and `ChunkTranslationService` suites. Database pass verified with 334/334 tests green (11 of them the new H2 integration suite).
 
 ## Prior work
 

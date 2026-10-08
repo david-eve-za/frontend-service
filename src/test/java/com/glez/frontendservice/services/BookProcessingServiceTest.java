@@ -291,18 +291,19 @@ class BookProcessingServiceTest {
                 throw new RuntimeException("Failed to set activeTasks", e);
             }
 
-            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            when(bookRepository.existsById(bookId)).thenReturn(true);
 
             bookProcessingService.deleteBook(bookId);
 
-            verify(chunksRepository).deleteAllByBook(book);
-            verify(bookRepository).delete(book);
+            // Bulk deletes: no entity (nor CLOB) is loaded for the deletion
+            verify(chunksRepository).deleteByBookIdInBulk(bookId);
+            verify(bookRepository).deleteByIdInBulk(bookId);
         }
 
         @Test
         @DisplayName("Should throw exception when book not found")
         void deleteBook_bookNotFound_throwsException() {
-            when(bookRepository.findById(bookId)).thenReturn(Optional.empty());
+            when(bookRepository.existsById(bookId)).thenReturn(false);
 
             IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, 
                 () -> bookProcessingService.deleteBook(bookId));
@@ -376,14 +377,15 @@ class BookProcessingServiceTest {
             List<String> splitText = List.of("Chunk 1 text", "Chunk 2 text", "Chunk 3 text");
             when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
             when(smartTextSplitter.split(book.getFullText())).thenReturn(splitText);
-            when(chunksRepository.save(any(Chunks.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(chunksRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
             when(bookRepository.save(any(Book.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
             bookProcessingService.splitBookIntoChunks(bookId);
 
-            verify(chunksRepository).deleteAllByBook(book);
+            verify(chunksRepository).deleteByBookIdInBulk(bookId);
             verify(smartTextSplitter).split(book.getFullText());
-            verify(chunksRepository, times(3)).save(any(Chunks.class));
+            // One batched saveAll with all the chunks (instead of one save per chunk)
+            verify(chunksRepository).saveAll(argThat((List<Chunks> list) -> list != null && list.size() == 3));
             verify(bookRepository).save(argThat(b -> b.getStatus() == ProcessingStatus.UPLOADED));
         }
 
@@ -421,10 +423,12 @@ class BookProcessingServiceTest {
             Chunks chunk1 = createChunk(ChunkStatus.AWAITING, 0, null);
             Chunks chunk2 = createChunk(ChunkStatus.AWAITING, 1, null);
             Chunks chunk3 = createChunk(ChunkStatus.COMPLETED, 2, "Already done");
-            List<Chunks> chunks = List.of(chunk1, chunk2, chunk3);
 
             when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
-            when(chunksRepository.findByBook(book)).thenReturn(chunks);
+            // Id-only scan of the AWAITING chunks: no chunk text is loaded
+            // for the dispatch (each chunk re-reads itself by id).
+            when(chunksRepository.findIdsByBookIdAndStatus(bookId, ChunkStatus.AWAITING))
+                    .thenReturn(List.of(chunk1.getId(), chunk2.getId()));
             when(chunkTranslationService.translateChunk(any(UUID.class), any()))
                     .thenReturn(CompletableFuture.completedFuture(null));
 
@@ -447,10 +451,10 @@ class BookProcessingServiceTest {
             Chunks chunk1 = createChunk(ChunkStatus.AWAITING, 0, null);
             Chunks chunk2 = createChunk(ChunkStatus.AWAITING, 1, null);
             Chunks chunk3 = createChunk(ChunkStatus.COMPLETED, 2, "Already done");
-            List<Chunks> chunks = List.of(chunk1, chunk2, chunk3);
 
             when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
-            when(chunksRepository.findByBook(book)).thenReturn(chunks);
+            when(chunksRepository.findIdsByBookIdAndStatus(bookId, ChunkStatus.AWAITING))
+                    .thenReturn(List.of(chunk1.getId(), chunk2.getId()));
 
             when(chunkTranslationService.translateChunk(any(UUID.class), any()))
                     .thenReturn(CompletableFuture.completedFuture(null));
@@ -458,7 +462,7 @@ class BookProcessingServiceTest {
             CompletableFuture<Void> future = bookProcessingService.processBookChunksAsync(bookId);
 
             assertNotNull(future);
-            verify(chunksRepository).findByBook(book);
+            verify(chunksRepository).findIdsByBookIdAndStatus(bookId, ChunkStatus.AWAITING);
         }
 
         @Test

@@ -16,6 +16,9 @@ import java.util.UUID;
  * carpetas distintas (p.ej. raíz y !Yaoi) genera dos entradas.
  */
 @Entity
+// Index for the catalog listing (findNovels sorts by title on every page):
+// turns the full table scan + sort into an ordered index scan.
+@Table(indexes = @Index(name = "idx_novel_title", columnList = "title"))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

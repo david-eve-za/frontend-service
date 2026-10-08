@@ -1,6 +1,5 @@
 package com.glez.frontendservice.controllers;
 
-import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.Novel;
 import com.glez.frontendservice.model.TranslationTerm;
 import com.glez.frontendservice.repository.BookRepository;
@@ -78,11 +77,13 @@ public class GlossaryController {
                 }
                 term.setNovel(novel);
             } else if (bookId != null) {
-                Book book = bookRepository.findById(bookId).orElse(null);
-                if (book == null) {
+                // FK por referencia: cargar el Book completo (con su CLOB
+                // full_text) para enlazar una columna ajena es un costo
+                // desproporcionado; solo se valida la existencia.
+                if (!bookRepository.existsById(bookId)) {
                     return ResponseEntity.notFound().build();
                 }
-                term.setBook(book);
+                term.setBook(bookRepository.getReferenceById(bookId));
             }
             term.setSourceTerm(sourceTerm.trim());
             term.setCreatedAt(Instant.now());

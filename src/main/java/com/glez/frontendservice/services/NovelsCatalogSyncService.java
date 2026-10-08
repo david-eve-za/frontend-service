@@ -13,8 +13,9 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.context.event.EventListener;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -28,6 +29,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -57,6 +59,8 @@ public class NovelsCatalogSyncService {
     private final NovelVolumeRepository volumeRepository;
     private final NovelVolumeFileRepository fileRepository;
     private final NovelFileNameParser fileNameParser;
+    /** Dashboard catalog counts are cached; cleared whenever a sync run ends. */
+    private final CacheManager cacheManager;
     private final String startPath;
     private final String decodedStartPath;
     private final int maxDepth;
@@ -79,6 +83,7 @@ public class NovelsCatalogSyncService {
                                      NovelVolumeRepository volumeRepository,
                                      NovelVolumeFileRepository fileRepository,
                                      NovelFileNameParser fileNameParser,
+                                     CacheManager cacheManager,
                                      @Value("${app.novels.base-url}") String baseUrl,
                                      @Value("${app.novels-manager.sync-max-depth:3}") int maxDepth,
                                      @Value("${app.novels-manager.auto-sync-enabled:true}") boolean autoSyncEnabled,
@@ -90,6 +95,7 @@ public class NovelsCatalogSyncService {
         this.volumeRepository = volumeRepository;
         this.fileRepository = fileRepository;
         this.fileNameParser = fileNameParser;
+        this.cacheManager = cacheManager;
         this.startPath = URI.create(baseUrl).getRawPath();
         this.decodedStartPath = URLDecoder.decode(startPath, StandardCharsets.UTF_8);
         this.maxDepth = maxDepth;
@@ -183,6 +189,24 @@ public class NovelsCatalogSyncService {
         } finally {
             run.finishedAt = java.time.Instant.now();
             run.currentPath = null;
+            evictCatalogCounts();
+        }
+    }
+
+    /**
+     * Invalida el conteo cacheado del dashboard tras cada corrida: los
+     * COUNT(*) de novelas/volúmenes son full scans y el panel los consulta
+     * en cada poll, así que sólo se recalculan cuando el catálogo cambia
+     * (o expira el TTL corto de la caché).
+     */
+    private void evictCatalogCounts() {
+        if (cacheManager == null) {
+            return;
+        }
+        Cache cache = cacheManager.getCache("catalogCounts");
+        if (cache != null) {
+            cache.clear();
+            log.debug("catalogCounts cache evicted after sync run");
         }
     }
 
@@ -343,6 +367,12 @@ public class NovelsCatalogSyncService {
             existingFiles.put(file.getRemoteHref(), file);
         }
 
+        // Batched persistence: new + updated volumes/files accumulate and
+        // flush in ONE saveAll per kind (single transaction + JDBC-batched
+        // statements) instead of one saveAndFlush round-trip per row.
+        List<NovelVolume> volumesToSave = new ArrayList<>();
+        List<NovelVolumeFile> filesToSave = new ArrayList<>(bookFiles.size());
+
         for (ElscioneApiClient.ApiItem item : bookFiles) {
             run.filesSeen.incrementAndGet();
             String fileName = lastDecodedSegment(item.href());
@@ -365,12 +395,16 @@ public class NovelsCatalogSyncService {
                 // the same volume reuse this row instead of duplicating it.
                 volumesByKey.put(key, volume);
             }
+            // Every touched volume is persisted (new AND existing): the
+            // metadata refresh of an existing row must not rely on dirty
+            // checking, which a surrounding test transaction could discard
+            // (and which never runs for detached rows in production).
+            volumesToSave.add(volume);
             volume.setLabel(parsed.label());
             volume.setTranslatorGroup(parsed.translatorGroup());
             volume.setRemovedFromSource(false);
             volume.setUpdatedAt(now);
             run.volumesSeen.incrementAndGet();
-            volumeRepository.saveAndFlush(volume);
 
             NovelVolumeFile file = existingFiles.get(item.href());
             if (file == null) {
@@ -383,45 +417,49 @@ public class NovelsCatalogSyncService {
             file.setSizeBytes(item.size());
             file.setFileName(fileName);
             file.setUpdatedAt(now);
-            fileRepository.saveAndFlush(file);
+            filesToSave.add(file);
         }
+
+        // Flush volumes BEFORE files: brand-new volumes get their
+        // client-generated ids assigned at persist, so the files' FK rows
+        // are complete when their own batch runs. The AND-FLUSH variant
+        // replaces the per-row saveAndFlush of the previous code: the
+        // whole batch is written in one go and no dirty state survives
+        // the method exit unflushed.
+        volumeRepository.saveAllAndFlush(volumesToSave);
+        fileRepository.saveAllAndFlush(filesToSave);
 
         // Volúmenes existentes que ya no están en la fuente: se marcan; se
         // conservan porque pueden tener un Book del pipeline enlazado.
+        Instant markTime = java.time.Instant.now();
+        List<NovelVolume> unvisited = new ArrayList<>();
         for (NovelVolume volume : existingVolumes) {
             if (!seenVolumeKeys.contains(volume.getSourceKey()) && !volume.isRemovedFromSource()) {
                 volume.setRemovedFromSource(true);
-                volume.setUpdatedAt(now);
-                volumeRepository.saveAndFlush(volume);
+                volume.setUpdatedAt(markTime);
+                unvisited.add(volume);
             }
         }
+        volumeRepository.saveAllAndFlush(unvisited);
 
         novelRepository.save(novel);
     }
 
-    /** Novelas (carpetas) que ya no existen en la fuente: sus volúmenes se marcan. */
+    /**
+     * Novelas (carpetas) que ya no existen en la fuente: sus volúmenes se
+     * marcan con UN solo bulk update (antes: paging de todas las novelas
+     * + una consulta de volúmenes y un save por volumen).
+     */
     private void markUnvisitedNovelsRemoved(SyncRun run, Set<String> visitedNovelPaths) {
-        int from = 0;
-        Instant now = java.time.Instant.now();
-        while (true) {
-            List<Novel> page = novelRepository.findAll(PageRequest.of(from, 200)).getContent();
-            if (page.isEmpty()) {
-                break;
-            }
-            for (Novel novel : page) {
-                if (novel.getRemotePath() != null && !visitedNovelPaths.contains(novel.getRemotePath())) {
-                    for (NovelVolume volume : volumeRepository.findByNovel(novel)) {
-                        if (!volume.isRemovedFromSource()) {
-                            volume.setRemovedFromSource(true);
-                            volume.setUpdatedAt(now);
-                            volumeRepository.saveAndFlush(volume);
-                            run.removedVolumes.incrementAndGet();
-                        }
-                    }
-                }
-            }
-            from++;
+        List<UUID> unvisitedIds = novelRepository.findIdAndRemotePath().stream()
+                .filter(view -> !visitedNovelPaths.contains(view.getRemotePath()))
+                .map(NovelRepository.RemotePathView::getId)
+                .toList();
+        if (unvisitedIds.isEmpty()) {
+            return;
         }
+        run.removedVolumes.addAndGet(
+                volumeRepository.markRemovedFromSource(unvisitedIds, java.time.Instant.now()));
     }
 
     private String lastSegment(String href) {

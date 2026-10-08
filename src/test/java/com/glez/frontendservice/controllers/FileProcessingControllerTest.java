@@ -3,6 +3,7 @@ package com.glez.frontendservice.controllers;
 import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.ChunkDto;
 import com.glez.frontendservice.model.PaginatedResponse;
+import com.glez.frontendservice.model.ProcessStep;
 import com.glez.frontendservice.model.ProcessingStatus;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.services.BookProcessingService;
@@ -24,7 +25,6 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -134,6 +134,38 @@ class FileProcessingControllerTest {
         @Test
         @DisplayName("Should return list of all books")
         void getAllBooks_returnsAllBooks() {
+            record View(UUID id, String name, ProcessingStatus status, ProcessStep currentStep,
+                        String lastTraceId, String audioFilePath) implements BookRepository.BookListView {
+                @Override
+                public UUID getId() {
+                    return id;
+                }
+
+                @Override
+                public String getName() {
+                    return name;
+                }
+
+                @Override
+                public ProcessingStatus getStatus() {
+                    return status;
+                }
+
+                @Override
+                public ProcessStep getCurrentStep() {
+                    return currentStep;
+                }
+
+                @Override
+                public String getLastTraceId() {
+                    return lastTraceId;
+                }
+
+                @Override
+                public String getAudioFilePath() {
+                    return audioFilePath;
+                }
+            }
             Book book1 = new Book();
             book1.setId(UUID.randomUUID());
             book1.setName("book1.pdf");
@@ -144,7 +176,9 @@ class FileProcessingControllerTest {
             book2.setName("book2.pdf");
             book2.setStatus(ProcessingStatus.PROCESSING);
 
-            when(bookRepository.findAll()).thenReturn(List.of(book1, book2));
+            when(bookRepository.findBookListViews()).thenReturn(List.of(
+                    new View(book1.getId(), book1.getName(), book1.getStatus(), null, null, null),
+                    new View(book2.getId(), book2.getName(), book2.getStatus(), null, null, null)));
 
             ResponseEntity<List<Map<String, Object>>> response = controller.getAllBooks();
 
@@ -159,7 +193,7 @@ class FileProcessingControllerTest {
         @Test
         @DisplayName("Should return empty list when no books exist")
         void getAllBooks_noBooks_returnsEmptyList() {
-            when(bookRepository.findAll()).thenReturn(List.of());
+            when(bookRepository.findBookListViews()).thenReturn(List.of());
 
             ResponseEntity<List<Map<String, Object>>> response = controller.getAllBooks();
 
@@ -176,7 +210,35 @@ class FileProcessingControllerTest {
         @Test
         @DisplayName("Should return 200 with status for existing book")
         void getBookStatus_existingBook_returnsStatus() {
-            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            record View(UUID id, ProcessingStatus status, ProcessStep currentStep,
+                        String lastTraceId, String audioFilePath) implements BookRepository.BookStatusView {
+                @Override
+                public UUID getId() {
+                    return id;
+                }
+
+                @Override
+                public ProcessingStatus getStatus() {
+                    return status;
+                }
+
+                @Override
+                public ProcessStep getCurrentStep() {
+                    return currentStep;
+                }
+
+                @Override
+                public String getLastTraceId() {
+                    return lastTraceId;
+                }
+
+                @Override
+                public String getAudioFilePath() {
+                    return audioFilePath;
+                }
+            }
+            when(bookRepository.findStatusViews(List.of(bookId))).thenReturn(List.of(
+                    new View(bookId, ProcessingStatus.UPLOADED, null, null, null)));
 
             ResponseEntity<Map<String, Object>> response = controller.getBookStatus(bookId);
 
@@ -189,7 +251,7 @@ class FileProcessingControllerTest {
         @Test
         @DisplayName("Should return 404 for non-existent book")
         void getBookStatus_nonExistentBook_returnsNotFound() {
-            when(bookRepository.findById(bookId)).thenReturn(Optional.empty());
+            when(bookRepository.findStatusViews(List.of(bookId))).thenReturn(List.of());
 
             ResponseEntity<Map<String, Object>> response = controller.getBookStatus(bookId);
 

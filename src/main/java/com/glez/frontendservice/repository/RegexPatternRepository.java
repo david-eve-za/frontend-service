@@ -17,12 +17,18 @@ public interface RegexPatternRepository extends JpaRepository<RegexPattern, UUID
 
     Optional<RegexPattern> findByName(String name);
 
+    /**
+     * Enabled patterns applied on EVERY text extraction/upload. The
+     * "regexPatterns" cache lives at the RegexPatternService layer (single
+     * point, evicted by the CRUD).
+     */
     List<RegexPattern> findByEnabledTrueOrderByOrderIndexAsc();
 
-    Page<RegexPattern> findAll(Pageable pageable);
-
+    /** Enabled patterns of one type (cached at the service layer). */
     @Query("SELECT r FROM RegexPattern r WHERE r.enabled = true AND r.patternType = :type ORDER BY r.orderIndex ASC")
     List<RegexPattern> findByPatternType(@Param("type") RegexPattern.PatternType type);
+
+    Page<RegexPattern> findAll(Pageable pageable);
 
     boolean existsByName(String name);
 }

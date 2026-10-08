@@ -14,6 +14,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -82,6 +83,7 @@ public class GlossaryService {
         try {
             List<TermPair> extracted = extractTerms(book);
             Instant now = Instant.now();
+            List<TranslationTerm> toSave = new ArrayList<>(extracted.size());
             for (TermPair pair : extracted) {
                 if (pair == null || isBlank(pair.source()) || isBlank(pair.target())) {
                     continue;
@@ -96,8 +98,11 @@ public class GlossaryService {
                 term.setTargetTerm(pair.target().trim());
                 term.setCreatedAt(now);
                 term.setUpdatedAt(now);
-                termRepository.save(term);
+                toSave.add(term);
             }
+            // One saveAll: single transaction + JDBC-batched INSERTs
+            // (before: one round-trip per term).
+            termRepository.saveAll(toSave);
             log.info("Extracted {} glossary term(s) for book {}", extracted.size(), bookId);
             return termRepository.findApplicable(novelId, bookId);
         } catch (Exception e) {

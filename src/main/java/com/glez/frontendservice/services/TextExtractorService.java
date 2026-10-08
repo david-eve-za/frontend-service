@@ -23,11 +23,6 @@ public class TextExtractorService {
 
     private final RegexPatternService regexPatternService;
 
-    // Cache for compiled patterns to avoid recompilation
-    private List<RegexPattern> cachedPatterns = null;
-    private long lastCacheRefresh = 0;
-    private static final long CACHE_TTL_MS = 60000; // 1 minute cache
-
     /**
      * Extrae texto de un archivo (PDF u otros formatos soportados por Tika) y lo limpia.
      */
@@ -52,12 +47,18 @@ public class TextExtractorService {
 
     /**
      * Limpia el texto aplicando los patrones configurados desde la base de datos.
+     *
+     * <p>La caché de patrones vive ahora en RegexPatternService (Caffeine,
+     * evictada en cada CRUD de patrones). El caché artesanal anterior era un
+     * campo mutable compartido entre virtual threads (condición de carrera)
+     * y servía patrones obsoletos hasta 60 s después de editarlos desde la
+     * UI; con la evict por escritura los cambios son visibles al instante.</p>
      */
     public String cleanText(String text) {
         if (text == null) return "";
 
         String cleaned = text;
-        List<RegexPattern> patterns = getCachedPatterns();
+        List<RegexPattern> patterns = regexPatternService.getPatternsForTextCleaning();
 
         for (RegexPattern regexPattern : patterns) {
             if (!regexPattern.getEnabled()) continue;
@@ -75,27 +76,5 @@ public class TextExtractorService {
         cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
 
         return cleaned.trim();
-    }
-
-    /**
-     * Obtiene los patrones cacheados, refrescando si es necesario.
-     */
-    private List<RegexPattern> getCachedPatterns() {
-        long now = System.currentTimeMillis();
-        if (cachedPatterns == null || (now - lastCacheRefresh) > CACHE_TTL_MS) {
-            cachedPatterns = regexPatternService.getPatternsForTextCleaning();
-            lastCacheRefresh = now;
-            log.debug("Refreshed regex pattern cache, loaded {} patterns", cachedPatterns.size());
-        }
-        return cachedPatterns;
-    }
-
-    /**
-     * Fuerza la recarga de la caché de patrones.
-     */
-    public void refreshPatternCache() {
-        cachedPatterns = null;
-        lastCacheRefresh = 0;
-        getCachedPatterns();
     }
 }

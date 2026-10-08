@@ -85,7 +85,9 @@ public class FileProcessingController {
     @Operation(summary = "List all books", description = "Retrieves a list of all books with their IDs, status, current step and audio artifact.")
     @GetMapping("/list")
     public ResponseEntity<List<Map<String, Object>>> getAllBooks() {
-        List<Map<String, Object>> books = bookRepository.findAll().stream()
+        // Light projection: the full_text CLOB of every book used to ride
+        // along on every listing (findAll of entities).
+        List<Map<String, Object>> books = bookRepository.findBookListViews().stream()
                 .map(book -> {
                     Map<String, Object> bookMap = new HashMap<>();
                     bookMap.put("id", book.getId());
@@ -103,7 +105,10 @@ public class FileProcessingController {
     @Operation(summary = "Get book status", description = "Retrieves the processing status of a book by its ID.")
     @GetMapping("/{bookId}/status")
     public ResponseEntity<Map<String, Object>> getBookStatus(@PathVariable UUID bookId) {
-        return bookRepository.findById(bookId)
+        // Light projection (polled by the UI during processing): reading the
+        // status must never transfer the full_text CLOB.
+        return bookRepository.findStatusViews(List.of(bookId)).stream()
+                .findFirst()
                 .map(book -> {
                     Map<String, Object> response = new HashMap<>();
                     response.put("bookId", book.getId());

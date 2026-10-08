@@ -16,4 +16,10 @@ public interface NovelVolumeFileRepository extends JpaRepository<NovelVolumeFile
     List<NovelVolumeFile> findByRemoteHrefIn(Collection<String> remoteHrefs);
 
     List<NovelVolumeFile> findByVolumeId(UUID volumeId);
+
+    /**
+     * Files of many volumes in ONE query: replaces the per-volume
+     * findByVolumeId of the novels manager (N+1).
+     */
+    List<NovelVolumeFile> findByVolumeIdIn(Collection<UUID> volumeIds);
 }

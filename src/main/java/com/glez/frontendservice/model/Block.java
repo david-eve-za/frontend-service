@@ -8,7 +8,11 @@ import lombok.NoArgsConstructor;
 import java.util.UUID;
 
 @Entity
-@Table(name = "blocks")
+@org.hibernate.annotations.DynamicUpdate
+@Table(name = "blocks",
+        // Composite index so findByBookIdOrderByPositionAsc is an ordered
+        // index scan instead of FK lookup + in-memory sort.
+        indexes = @Index(name = "idx_blocks_book_position", columnList = "book_id, position"))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -24,7 +28,12 @@ public class Block {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @ManyToOne
+    /**
+     * LAZY: loading the blocks of a book must never drag the Book row
+     * (and its multi-megabyte full_text CLOB) along; every access to the
+     * owning book in the pipeline goes through explicit book loads.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "book_id")
     private Book book;
 

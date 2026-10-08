@@ -14,6 +14,9 @@ import java.util.UUID;
  * the basis for resuming the pipeline from the last valid checkpoint.
  */
 @Entity
+// Composite covering index for countGenuineFailedAttempts (book + step
+// + started_at ordering without loading the events).
+@Table(indexes = @Index(name = "idx_trace_book_step_started", columnList = "book_id, step, started_at"))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -23,7 +26,13 @@ public class ProcessTraceEvent {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @ManyToOne
+    /**
+     * LAZY: trace timelines hold dozens of events per book; eagerly
+     * dragging the Book (and its multi-megabyte full_text CLOB) with
+     * every event row would multiply the read cost for nothing. Only
+     * the FK id is ever read from this association.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "book_id", nullable = false)
     private Book book;
 
