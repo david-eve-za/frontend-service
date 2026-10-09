@@ -8,6 +8,9 @@ import com.glez.frontendservice.repository.BlockRepository;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.repository.ChunksRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -32,6 +35,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class BookProcessingService {
+
+    private static final Logger log = LoggerFactory.getLogger(BookProcessingService.class);
 
     private final BookRepository bookRepository;
     private final TextExtractorService textExtractorService;
@@ -455,7 +460,19 @@ public class BookProcessingService {
         if (chunk.getOriginalText() == null || chunk.getOriginalText().isBlank()) {
             throw new IllegalArgumentException("Chunk " + chunkId + " has no original text to translate.");
         }
-        List<TranslationTerm> glossary = glossaryService.getOrCreateGlossary(book);
-        chunkTranslationService.translateChunk(chunkId, glossary);
+        // Mismo contexto de traza que el pipeline (bookId/traceId/step)
+        // para que la solicitud sea visible y filtrable en el visor de
+        // logs en vivo; el worker asíncrono rellena el suyo por chunk.
+        MDC.put("bookId", bookId.toString());
+        MDC.put("traceId", chunkId.toString());
+        MDC.put("step", "TRANSLATE");
+        try {
+            log.info("Traducción individual solicitada: chunk {} del libro {} ({} caracteres, estado previo: {})",
+                    chunkId, bookId, chunk.getOriginalText().length(), chunk.getStatus());
+            List<TranslationTerm> glossary = glossaryService.getOrCreateGlossary(book);
+            chunkTranslationService.translateChunk(chunkId, glossary);
+        } finally {
+            MDC.clear();
+        }
     }
 }
