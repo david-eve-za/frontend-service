@@ -293,10 +293,12 @@ public class FileProcessingController {
         }
     }
 
-    @Operation(summary = "Get all chunks for a book with pagination", description = "Retrieves a paginated list of all text chunks for a given book ID.")
+    @Operation(summary = "Get all chunks for a book with pagination", description = "Retrieves a paginated list of text chunks "
+            + "for a given book ID in reading order (block position, then chunk position), each with its original and translated "
+            + "text and the metadata of the semantic block it belongs to.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Successfully retrieved paginated chunks",
-                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PaginatedResponse.class))), // Updated schema
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PaginatedResponse.class))),
             @ApiResponse(responseCode = "404", description = "Book not found", content = @Content),
             @ApiResponse(responseCode = "500", description = "Internal server error", content = @Content)
     })
@@ -304,14 +306,60 @@ public class FileProcessingController {
     public ResponseEntity<PaginatedResponse<ChunkDto>> getBookChunks(
             @Parameter(description = "ID of the book to retrieve chunks for", required = true)
             @PathVariable UUID bookId,
-            @PageableDefault(page = 0, size = 10) Pageable pageable) { // Added Pageable parameter
+            @Parameter(description = "Optional comma-separated ids of semantic blocks: when present the view only "
+                    + "includes the chunks of those blocks (translation scope view).")
+            @RequestParam(name = "blocks", required = false) String blockIdsParam,
+            @PageableDefault(page = 0, size = 10) Pageable pageable) {
         try {
-            PaginatedResponse<ChunkDto> chunks = bookProcessingService.getBookChunks(bookId, pageable); // Pass pageable
+            PaginatedResponse<ChunkDto> chunks =
+                    bookProcessingService.getBookChunks(bookId, parseBlockIds(blockIdsParam), pageable);
             return ResponseEntity.ok(chunks);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
         } catch (Exception e) {
             return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    @Operation(summary = "Translate a single chunk on demand",
+            description = "Translates exactly ONE chunk without touching the rest of the book: reuses the book's glossary "
+                    + "and the shared NVIDIA rate limit. A COMPLETED chunk can be re-translated (only its row changes). "
+                    + "Returns 202 immediately: the chunk is marked PROCESSING and COMPLETED/FAILED asynchronously — "
+                    + "poll GET /{bookId}/chunks to see the outcome.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Translation dispatched", content = @Content),
+            @ApiResponse(responseCode = "400", description = "Chunk not found, not owned by the book or without text",
+                    content = @Content),
+            @ApiResponse(responseCode = "404", description = "Book not found", content = @Content),
+            @ApiResponse(responseCode = "409", description = "The book is currently running a pipeline pass", content = @Content)
+    })
+    @PostMapping("/{bookId}/chunks/{chunkId}/translate")
+    public ResponseEntity<Map<String, Object>> translateSingleChunk(
+            @Parameter(description = "ID of the book the chunk belongs to", required = true)
+            @PathVariable UUID bookId,
+            @Parameter(description = "ID of the chunk to translate", required = true)
+            @PathVariable UUID chunkId) {
+        Map<String, Object> response = new HashMap<>();
+        if (bookPipelineOrchestrator.isRunning(bookId)) {
+            response.put("error", "Book " + bookId + " is already being processed.");
+            return ResponseEntity.status(409).body(response);
+        }
+        if (!bookRepository.existsById(bookId)) {
+            response.put("error", "Book " + bookId + " not found.");
+            return ResponseEntity.notFound().build();
+        }
+        try {
+            bookProcessingService.translateSingleChunk(bookId, chunkId);
+            response.put("message", "Translation of chunk " + chunkId + " dispatched.");
+            response.put("bookId", bookId);
+            response.put("chunkId", chunkId);
+            return ResponseEntity.accepted().body(response);
+        } catch (IllegalArgumentException e) {
+            response.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        } catch (Exception e) {
+            response.put("error", "Error starting chunk translation: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
         }
     }
 }

@@ -425,9 +425,9 @@ class FileProcessingControllerTest {
             Page<ChunkDto> chunkPage = new PageImpl<>(List.of(chunk1, chunk2), pageable, 2);
             PaginatedResponse<ChunkDto> paginatedResponse = new PaginatedResponse<>(chunkPage);
 
-            when(bookProcessingService.getBookChunks(bookId, pageable)).thenReturn(paginatedResponse);
+            when(bookProcessingService.getBookChunks(bookId, List.of(), pageable)).thenReturn(paginatedResponse);
 
-            ResponseEntity<PaginatedResponse<ChunkDto>> response = controller.getBookChunks(bookId, pageable);
+            ResponseEntity<PaginatedResponse<ChunkDto>> response = controller.getBookChunks(bookId, null, pageable);
 
             assertEquals(HttpStatus.OK, response.getStatusCode());
             assertNotNull(response.getBody());
@@ -437,12 +437,31 @@ class FileProcessingControllerTest {
         }
 
         @Test
+        @DisplayName("Should filter the view to the given blocks when the blocks param is present")
+        void getBookChunks_withBlocksParam_passesParsedBlockIdsToService() {
+            Pageable pageable = PageRequest.of(0, 10);
+            UUID block1 = UUID.randomUUID();
+            UUID block2 = UUID.randomUUID();
+            PaginatedResponse<ChunkDto> emptyResponse =
+                    new PaginatedResponse<>(new PageImpl<>(List.<ChunkDto>of(), pageable, 0));
+
+            when(bookProcessingService.getBookChunks(bookId, List.of(block1, block2), pageable))
+                    .thenReturn(emptyResponse);
+
+            ResponseEntity<PaginatedResponse<ChunkDto>> response =
+                    controller.getBookChunks(bookId, block1 + "," + block2, pageable);
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            verify(bookProcessingService).getBookChunks(bookId, List.of(block1, block2), pageable);
+        }
+
+        @Test
         @DisplayName("Should return 404 when book not found")
         void getBookChunks_bookNotFound_returnsNotFound() {
             Pageable pageable = PageRequest.of(0, 10);
-            when(bookProcessingService.getBookChunks(bookId, pageable)).thenThrow(new IllegalArgumentException("Book not found"));
+            when(bookProcessingService.getBookChunks(bookId, List.of(), pageable)).thenThrow(new IllegalArgumentException("Book not found"));
 
-            ResponseEntity<PaginatedResponse<ChunkDto>> response = controller.getBookChunks(bookId, pageable);
+            ResponseEntity<PaginatedResponse<ChunkDto>> response = controller.getBookChunks(bookId, null, pageable);
 
             assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         }
@@ -451,11 +470,95 @@ class FileProcessingControllerTest {
         @DisplayName("Should return 500 for general exception")
         void getBookChunks_generalException_returnsInternalServerError() {
             Pageable pageable = PageRequest.of(0, 10);
-            when(bookProcessingService.getBookChunks(bookId, pageable)).thenThrow(new RuntimeException("Unexpected error"));
+            when(bookProcessingService.getBookChunks(bookId, List.of(), pageable)).thenThrow(new RuntimeException("Unexpected error"));
 
-            ResponseEntity<PaginatedResponse<ChunkDto>> response = controller.getBookChunks(bookId, pageable);
+            ResponseEntity<PaginatedResponse<ChunkDto>> response = controller.getBookChunks(bookId, null, pageable);
 
             assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+        }
+    }
+
+    @Nested
+    @DisplayName("translateSingleChunk method tests")
+    class TranslateSingleChunkTests {
+
+        @Test
+        @DisplayName("Should dispatch a single chunk translation and return 202")
+        void translateSingleChunk_validBookAndChunk_returnsAccepted() {
+            UUID chunkId = UUID.randomUUID();
+
+            when(bookPipelineOrchestrator.isRunning(bookId)).thenReturn(false);
+            when(bookRepository.existsById(bookId)).thenReturn(true);
+
+            ResponseEntity<Map<String, Object>> response = controller.translateSingleChunk(bookId, chunkId);
+
+            assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertEquals(chunkId, response.getBody().get("chunkId"));
+            verify(bookProcessingService).translateSingleChunk(bookId, chunkId);
+        }
+
+        @Test
+        @DisplayName("Should return 409 when a pipeline pass is already running for the book")
+        void translateSingleChunk_bookProcessing_returnsConflict() {
+            UUID chunkId = UUID.randomUUID();
+
+            when(bookPipelineOrchestrator.isRunning(bookId)).thenReturn(true);
+
+            ResponseEntity<Map<String, Object>> response = controller.translateSingleChunk(bookId, chunkId);
+
+            assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertTrue(response.getBody().get("error").toString().contains("already being processed"));
+            verify(bookProcessingService, never()).translateSingleChunk(any(), any());
+        }
+
+        @Test
+        @DisplayName("Should return 404 when the book does not exist")
+        void translateSingleChunk_bookNotFound_returnsNotFound() {
+            UUID chunkId = UUID.randomUUID();
+
+            when(bookPipelineOrchestrator.isRunning(bookId)).thenReturn(false);
+            when(bookRepository.existsById(bookId)).thenReturn(false);
+
+            ResponseEntity<Map<String, Object>> response = controller.translateSingleChunk(bookId, chunkId);
+
+            assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+            verify(bookProcessingService, never()).translateSingleChunk(any(), any());
+        }
+
+        @Test
+        @DisplayName("Should return 400 when the chunk does not belong to the book or has no text")
+        void translateSingleChunk_invalidChunk_returnsBadRequest() {
+            UUID chunkId = UUID.randomUUID();
+
+            when(bookPipelineOrchestrator.isRunning(bookId)).thenReturn(false);
+            when(bookRepository.existsById(bookId)).thenReturn(true);
+            doThrow(new IllegalArgumentException("Chunk " + chunkId + " does not belong to book " + bookId + "."))
+                    .when(bookProcessingService).translateSingleChunk(bookId, chunkId);
+
+            ResponseEntity<Map<String, Object>> response = controller.translateSingleChunk(bookId, chunkId);
+
+            assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertTrue(response.getBody().get("error").toString().contains("does not belong"));
+        }
+
+        @Test
+        @DisplayName("Should return 500 for general exception")
+        void translateSingleChunk_generalException_returnsInternalServerError() {
+            UUID chunkId = UUID.randomUUID();
+
+            when(bookPipelineOrchestrator.isRunning(bookId)).thenReturn(false);
+            when(bookRepository.existsById(bookId)).thenReturn(true);
+            doThrow(new RuntimeException("Unexpected error"))
+                    .when(bookProcessingService).translateSingleChunk(bookId, chunkId);
+
+            ResponseEntity<Map<String, Object>> response = controller.translateSingleChunk(bookId, chunkId);
+
+            assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertTrue(response.getBody().get("error").toString().contains("Error starting chunk translation"));
         }
     }
 }

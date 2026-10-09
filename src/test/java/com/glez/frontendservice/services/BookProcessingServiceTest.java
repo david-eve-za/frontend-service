@@ -1,12 +1,14 @@
 package com.glez.frontendservice.services;
 
 import com.glez.frontendservice.components.SmartTextSplitter;
+import com.glez.frontendservice.model.Block;
 import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.ChunkDto;
 import com.glez.frontendservice.model.Chunks;
 import com.glez.frontendservice.model.ChunkStatus;
 import com.glez.frontendservice.model.PaginatedResponse;
 import com.glez.frontendservice.model.ProcessingStatus;
+import com.glez.frontendservice.model.TranslationTerm;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.repository.ChunksRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -482,37 +484,214 @@ class BookProcessingServiceTest {
     class GetBookChunksTests {
 
         @Test
-        @DisplayName("Should return paginated chunks")
-        void getBookChunks_withValidBook_returnsPaginatedChunks() {
+        @DisplayName("Should return paginated chunks with block metadata in reading order")
+        void getBookChunks_withValidBook_returnsPaginatedChunksWithBlockMetadata() {
             Pageable pageable = PageRequest.of(0, 10);
-            Chunks chunk1 = createChunk(ChunkStatus.COMPLETED, 0, "Translated 1");
-            Chunks chunk2 = createChunk(ChunkStatus.PROCESSING, 1, null);
-            Page<Chunks> chunkPage = new PageImpl<>(List.of(chunk1, chunk2), pageable, 2);
+            UUID blockId = UUID.randomUUID();
+            ChunksRepository.ChunkView bound = new TestChunkView(
+                    UUID.randomUUID(), "Original 1", "Translated 1", ChunkStatus.COMPLETED, 0,
+                    blockId, Block.BlockType.CHAPTER, 3);
+            ChunksRepository.ChunkView legacy = new TestChunkView(
+                    UUID.randomUUID(), "Original 2", null, ChunkStatus.AWAITING, 1,
+                    null, null, null);
+            Page<ChunksRepository.ChunkView> viewPage = new PageImpl<>(List.of(bound, legacy), pageable, 2);
 
-            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
-            when(chunksRepository.findByBook(book, pageable)).thenReturn(chunkPage);
+            when(bookRepository.existsById(bookId)).thenReturn(true);
+            when(chunksRepository.findChunkViewsByBookId(bookId, pageable)).thenReturn(viewPage);
 
-            PaginatedResponse<ChunkDto> result = bookProcessingService.getBookChunks(bookId, pageable);
+            PaginatedResponse<ChunkDto> result = bookProcessingService.getBookChunks(bookId, null, pageable);
 
             assertNotNull(result);
             assertEquals(2, result.getContent().size());
-            assertEquals(0, result.getPageNumber());
-            assertEquals(10, result.getPageSize());
-            assertEquals(2, result.getTotalElements());
-            assertEquals(chunk1.getId(), result.getContent().get(0).getId());
-            assertEquals(chunk2.getId(), result.getContent().get(1).getId());
+            assertEquals(bound.getId(), result.getContent().get(0).getId());
+            assertEquals(blockId, result.getContent().get(0).getBlockId());
+            assertEquals("CHAPTER", result.getContent().get(0).getBlockType());
+            assertEquals(3, result.getContent().get(0).getBlockNumber());
+            assertNull(result.getContent().get(1).getBlockId());
+            assertNull(result.getContent().get(1).getBlockType());
+        }
+
+        @Test
+        @DisplayName("Should filter the page to the given blocks")
+        void getBookChunks_withBlockIds_usesBlockFilteredQuery() {
+            Pageable pageable = PageRequest.of(0, 10);
+            UUID blockId = UUID.randomUUID();
+            Page<ChunksRepository.ChunkView> emptyPage =
+                    new PageImpl<>(List.<ChunksRepository.ChunkView>of(), pageable, 0);
+
+            when(bookRepository.existsById(bookId)).thenReturn(true);
+            when(chunksRepository.findChunkViewsByBookIdAndBlockIdIn(bookId, List.of(blockId), pageable))
+                    .thenReturn(emptyPage);
+
+            PaginatedResponse<ChunkDto> result = bookProcessingService.getBookChunks(bookId, List.of(blockId), pageable);
+
+            assertNotNull(result);
+            assertEquals(0, result.getTotalElements());
+            verify(chunksRepository).findChunkViewsByBookIdAndBlockIdIn(bookId, List.of(blockId), pageable);
+            verify(chunksRepository, never()).findChunkViewsByBookId(any(), any());
         }
 
         @Test
         @DisplayName("Should throw exception when book not found")
         void getBookChunks_bookNotFound_throwsException() {
             Pageable pageable = PageRequest.of(0, 10);
-            when(bookRepository.findById(bookId)).thenReturn(Optional.empty());
+            when(bookRepository.existsById(bookId)).thenReturn(false);
 
-            IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, 
-                () -> bookProcessingService.getBookChunks(bookId, pageable));
+            IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> bookProcessingService.getBookChunks(bookId, null, pageable));
 
             assertTrue(exception.getMessage().contains("Book with ID " + bookId + " not found"));
+        }
+    }
+
+    @Nested
+    @DisplayName("translateSingleChunk method tests")
+    class TranslateSingleChunkTests {
+
+        @Test
+        @DisplayName("Should dispatch a single chunk through the translation bean with the book glossary")
+        void translateSingleChunk_validChunk_dispatchesWithGlossary() {
+            UUID chunkId = UUID.randomUUID();
+            Chunks chunk = createChunk(ChunkStatus.AWAITING, 0, null);
+            List<TranslationTerm> glossary = List.of();
+
+            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
+            when(chunksRepository.existsByIdAndBookId(chunkId, bookId)).thenReturn(true);
+            when(glossaryService.getOrCreateGlossary(book)).thenReturn(glossary);
+
+            bookProcessingService.translateSingleChunk(bookId, chunkId);
+
+            verify(chunkTranslationService).translateChunk(chunkId, glossary);
+        }
+
+        @Test
+        @DisplayName("Should allow re-translating a completed chunk (dispatches anyway)")
+        void translateSingleChunk_completedChunk_dispatchesAnyway() {
+            UUID chunkId = UUID.randomUUID();
+            Chunks chunk = createChunk(ChunkStatus.COMPLETED, 0, "Previous translation");
+            List<TranslationTerm> glossary = List.of();
+
+            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
+            when(chunksRepository.existsByIdAndBookId(chunkId, bookId)).thenReturn(true);
+            when(glossaryService.getOrCreateGlossary(book)).thenReturn(glossary);
+
+            bookProcessingService.translateSingleChunk(bookId, chunkId);
+
+            verify(chunkTranslationService).translateChunk(chunkId, glossary);
+        }
+
+        @Test
+        @DisplayName("Should throw when the chunk does not belong to the book")
+        void translateSingleChunk_foreignChunk_throwsException() {
+            UUID chunkId = UUID.randomUUID();
+            Chunks chunk = createChunk(ChunkStatus.AWAITING, 0, null);
+
+            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
+            when(chunksRepository.existsByIdAndBookId(chunkId, bookId)).thenReturn(false);
+
+            IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> bookProcessingService.translateSingleChunk(bookId, chunkId));
+
+            assertTrue(exception.getMessage().contains("does not belong"));
+            verify(chunkTranslationService, never()).translateChunk(any(), any());
+        }
+
+        @Test
+        @DisplayName("Should throw when the chunk has no original text")
+        void translateSingleChunk_noOriginalText_throwsException() {
+            UUID chunkId = UUID.randomUUID();
+            Chunks chunk = createChunk(ChunkStatus.AWAITING, 0, null);
+            chunk.setOriginalText("   ");
+
+            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
+            when(chunksRepository.existsByIdAndBookId(chunkId, bookId)).thenReturn(true);
+
+            IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> bookProcessingService.translateSingleChunk(bookId, chunkId));
+
+            assertTrue(exception.getMessage().contains("no original text"));
+            verify(chunkTranslationService, never()).translateChunk(any(), any());
+        }
+
+        @Test
+        @DisplayName("Should throw when the chunk does not exist")
+        void translateSingleChunk_chunkNotFound_throwsException() {
+            UUID chunkId = UUID.randomUUID();
+
+            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            when(chunksRepository.findById(chunkId)).thenReturn(Optional.empty());
+
+            assertThrows(IllegalArgumentException.class,
+                () -> bookProcessingService.translateSingleChunk(bookId, chunkId));
+            verify(chunkTranslationService, never()).translateChunk(any(), any());
+        }
+    }
+
+    /** ChunkView stub for the light projection (block metadata without loading the block CLOB). */
+    private static class TestChunkView implements ChunksRepository.ChunkView {
+        private final UUID id;
+        private final String originalText;
+        private final String translatedText;
+        private final ChunkStatus status;
+        private final int position;
+        private final UUID blockId;
+        private final Block.BlockType blockType;
+        private final Integer blockNumber;
+
+        TestChunkView(UUID id, String originalText, String translatedText, ChunkStatus status, int position,
+                      UUID blockId, Block.BlockType blockType, Integer blockNumber) {
+            this.id = id;
+            this.originalText = originalText;
+            this.translatedText = translatedText;
+            this.status = status;
+            this.position = position;
+            this.blockId = blockId;
+            this.blockType = blockType;
+            this.blockNumber = blockNumber;
+        }
+
+        @Override
+        public UUID getId() {
+            return id;
+        }
+
+        @Override
+        public String getOriginalText() {
+            return originalText;
+        }
+
+        @Override
+        public String getTranslatedText() {
+            return translatedText;
+        }
+
+        @Override
+        public ChunkStatus getStatus() {
+            return status;
+        }
+
+        @Override
+        public int getPosition() {
+            return position;
+        }
+
+        @Override
+        public UUID getBlockId() {
+            return blockId;
+        }
+
+        @Override
+        public Block.BlockType getBlockType() {
+            return blockType;
+        }
+
+        @Override
+        public Integer getBlockNumber() {
+            return blockNumber;
         }
     }
 
