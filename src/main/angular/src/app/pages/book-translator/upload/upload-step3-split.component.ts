@@ -173,6 +173,12 @@ export class UploadStep3SplitComponent implements OnInit {
     loadingBooks = false;
     loadingText = false;
     saving = false;
+    /**
+     * Confirmación pendiente del guard de cobertura: al guardar se descarta
+     * el texto fuera de los bloques, así que un guardado parcial exige un
+     * segundo clic explícito antes de proceder.
+     */
+    forceSave = false;
     activeIndex = 0;
     selectedBlockType: BlockTypeValue = 'CHAPTER';
 
@@ -268,6 +274,7 @@ export class UploadStep3SplitComponent implements OnInit {
     }
 
     onActiveChange() {
+        this.forceSave = false;
         this.ensureTextLoaded();
     }
 
@@ -317,6 +324,23 @@ export class UploadStep3SplitComponent implements OnInit {
             return;
         }
 
+        const uncovered = this.uncoveredLength(book.text);
+        if (uncovered > 0 && !this.forceSave) {
+            this.forceSave = true;
+            this.messageService.add({
+                severity: 'warn',
+                summary: 'Texto fuera de los bloques',
+                detail:
+                    `Al guardar se descartarían ${uncovered} caracteres ` +
+                    'sin marcar: el texto del documento se reconstruye SOLO ' +
+                    'con el contenido de los bloques. Marca el resto del ' +
+                    'texto o pulsa Guardar de nuevo para confirmar.',
+                life: 10000,
+            });
+            return;
+        }
+        this.forceSave = false;
+
         const blocks = this.parseBlocks(book.text);
         this.saving = true;
         this.uploadService
@@ -325,6 +349,7 @@ export class UploadStep3SplitComponent implements OnInit {
                 next: () => {
                     book.saved = true;
                     this.saving = false;
+                    this.forceSave = false;
                     this.cdr.markForCheck();
                     const nextIndex = this.books.findIndex((b) => !b.saved);
                     if (nextIndex >= 0) {
@@ -345,6 +370,7 @@ export class UploadStep3SplitComponent implements OnInit {
                 },
                 error: () => {
                     this.saving = false;
+                    this.forceSave = false;
                     this.messageService.add({
                         severity: 'error',
                         summary: 'Error',
@@ -502,5 +528,20 @@ export class UploadStep3SplitComponent implements OnInit {
             });
         }
         return blocks;
+    }
+
+    /**
+     * Caracteres (sin espacios) que quedarían fuera de los bloques marcados.
+     * El backend reconstruye el fullText del documento SOLO con el contenido
+     * de los bloques (saveBlocks), así que todo el texto no marcado se
+     * descarta de forma irreversible al guardar: un guardado parcial debe
+     * confirmarse de forma explícita (mismo patrón que parseBlocks).
+     */
+    private uncoveredLength(text: string): number {
+        const outsideBlocks = text.replace(
+            /<<<(PROLOGUE|CHAPTER|EPILOGUE)(?:\s+id="\d+")?>>>([\s\S]*?)<<<\/\1>>>/g,
+            '',
+        );
+        return outsideBlocks.replace(/\s+/g, '').length;
     }
 }

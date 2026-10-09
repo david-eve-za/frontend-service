@@ -203,6 +203,7 @@ nbdist/
 # H2 Database
 H2-FrontEnd-Service*.db
 H2-FrontEnd-Service*.trace.db
+H2-backup-*.zip
 
 # Logs
 logs/*.log
