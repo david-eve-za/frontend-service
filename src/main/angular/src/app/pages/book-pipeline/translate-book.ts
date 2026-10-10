@@ -3,6 +3,7 @@ import {
     OnInit,
     OnDestroy,
     ChangeDetectorRef,
+    signal,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -14,6 +15,7 @@ import { ButtonModule } from 'primeng/button';
 import { TagModule } from 'primeng/tag';
 import { ToastModule } from 'primeng/toast';
 import { PaginatorModule } from 'primeng/paginator';
+import { ProgressBarModule } from 'primeng/progressbar';
 import { MessageService } from 'primeng/api';
 import { HttpErrorResponse } from '@angular/common/http';
 import {
@@ -50,6 +52,7 @@ type TranslationScope = 'full' | 'blocks';
         TagModule,
         ToastModule,
         PaginatorModule,
+        ProgressBarModule,
     ],
     template: `
         <p-toast></p-toast>
@@ -105,6 +108,58 @@ type TranslationScope = 'full' | 'blocks';
                         >{{ completedChunks() }} de
                         {{ page?.totalElements ?? 0 }} chunks traducidos</span
                     >
+                </div>
+            }
+
+            @if (translationRunning()) {
+                <!-- Barra de progreso en tiempo real: aparece mientras la
+                     traducción está activa y se actualiza cada 3 s. -->
+                <div
+                    class="mt-4 p-4 border rounded-lg bg-blue-50 dark:bg-blue-900/20"
+                >
+                    <div
+                        class="flex flex-wrap items-center justify-between gap-2 mb-3"
+                    >
+                        <div class="flex items-center gap-2">
+                            <i
+                                class="pi pi-spin pi-spinner text-blue-500"
+                            ></i>
+                            <span class="font-medium text-blue-700 dark:text-blue-300"
+                                >Traducción en progreso</span
+                            >
+                        </div>
+                        <span class="text-sm text-blue-600 dark:text-blue-400">
+                            {{ translationProgress().completed }} de
+                            {{ translationProgress().total }} chunks
+                            traducidos
+                        </span>
+                    </div>
+                    <p-progressbar
+                        [value]="translationProgress().percent"
+                        [showValue]="true"
+                        styleClass="w-full"
+                        [style]="{ height: '14px' }"
+                    />
+                    @if (translationProgress().processing > 0) {
+                        <div
+                            class="mt-2 text-xs text-blue-600 dark:text-blue-400"
+                        >
+                            <i
+                                class="pi pi-spin pi-spinner"
+                                style="font-size: 0.7rem"
+                            ></i>
+                            Traduciendo
+                            {{ translationProgress().processing }}
+                            chunk(s)...
+                        </div>
+                    }
+                    <div
+                        class="mt-1 text-xs text-blue-500 dark:text-blue-400"
+                    >
+                        Se actualiza automáticamente cada 3 segundos ·
+                        Actualizado:
+                        {{ translationProgress().lastUpdate }}
+                    </div>
                 </div>
             }
 
@@ -405,6 +460,21 @@ export class TranslateBook implements OnInit, OnDestroy {
     private chunkPollTarget: { chunkId: string; attempts: number } | null = null;
     private chunkPollTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // -----------------------------------------------------------------
+    // Barra de progreso de la corrida de traducción (poll cada 3 s).
+    // -----------------------------------------------------------------
+    /** true mientras una corrida de traducción está activa. */
+    translationRunning = signal(false);
+    /** Progreso en vivo: completados, procesando, total, porcentaje. */
+    translationProgress = signal({
+        completed: 0,
+        processing: 0,
+        total: 0,
+        percent: 0,
+        lastUpdate: '--:--:--',
+    });
+    private translationTimer: ReturnType<typeof setInterval> | null = null;
+
     constructor(
         private uploadService: BookTranslatorUploadService,
         private messageService: MessageService,
@@ -453,12 +523,112 @@ export class TranslateBook implements OnInit, OnDestroy {
 
     onBookChange() {
         this.stopChunkPolling();
+        this.stopTranslationPolling();
         this.translatingChunkId = null;
         this.scope = 'full';
         this.blocks = [];
         this.selectedBlockIds = [];
         this.loadChunks(0, PAGE_SIZE);
         this.loadBlocks();
+        this.checkTranslationStatus();
+    }
+
+    /**
+     * Si el libro seleccionado ya está PROCESSING (corrida arrancada
+     * antes, reinicio, etc.), retoma la barra de progreso.
+     */
+    private checkTranslationStatus() {
+        const book = this.selectedBook();
+        if (book && book.status === 'PROCESSING') {
+            this.startTranslationPolling();
+        }
+    }
+
+    /** Inicia el polling de progreso cada 3 s mientras la corrida está activa. */
+    startTranslationPolling() {
+        this.stopTranslationPolling();
+        this.translationRunning.set(true);
+        this.pollTranslationProgress();
+        this.translationTimer = setInterval(
+            () => this.pollTranslationProgress(),
+            3000,
+        );
+    }
+
+    /** Detiene el polling de progreso y oculta la barra. */
+    stopTranslationPolling() {
+        if (this.translationTimer) {
+            clearInterval(this.translationTimer);
+            this.translationTimer = null;
+        }
+        this.translationRunning.set(false);
+    }
+
+    /**
+     * Carga el estado de TODOS los chunks en una sola llamada (size: 200,
+     * el máximo del endpoint) y actualiza la barra. Si ya no hay chunks
+     * PROCESSING ni el libro está PROCESSING, detiene el polling y da un
+     * toast final.
+     */
+    private pollTranslationProgress() {
+        if (!this.selectedBookId) return;
+        this.uploadService
+            .getBookChunks(this.selectedBookId, 0, 200)
+            .subscribe({
+                next: (fullPage: ChunkPage) => {
+                    const total = fullPage.totalElements;
+                    const completed = fullPage.content.filter(
+                        (c) => c.status === 'COMPLETED',
+                    ).length;
+                    const processing = fullPage.content.filter(
+                        (c) => c.status === 'PROCESSING',
+                    ).length;
+                    const percent =
+                        total > 0 ? Math.round((completed / total) * 100) : 0;
+                    const now = new Date();
+                    const time =
+                        now.getHours().toString().padStart(2, '0') +
+                        ':' +
+                        now.getMinutes().toString().padStart(2, '0') +
+                        ':' +
+                        now.getSeconds().toString().padStart(2, '0');
+                    this.translationProgress.set({
+                        completed,
+                        processing,
+                        total,
+                        percent,
+                        lastUpdate: time,
+                    });
+                    this.cdr.markForCheck();
+
+                    // Si ya no hay trabajo en curso, la corrida terminó.
+                    const book = this.selectedBook();
+                    if (
+                        processing === 0 &&
+                        book &&
+                        book.status !== 'PROCESSING'
+                    ) {
+                        this.stopTranslationPolling();
+                        this.loadChunks(0, PAGE_SIZE);
+                        this.loadBooks();
+                        this.cdr.markForCheck();
+                        this.messageService.add({
+                            severity: percent === 100 ? 'success' : 'warn',
+                            summary:
+                                percent === 100
+                                    ? 'Traducción completada'
+                                    : 'Corrida detenida',
+                            detail:
+                                percent === 100
+                                    ? `Todos los ${total} chunks están traducidos.`
+                                    : `La corrida terminó con ${completed}/${total} chunks traducidos.`,
+                        });
+                    }
+                },
+                error: () => {
+                    this.stopTranslationPolling();
+                },
+            });
     }
 
     /** El alcance cambia la vista de chunks: completo = todo el documento. */
@@ -585,6 +755,8 @@ export class TranslateBook implements OnInit, OnDestroy {
                             response.message ||
                             'La traducción se está ejecutando en segundo plano.',
                     });
+                    // Arranca la barra de progreso en tiempo real.
+                    this.startTranslationPolling();
                     // Los chunks pueden haberse regenerado (modo bloques).
                     this.loadChunks(0, this.page?.pageSize ?? PAGE_SIZE);
                     this.cdr.markForCheck();
@@ -735,6 +907,7 @@ export class TranslateBook implements OnInit, OnDestroy {
 
     ngOnDestroy() {
         this.stopChunkPolling();
+        this.stopTranslationPolling();
     }
 
     private loadBlocks() {
