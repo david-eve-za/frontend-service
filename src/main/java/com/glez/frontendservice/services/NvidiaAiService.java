@@ -77,6 +77,15 @@ public class NvidiaAiService {
         this.expansionFactor = expansionFactor;
     }
 
+    /**
+     * Llama al modelo activo de la rotación con reintentos/rotación por
+     * fallos transitorios. Ciclo de vida observable en el visor/histórico
+     * de logs: DEBUG antes de cada intento, INFO con el resultado (modelo,
+     * caracteres de respuesta, duración, tope de salida), WARN en cada
+     * fallo reintentable con rotación — y el truncate/length sube como
+     * {@link TranslationTruncatedException} para que el llamador re-divida
+     * la pieza.
+     */
     public String callModelWithRotation(String prompt) {
         int attempts = 0;
         int totalModels = modelNames.size();
@@ -86,6 +95,9 @@ public class NvidiaAiService {
             // Cada intento es una solicitud a la API: respeta la cuota
             // global (RPM) antes de disparar la llamada.
             rateLimiter.acquire();
+            long callStart = System.currentTimeMillis();
+            log.debug("[llm] Llamando al modelo {} (prompt de {} caracteres, intento {}/{})",
+                    currentModel, prompt.length(), attempts + 1, totalModels * maxRetries);
             try {
                 ChatClient client = ChatClient.create(chatModel);
                 ChatResponse response = client.prompt()
@@ -111,7 +123,11 @@ public class NvidiaAiService {
                                 "Response truncated by the model output token limit (finish_reason="
                                         + finishReasonOf(response) + ") for model " + currentModel);
                     }
-                    return response.getResult().getOutput().getText();
+                    String text = response.getResult().getOutput().getText();
+                    log.info("[llm] Respuesta de {}: {} caracteres en {} ms (tope de salida: {} tokens, prompt de {} caracteres)",
+                            currentModel, text != null ? text.length() : 0,
+                            System.currentTimeMillis() - callStart, maxOutputTokens, prompt.length());
+                    return text;
                 }
                 throw new IllegalStateException("Empty response from model: " + currentModel);
 
@@ -119,6 +135,8 @@ public class NvidiaAiService {
                 throw e;
             } catch (Exception e) {
                 if (isRetryableError(e)) {
+                    log.warn("[llm] Fallo reintentable con el modelo {} tras {} ms: {}. Rotando al siguiente modelo",
+                            currentModel, System.currentTimeMillis() - callStart, e.getMessage());
                     rotateModel();
                     attempts++;
                 } else {
