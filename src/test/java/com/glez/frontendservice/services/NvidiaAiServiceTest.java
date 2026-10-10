@@ -21,8 +21,10 @@ class NvidiaAiServiceTest {
 
     @BeforeEach
     void setUp() {
-        // We don't need to mock the ChatModel for testing private methods
-        nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3, rateLimiter);
+        // We don't need to mock the ChatModel for testing private methods.
+        // Presupuesto de salida por defecto: (8192-1024)*3.5/1.15 ≈ 21.8K chars.
+        nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3, rateLimiter,
+                8192, 1024, 3.5, 1.15);
     }
 
     @Nested
@@ -245,6 +247,186 @@ class NvidiaAiServiceTest {
             assertTrue(prompt.contains("WORLD-CLASS TRANSLATOR and a hyper-meticulous LITERARY EDITOR"),
                     "The role/style guidance must always be present to avoid literal translations");
             assertTrue(prompt.contains("fluent and idiomatic in es"));
+        }
+    }
+
+    @Nested
+    @DisplayName("Output budget estimation tests")
+    class OutputBudgetEstimationTests {
+
+        @Test
+        @DisplayName("maxPieceChars derives from the safe output budget and the heuristics")
+        void estimateMaxPieceChars_appliesTheFormula() {
+            // (8192 - 1024) * 3.5 / 1.15 = 21818 (con los valores por defecto)
+            assertEquals(21_815, nvidiaAiService.estimateMaxPieceChars());
+        }
+
+        @Test
+        @DisplayName("A tighter budget yields proportionally smaller pieces")
+        void estimateMaxPieceChars_scalesWithTheBudget() {
+            NvidiaAiService tiny = new NvidiaAiService(null, "m", 1, rateLimiter,
+                    2_048, 1_024, 3.5, 1.15);
+            assertEquals(3_116, tiny.estimateMaxPieceChars());
+        }
+
+        @Test
+        @DisplayName("Projected output tokens apply chars-per-token and expansion")
+        void estimateProjectedOutputTokens_appliesTheHeuristics() {
+            // 21818 chars / 3.5 * 1.15 = 7167.9 -> 7168 tokens
+            assertEquals(7_169, nvidiaAiService.estimateProjectedOutputTokens(21_818));
+        }
+    }
+
+    @Nested
+    @DisplayName("Output budget splitting tests")
+    class OutputBudgetSplittingTests {
+
+        private static final int BUDGET = 100;
+
+        @Test
+        @DisplayName("A text that fits the budget returns a single paragraph piece")
+        void split_smallText_singlePiece() {
+            var pieces = nvidiaAiService.splitForOutputBudget("Hello\n\nworld", BUDGET);
+            assertEquals(1, pieces.size());
+            assertEquals("Hello\n\nworld", pieces.get(0).text());
+            assertFalse(pieces.get(0).joinWithSpace());
+        }
+
+        @Test
+        @DisplayName("Cuts happen ONLY at paragraph boundaries and content is preserved")
+        void split_multiParagraph_cutAtParagraphs() {
+            String text = "a".repeat(40) + "\n\n" + "b".repeat(40) + "\n\n" + "c".repeat(40);
+            var pieces = nvidiaAiService.splitForOutputBudget(text, BUDGET);
+
+            assertEquals(2, pieces.size());
+            assertFalse(pieces.get(0).joinWithSpace());
+            assertFalse(pieces.get(1).joinWithSpace());
+            // Re-ensamblado fiel: las piezas reconstruyen el original.
+            assertEquals(text, pieces.stream().map(p -> p.text())
+                    .reduce((x, y) -> x + "\n\n" + y).orElseThrow());
+            // Cada pieza respeta el presupuesto.
+            for (var piece : pieces) {
+                assertTrue(piece.text().length() <= BUDGET);
+            }
+        }
+
+        @Test
+        @DisplayName("A giant paragraph without paragraph breaks cuts at sentence boundaries")
+        void split_giantParagraph_sentenceCutsMarkedWithSpaceJoin() {
+            String text = ("Sentence one ends here. " + "And another one follows. ").repeat(10);
+
+            var pieces = nvidiaAiService.splitForOutputBudget(text, BUDGET);
+
+            assertTrue(pieces.size() > 1);
+            for (var piece : pieces) {
+                assertTrue(piece.text().length() <= BUDGET);
+                assertTrue(piece.joinWithSpace(), "Los cortes intra-párrafo re-ensamblan con espacio");
+            }
+            // El re-ensamblado con espacios reconstruye el original sin perder contenido.
+            String rejoined = pieces.stream().map(p -> p.text())
+                    .reduce((x, y) -> x + " " + y).orElseThrow();
+            assertEquals(text.strip().replaceAll("\\s+", " "),
+                    rejoined.replaceAll("\\s+", " "));
+        }
+
+        @Test
+        @DisplayName("Blank or empty text degrades to a single piece without breaking")
+        void split_blankText_singleEmptyPiece() {
+            var pieces = nvidiaAiService.splitForOutputBudget("   ", BUDGET);
+            assertEquals(1, pieces.size());
+        }
+    }
+
+    @Nested
+    @DisplayName("Budgeted translation orchestration tests")
+    class BudgetedTranslationOrchestrationTests {
+
+        /** Seam: cuenta y sirve las llamadas al modelo sin tocar el HTTP real. */
+        private java.util.List<String> servedPrompts = new java.util.ArrayList<>();
+
+        private NvidiaAiService serviceWithCountingSeam(java.util.function.Function<String, String> responder) {
+            servedPrompts = new java.util.ArrayList<>();
+            return new NvidiaAiService(null, "m", 1, rateLimiter, 200, 50, 10.0, 1.0) {
+                @Override
+                public String callModelWithRotation(String prompt) {
+                    servedPrompts.add(prompt);
+                    return responder.apply(prompt);
+                }
+            };
+        }
+
+        @Test
+        @DisplayName("A text within the budget translates in a single model call")
+        void translate_smallText_singleCall() {
+            NvidiaAiService service = serviceWithCountingSeam(p -> "TRAD");
+            String out = service.translateChunk("Hello world", "en", "es", java.util.List.of());
+
+            assertEquals("TRAD", out);
+            assertEquals(1, servedPrompts.size());
+        }
+
+        @Test
+        @DisplayName("An oversized multi-paragraph text splits and rejoins with paragraph breaks")
+        void translate_oversizedText_splitsAndJoinsWithParagraphs() {
+            // Presupuesto del seam: (200-50)*10/1.0 = 1500 chars.
+            String text = "a".repeat(900) + "\n\n" + "b".repeat(900);
+            NvidiaAiService service = serviceWithCountingSeam(p -> "T" + servedPrompts.size());
+
+            String out = service.translateChunk(text, "en", "es", java.util.List.of());
+
+            assertEquals(2, servedPrompts.size(), "Una llamada por pieza");
+            assertEquals("T1\n\nT2", out);
+            assertTrue(servedPrompts.get(0).contains("a".repeat(900)));
+            assertTrue(servedPrompts.get(1).contains("b".repeat(900)));
+        }
+
+        @Test
+        @DisplayName("A truncation self-heals: the piece is re-split and retried")
+        void translate_truncatedPiece_selfHealsByReSplitting() {
+            // Pieza de ~1400 chars (cabe en el presupuesto de 1500 y supera
+            // el piso de auto-sanación de 1000), pero el modelo trunca la
+            // primera respuesta: se re-divide y reintenta.
+            String text = "x".repeat(600) + ". " + "y".repeat(600) + ". " + "z".repeat(200);
+            java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, 200, 50, 10.0, 1.0) {
+                @Override
+                public String callModelWithRotation(String prompt) {
+                    if (calls.incrementAndGet() == 1) {
+                        throw new NvidiaAiService.TranslationTruncatedException("length");
+                    }
+                    return "OK[" + calls.get() + "]";
+                }
+            };
+
+            String out = service.translateChunk(text, "en", "es", java.util.List.of());
+
+            assertTrue(calls.get() > 1, "La pieza truncada se re-dividió y reintentó");
+            assertTrue(out.startsWith("OK["), "El reintentó produce traducción: " + out);
+        }
+
+        @Test
+        @DisplayName("A truncation below the self-healing floor propagates visibly")
+        void translate_truncatedTinyPiece_failsVisibly() {
+            String text = "tiny text";
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, 200, 50, 10.0, 1.0) {
+                @Override
+                public String callModelWithRotation(String prompt) {
+                    throw new NvidiaAiService.TranslationTruncatedException("length");
+                }
+            };
+
+            assertThrows(NvidiaAiService.TranslationTruncatedException.class,
+                    () -> service.translateChunk(text, "en", "es", java.util.List.of()));
+        }
+
+        @Test
+        @DisplayName("A truncated response does not waste rotation retries")
+        void truncatedException_isNotRotationRetryable() {
+            Exception e = new NvidiaAiService.TranslationTruncatedException(
+                    "Response truncated by the model output token limit");
+
+            assertFalse(invokeIsRetryableError(e),
+                    "Reintentar el mismo prompt sobredimensionado solo quemaría cuota");
         }
     }
 }

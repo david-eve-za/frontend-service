@@ -84,13 +84,31 @@ app:
   nvidia:
     # Modelos vivos en integrate.api.nvidia.com (los anteriores llegaron a EOL):
     # openai/gpt-oss-20b traduce limpio; nemotron-3-super como respaldo en rotación.
-    models: "openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b"
+    models: "openai/gpt-oss-120b,nvidia/nemotron-3-super-120b-a12b"
     max-retries: 3
     # Cuota de la API de NVIDIA en solicitudes por minuto. El pipeline
     # completo (traducción con reintentos/rotación y extracción del
     # glosario) pasa por este limitador: los virtual threads aparcan
     # gratis mientras esperan cupo.
     rate-limit-rpm: 30
+    # Estrategia de presupuesto de SALIDA: el límite que corrompe la
+    # traducción no es el input (131K de contexto) sino los tokens que el
+    # modelo puede RESPONDER (traducción + razonamiento cuentan juntos).
+    # El texto se divide en piezas de hasta (max-output-tokens - reserve)
+    # * chars-per-token / expansion-factor caracteres para que la
+    # respuesta proyectada nunca sature el cupo, cortando SIEMPRE en
+    # fronteras de párrafo; si aún así el modelo trunca (finish_reason
+    # = length), la pieza se re-divide a la mitad automáticamente.
+    max-output-tokens: 8192
+    # Margen que se descuenta del cupo para el razonamiento interno del
+    # modelo antes de estimar la traducción visible.
+    reasoning-reserve-tokens: 1024
+    # Heurística conservadora de caracteres por token para el idioma de
+    # SALIDA (el español rinde ~3.5; inglés ~4).
+    chars-per-token: 3.5
+    # La traducción al español expande ~10-15% el texto origen; el
+    # presupuesto se calcula con este factor para no quedarse corto.
+    translation-expansion-factor: 1.15
   nlp:
     model-path: classpath:/model
     models:

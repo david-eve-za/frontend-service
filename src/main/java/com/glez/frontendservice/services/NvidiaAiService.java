@@ -1,6 +1,8 @@
 package com.glez.frontendservice.services;
 
 import com.openai.errors.OpenAIIoException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -8,24 +10,60 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Traducción vía la API de NVIDIA con tres salvaguardas:
+ *
+ * <p><b>Presupuesto de salida</b> — el límite que corrompe una traducción
+ * no es el input (contexto de 131K) sino los tokens que el modelo puede
+ * <i>responder</i>: la traducción visible y el razonamiento interno del
+ * modelo comparten el mismo cupo de salida. {@link #translateChunk} estima
+ * la respuesta proyectada y divide el texto en piezas que caben
+ * cómodamente en el presupuesto, cortando SIEMPRE en fronteras de párrafo
+ * (los saltos alimentan la vista paralela, el TTS y el manuscrito);
+ * cada pieza se traduce en su propia llamada y se re-ensambla fielmente.
+ * Si a pesar de la estimación el modelo trunca la respuesta
+ * ({@code finish_reason=length}), la pieza se re-divide a la mitad
+ * automáticamente hasta el piso {@link #MIN_SELF_HEAL_PIECE_CHARS},
+ * donde el fallo se propaga visiblemente en vez de persistir una
+ * traducción corrupta.</p>
+ */
 @Service
 public class NvidiaAiService {
+
+    private static final Logger log = LoggerFactory.getLogger(NvidiaAiService.class);
+
+    /**
+     * Piso de la auto-sanación: por debajo de este tamaño una pieza que
+     * aún se trunca indica un cupo de salida roto (o un razonamiento
+     * desbocado) — re-dividir más no ayudaría, así que el fallo sube y el
+     * chunk queda FAILED visiblemente.
+     */
+    static final int MIN_SELF_HEAL_PIECE_CHARS = 1_000;
 
     private final OpenAiChatModel chatModel;
     private final List<String> modelNames;
     private final AtomicInteger currentModelIndex = new AtomicInteger(0);
     private final int maxRetries;
     private final NvidiaRateLimiter rateLimiter;
+    private final int maxOutputTokens;
+    private final int reasoningReserveTokens;
+    private final double charsPerToken;
+    private final double expansionFactor;
 
     public NvidiaAiService(
             OpenAiChatModel chatModel,
             @Value("${app.nvidia.models}") String models,
             @Value("${app.nvidia.max-retries:3}") int maxRetries,
-            NvidiaRateLimiter rateLimiter) {
+            NvidiaRateLimiter rateLimiter,
+            @Value("${app.nvidia.max-output-tokens:8192}") int maxOutputTokens,
+            @Value("${app.nvidia.reasoning-reserve-tokens:1024}") int reasoningReserveTokens,
+            @Value("${app.nvidia.chars-per-token:3.5}") double charsPerToken,
+            @Value("${app.nvidia.translation-expansion-factor:1.15}") double expansionFactor) {
         this.chatModel = chatModel;
         this.modelNames = Arrays.stream(models.split(","))
                 .map(String::trim)
@@ -33,6 +71,10 @@ public class NvidiaAiService {
                 .toList();
         this.maxRetries = maxRetries;
         this.rateLimiter = rateLimiter;
+        this.maxOutputTokens = maxOutputTokens;
+        this.reasoningReserveTokens = reasoningReserveTokens;
+        this.charsPerToken = charsPerToken;
+        this.expansionFactor = expansionFactor;
     }
 
     public String callModelWithRotation(String prompt) {
@@ -51,16 +93,30 @@ public class NvidiaAiService {
                         .options(OpenAiChatOptions.builder()
                                 .model(currentModel)
                                 .temperature(0.2)
-                                .topP(0.95))
+                                .topP(0.95)
+                                // Tope EXPLÍCITO de salida: el límite del
+                                // modelo nunca se descubre por respuesta
+                                // cortada a ciegas.
+                                .maxTokens(maxOutputTokens))
                         .call()
                         .chatResponse();
 
                 if (response != null && response.getResult() != null
                         && response.getResult().getOutput() != null) {
+                    if (wasTruncated(response)) {
+                        // NO rota el modelo: reintentar el mismo prompt
+                        // sobredimensionado solo quemaría cuota — el
+                        // llamador re-divide la pieza (auto-sanación).
+                        throw new TranslationTruncatedException(
+                                "Response truncated by the model output token limit (finish_reason="
+                                        + finishReasonOf(response) + ") for model " + currentModel);
+                    }
                     return response.getResult().getOutput().getText();
                 }
                 throw new IllegalStateException("Empty response from model: " + currentModel);
 
+            } catch (TranslationTruncatedException e) {
+                throw e;
             } catch (Exception e) {
                 if (isRetryableError(e)) {
                     rotateModel();
@@ -71,6 +127,22 @@ public class NvidiaAiService {
             }
         }
         throw new RuntimeException("All NVIDIA models exhausted after " + attempts + " attempts");
+    }
+
+    /** {@code finish_reason=length}: la respuesta se cortó por el tope de salida. */
+    private static boolean wasTruncated(ChatResponse response) {
+        String finishReason = finishReasonOf(response);
+        return finishReason != null && finishReason.toLowerCase().contains("length");
+    }
+
+    private static String finishReasonOf(ChatResponse response) {
+        try {
+            return response.getResult().getMetadata() != null
+                    ? response.getResult().getMetadata().getFinishReason()
+                    : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private boolean isRetryableError(Exception e) {
@@ -105,11 +177,189 @@ public class NvidiaAiService {
      * Traduce con el glosario de la serie/libro inyectado en el prompt:
      * los términos con traducción establecida deben respetarse y el
      * estilo prima la naturalidad sobre la literalidad.
+     *
+     * <p>Estrategia de presupuesto de salida: si la respuesta proyectada
+     * del texto completo excede el cupo del modelo, el texto se divide
+     * en piezas que caben cómodamente (ver {@link #splitForOutputBudget})
+     * y cada pieza se traduce en su propia llamada con el MISMO glosario,
+     * re-ensamblando después con los separadores originales.</p>
      */
     public String translateChunk(String text, String sourceLang, String targetLang,
                                   List<com.glez.frontendservice.model.TranslationTerm> glossary) {
+        int maxPieceChars = estimateMaxPieceChars();
+        if (text.length() <= maxPieceChars) {
+            // Caso común: la respuesta proyectada cabe en una sola llamada.
+            return translateWithBudget(text, sourceLang, targetLang, glossary);
+        }
+        int projectedTokens = estimateProjectedOutputTokens(text.length());
+        List<Piece> pieces = splitForOutputBudget(text, maxPieceChars);
+        log.info("[traducción] Texto de {} caracteres excede el presupuesto de salida "
+                        + "(≈{} tokens proyectados > {} disponibles): dividiendo en {} piezas de ≤{} caracteres",
+                text.length(), projectedTokens, maxOutputTokens - reasoningReserveTokens,
+                pieces.size(), maxPieceChars);
+        StringBuilder translated = new StringBuilder(Math.max(text.length() * 2, 64));
+        for (int i = 0; i < pieces.size(); i++) {
+            Piece piece = pieces.get(i);
+            log.debug("[traducción] Pieza {}/{}: {} caracteres", i + 1, pieces.size(), piece.text().length());
+            String pieceResult = translateWithBudget(piece.text(), sourceLang, targetLang, glossary);
+            if (i > 0) {
+                // Frontera real de párrafo => "\n\n"; corte forzado dentro
+                // de un párrafo gigante => " " (no se inventan saltos).
+                translated.append(piece.joinWithSpace() ? ' ' : "\n\n");
+            }
+            translated.append(pieceResult.strip());
+        }
+        return translated.toString();
+    }
+
+    /**
+     * Traduce UNA pieza con auto-sanación: si el modelo trunca la
+     * respuesta ({@code finish_reason=length}) la pieza se re-divide a la
+     * mitad y se reintenta recursivamente — cada nivel garantiza piezas
+     * estrictamente más pequeñas, con piso en
+     * {@link #MIN_SELF_HEAL_PIECE_CHARS}: bajo el piso el fallo sube sin
+     * más reintentos (el chunk queda FAILED visiblemente en vez de
+     * persistir una traducción corrupta).
+     */
+    private String translateWithBudget(String text, String sourceLang, String targetLang,
+                                        List<com.glez.frontendservice.model.TranslationTerm> glossary) {
         String prompt = buildTranslationPrompt(sourceLang, targetLang, text, glossary);
-        return callModelWithRotation(prompt);
+        try {
+            return callModelWithRotation(prompt);
+        } catch (TranslationTruncatedException e) {
+            if (text.length() <= MIN_SELF_HEAL_PIECE_CHARS) {
+                throw e;
+            }
+            log.warn("[traducción] Respuesta truncada por el límite de salida en una pieza de {} caracteres: "
+                    + "re-dividiendo a la mitad y reintentando", text.length());
+            List<Piece> halves = splitForOutputBudget(text, Math.max(1, text.length() / 2));
+            StringBuilder joined = new StringBuilder(Math.max(text.length() * 2, 64));
+            for (int i = 0; i < halves.size(); i++) {
+                Piece half = halves.get(i);
+                String halfResult = translateWithBudget(half.text(), sourceLang, targetLang, glossary);
+                if (i > 0) {
+                    joined.append(half.joinWithSpace() ? ' ' : "\n\n");
+                }
+                joined.append(halfResult.strip());
+            }
+            return joined.toString();
+        }
+    }
+
+    /**
+     * Tamaño máximo de pieza en CARACTERES para el presupuesto de salida:
+     * {@code (max-output-tokens - reasoning-reserve) * chars-per-token /
+     * expansion-factor}. Heurística deliberadamente conservadora — una
+     * sobre-división es inofensiva (piezas secuenciales con el mismo
+     * glosario); una sub-división corrompe la respuesta.
+     */
+    int estimateMaxPieceChars() {
+        int safeOutputTokens = Math.max(1, maxOutputTokens - reasoningReserveTokens);
+        return (int) Math.max(1, (safeOutputTokens * charsPerToken) / expansionFactor);
+    }
+
+    /** Tokens de respuesta proyectados para un texto de los caracteres dados. */
+    int estimateProjectedOutputTokens(int textChars) {
+        return (int) Math.ceil((textChars / charsPerToken) * expansionFactor);
+    }
+
+    /**
+     * Divide el texto en piezas de a lo sumo {@code maxPieceChars}
+     * caracteres, cortando SIEMPRE en fronteras de párrafo: cada pieza
+     * normal ({@code joinWithSpace=false}) re-ensambla con "\n\n". El caso
+     * degenerado de un párrafo gigante (sin "\n\n") se corta en fronteras
+     * de oración ('.', '!', '?', salto de línea) y sus sub-piezas
+     * ({@code joinWithSpace=true}) re-ensamblan con " " para no inventar
+     * saltos de párrafo que el autor no escribió; el corte duro a
+     * {@code maxPieceChars} es el último recurso.
+     */
+    List<Piece> splitForOutputBudget(String text, int maxPieceChars) {
+        List<Piece> pieces = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String paragraph : text.split("\n\n")) {
+            String trimmed = paragraph.strip();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            if (trimmed.length() > maxPieceChars) {
+                flushCurrentPiece(current, pieces);
+                pieces.addAll(splitOversizedParagraph(trimmed, maxPieceChars));
+                continue;
+            }
+            if (current.length() > 0 && current.length() + 2 + trimmed.length() > maxPieceChars) {
+                flushCurrentPiece(current, pieces);
+            }
+            if (current.length() > 0) {
+                current.append("\n\n");
+            }
+            current.append(trimmed);
+        }
+        flushCurrentPiece(current, pieces);
+        if (pieces.isEmpty()) {
+            // Texto vacío o solo espacios: el flujo lo valida aguas
+            // arriba, pero la estrategia no debe reventar por una pieza nula.
+            pieces.add(new Piece(text, false));
+        }
+        return pieces;
+    }
+
+    private void flushCurrentPiece(StringBuilder current, List<Piece> pieces) {
+        if (current.length() > 0) {
+            pieces.add(new Piece(current.toString(), false));
+            current.setLength(0);
+        }
+    }
+
+    /** Párrafo gigante: cortes en fronteras de oración; duro como último recurso. */
+    private List<Piece> splitOversizedParagraph(String paragraph, int maxPieceChars) {
+        List<Piece> pieces = new ArrayList<>();
+        int start = 0;
+        while (start < paragraph.length()) {
+            if (paragraph.length() - start <= maxPieceChars) {
+                pieces.add(new Piece(paragraph.substring(start).strip(), true));
+                break;
+            }
+            int windowEnd = start + maxPieceChars;
+            int cut = lastSentenceBoundary(paragraph, start, windowEnd);
+            if (cut <= start) {
+                cut = windowEnd;
+            }
+            pieces.add(new Piece(paragraph.substring(start, cut).strip(), true));
+            start = cut;
+        }
+        return pieces;
+    }
+
+    /** Última frontera de oración ('.', '!', '?' o salto) dentro de la ventana. */
+    private static int lastSentenceBoundary(String text, int start, int windowEnd) {
+        for (int i = windowEnd - 1; i > start + 1; i--) {
+            char c = text.charAt(i);
+            if (c == '.' || c == '!' || c == '?' || c == '\n') {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Pieza de texto con su separador de re-ensamblado: frontera real de
+     * párrafo ({@code joinWithSpace=false}, se une con "\n\n") o corte
+     * forzado dentro de un párrafo ({@code joinWithSpace=true}, se une
+     * con " ").
+     */
+    record Piece(String text, boolean joinWithSpace) {
+    }
+
+    /**
+     * La respuesta del modelo se cortó por el tope de salida
+     * ({@code finish_reason=length}). NO es reintentable por rotación:
+     * reintentar el mismo prompt sobredimensionado solo quemaría cuota —
+     * el llamador debe re-dividir la pieza.
+     */
+    static class TranslationTruncatedException extends RuntimeException {
+        TranslationTruncatedException(String message) {
+            super(message);
+        }
     }
 
     public String translateBook(String fullText, String sourceLang, String targetLang, int chunkSize) {
