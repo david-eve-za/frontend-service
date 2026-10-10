@@ -81,6 +81,56 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
             + "order by c.position asc")
     List<Chunks> findBlockChunksByBookId(@Param("bookId") UUID bookId);
 
+    // ------------------------------------------------------------------
+    // Paged UI views: chunk text plus its block metadata (id, type,
+    // number) WITHOUT loading the block content CLOB, in deterministic
+    // reading order (block position, then chunk position within it).
+    // ------------------------------------------------------------------
+
+    /** Light chunk row with the owning block's metadata for the parallel view. */
+    interface ChunkView {
+        UUID getId();
+
+        String getOriginalText();
+
+        String getTranslatedText();
+
+        ChunkStatus getStatus();
+
+        int getPosition();
+
+        UUID getBlockId();
+
+        Block.BlockType getBlockType();
+
+        Integer getBlockNumber();
+    }
+
+    /** Chunks of a book in reading order (blocks first, then legacy unbound chunks). */
+    @Query(value = "select c.id as id, c.originalText as originalText, c.translatedText as translatedText, "
+            + "c.status as status, c.position as position, b.id as blockId, b.blockType as blockType, "
+            + "b.blockNumber as blockNumber "
+            + "from Chunks c left join c.block b where c.book.id = :bookId "
+            + "order by coalesce(b.position, -1) asc, c.position asc",
+            countQuery = "select count(c) from Chunks c where c.book.id = :bookId")
+    Page<ChunkView> findChunkViewsByBookId(@Param("bookId") UUID bookId, Pageable pageable);
+
+    /** Chunks of the given blocks of a book in reading order (translation scope view). */
+    @Query(value = "select c.id as id, c.originalText as originalText, c.translatedText as translatedText, "
+            + "c.status as status, c.position as position, b.id as blockId, b.blockType as blockType, "
+            + "b.blockNumber as blockNumber "
+            + "from Chunks c left join c.block b where c.book.id = :bookId and b.id in :blockIds "
+            + "order by coalesce(b.position, -1) asc, c.position asc",
+            countQuery = "select count(c) from Chunks c left join c.block b "
+                    + "where c.book.id = :bookId and b.id in :blockIds")
+    Page<ChunkView> findChunkViewsByBookIdAndBlockIdIn(@Param("bookId") UUID bookId,
+                                                       @Param("blockIds") Collection<UUID> blockIds,
+                                                       Pageable pageable);
+
+    /** Whether a chunk exists and belongs to a book (single-chunk actions guard). */
+    boolean existsByIdAndBookId(UUID id, UUID bookId);
+
+
     /** Bulk requeue of stale statuses (FAILED/PROCESSING -> AWAITING). */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Transactional

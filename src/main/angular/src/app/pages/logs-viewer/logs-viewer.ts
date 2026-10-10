@@ -126,7 +126,7 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
 
             <!-- Filtros -->
             <div class="mt-4 pt-4 border-t grid grid-cols-12 gap-4 items-end">
-                <div class="col-span-12 lg:col-span-4">
+                <div class="col-span-12 lg:col-span-3">
                     <label class="block text-sm font-medium mb-2">Nivel</label>
                     <div class="flex flex-wrap gap-3">
                         @for (level of levelNames; track level) {
@@ -148,7 +148,7 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
                         }
                     </div>
                 </div>
-                <div class="col-span-12 md:col-span-4 lg:col-span-3">
+                <div class="col-span-12 md:col-span-4 lg:col-span-2">
                     <label class="block text-sm font-medium mb-2">Buscar</label>
                     <input
                         pInputText
@@ -172,6 +172,21 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
                         [showClear]="true"
                         [filter]="true"
                         filterPlaceHolder="Buscar clase…"
+                    />
+                </div>
+                <div class="col-span-12 md:col-span-4 lg:col-span-2">
+                    <label
+                        class="block text-sm font-medium mb-2"
+                        title="Oculta los eventos cuyo mensaje o clase contengan este texto (vacío = mostrar todo)"
+                        >Excluir (clase o texto)</label
+                    >
+                    <input
+                        pInputText
+                        type="text"
+                        class="w-full"
+                        placeholder="Ej.: NovelsCatalogSync"
+                        [ngModel]="excludeFilter()"
+                        (ngModelChange)="excludeFilter.set($event)"
                     />
                 </div>
                 <div class="col-span-12 md:col-span-4 lg:col-span-2">
@@ -276,6 +291,12 @@ export class LogViewer implements OnInit, OnDestroy {
     textFilter = signal('');
     classFilter = signal<string | null>(null);
     traceFilter = signal('');
+    /**
+     * Exclusión por texto o clase: oculta el ruido dominante (por defecto
+     * el sync del catálogo de elscione) para que el seguimiento de los
+     * procesos del pipeline respire. Vacío = mostrar todo.
+     */
+    excludeFilter = signal('NovelsCatalogSync');
 
     private source?: EventSource;
     private pending: LogEvent[] = [];
@@ -308,6 +329,7 @@ export class LogViewer implements OnInit, OnDestroy {
         const text = this.textFilter().trim().toLowerCase();
         const cls = this.classFilter();
         const trace = this.traceFilter().trim().toLowerCase();
+        const exclude = this.excludeFilter().trim().toLowerCase();
         const levels = this.levels();
 
         return this.events().filter((ev) => {
@@ -320,10 +342,9 @@ export class LogViewer implements OnInit, OnDestroy {
                 )
             )
                 return false;
-            if (text) {
-                const haystack = (ev.message + ' ' + ev.logger).toLowerCase();
-                if (!haystack.includes(text)) return false;
-            }
+            const haystack = (ev.message + ' ' + ev.logger).toLowerCase();
+            if (exclude && haystack.includes(exclude)) return false;
+            if (text && !haystack.includes(text)) return false;
             return true;
         });
     });

@@ -8,6 +8,9 @@ import com.glez.frontendservice.repository.BlockRepository;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.repository.ChunksRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -32,6 +35,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class BookProcessingService {
+
+    private static final Logger log = LoggerFactory.getLogger(BookProcessingService.class);
 
     private final BookRepository bookRepository;
     private final TextExtractorService textExtractorService;
@@ -400,20 +405,74 @@ public class BookProcessingService {
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]));
     }
 
-    public PaginatedResponse<ChunkDto> getBookChunks(UUID bookId, Pageable pageable) {
-        Book book = bookRepository.findById(bookId)
-                .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
+    /**
+     * Vista paralela de los chunks del libro: texto original y traducción con
+     * el badge del bloque propietario, en orden de lectura determinista
+     * (posición del bloque y, dentro de él, posición del chunk). Con
+     * blockIds se limita a los chunks de esos bloques (vista del alcance
+     * de traducción marcado); null/vacío = todos los chunks del libro.
+     */
+    public PaginatedResponse<ChunkDto> getBookChunks(UUID bookId, List<UUID> blockIds, Pageable pageable) {
+        if (!bookRepository.existsById(bookId)) {
+            throw new IllegalArgumentException("Book with ID " + bookId + " not found.");
+        }
+        Page<ChunksRepository.ChunkView> chunkViews =
+                (blockIds == null || blockIds.isEmpty())
+                        ? chunksRepository.findChunkViewsByBookId(bookId, pageable)
+                        : chunksRepository.findChunkViewsByBookIdAndBlockIdIn(bookId, blockIds, pageable);
 
-        Page<Chunks> chunksPage = chunksRepository.findByBook(book, pageable);
-
-        Page<ChunkDto> chunkDtoPage = chunksPage.map(chunk -> new ChunkDto(
-                chunk.getId(),
-                chunk.getOriginalText(),
-                chunk.getTranslatedText(),
-                chunk.getStatus(),
-                chunk.getPosition()
+        Page<ChunkDto> chunkDtoPage = chunkViews.map(view -> new ChunkDto(
+                view.getId(),
+                view.getOriginalText(),
+                view.getTranslatedText(),
+                view.getStatus(),
+                view.getPosition(),
+                view.getBlockId(),
+                view.getBlockType() != null ? view.getBlockType().name() : null,
+                view.getBlockNumber()
         ));
 
         return new PaginatedResponse<>(chunkDtoPage);
+    }
+
+    /** Compatibilidad: vista completa del libro (sin filtro de bloques). */
+    public PaginatedResponse<ChunkDto> getBookChunks(UUID bookId, Pageable pageable) {
+        return getBookChunks(bookId, null, pageable);
+    }
+
+    /**
+     * Traduce UN chunk suelto sin afectar al resto del libro: valida que el
+     * libro exista, que el chunk le pertenezca y que tenga texto, reutiliza
+     * el glosario de la serie/libro y lo despacha a través del bean de
+     * traducción (virtual thread propio, cuota RPM compartida, transacciones
+     * cortas). El controller rechaza con 409 si hay una corrida del pipeline
+     * en marcha sobre el libro. Un chunk COMPLETED puede re-traducirse: solo
+     * cambia su fila.
+     */
+    public void translateSingleChunk(UUID bookId, UUID chunkId) {
+        Book book = bookRepository.findById(bookId)
+                .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
+        Chunks chunk = chunksRepository.findById(chunkId)
+                .orElseThrow(() -> new IllegalArgumentException("Chunk with ID " + chunkId + " not found."));
+        if (!chunksRepository.existsByIdAndBookId(chunkId, bookId)) {
+            throw new IllegalArgumentException("Chunk " + chunkId + " does not belong to book " + bookId + ".");
+        }
+        if (chunk.getOriginalText() == null || chunk.getOriginalText().isBlank()) {
+            throw new IllegalArgumentException("Chunk " + chunkId + " has no original text to translate.");
+        }
+        // Mismo contexto de traza que el pipeline (bookId/traceId/step)
+        // para que la solicitud sea visible y filtrable en el visor de
+        // logs en vivo; el worker asíncrono rellena el suyo por chunk.
+        MDC.put("bookId", bookId.toString());
+        MDC.put("traceId", chunkId.toString());
+        MDC.put("step", "TRANSLATE");
+        try {
+            log.info("Traducción individual solicitada: chunk {} del libro {} ({} caracteres, estado previo: {})",
+                    chunkId, bookId, chunk.getOriginalText().length(), chunk.getStatus());
+            List<TranslationTerm> glossary = glossaryService.getOrCreateGlossary(book);
+            chunkTranslationService.translateChunk(chunkId, glossary);
+        } finally {
+            MDC.clear();
+        }
     }
 }

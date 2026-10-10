@@ -6,6 +6,7 @@ import com.glez.frontendservice.model.TranslationTerm;
 import com.glez.frontendservice.repository.ChunksRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -45,6 +46,15 @@ public class ChunkTranslationService {
      * tardar segundos o minutos con la cuota de 30 RPM. Mantener la
      * transacción abierta durante el LLM pinneaba una conexión de Hikari
      * por chunk paralelo y agotaba el pool.</p>
+     *
+     * <p>Observabilidad: cada chunk corre en su propio hilo del executor,
+     * así que el MDC del pipeline NUNCA llega aquí — se rellena aquí mismo
+     * (bookId / traceId=chunkId / step=TRANSLATE) para que el visor de
+     * logs en vivo pueda filtrar y mostrar los chips de traza de cada
+     * traducción, tanto manual (endpoint de chunk individual) como
+     * dentro de una corrida completa. El traceId sintético correlaciona
+     * por chunk; los eventos de corrida del orquestador conservan el
+     * traceId real del pipeline.</p>
      */
     @Async("bookProcessingExecutor")
     public CompletableFuture<Void> translateChunk(UUID chunkId, List<TranslationTerm> glossary) {
@@ -55,6 +65,14 @@ public class ChunkTranslationService {
             throw new IllegalArgumentException("Chunk with ID " + chunkId + " has no original text to translate.");
         }
 
+        UUID bookId = chunk.getBook() != null ? chunk.getBook().getId() : null;
+        MDC.put("bookId", bookId != null ? bookId.toString() : null);
+        MDC.put("traceId", chunkId.toString());
+        MDC.put("step", "TRANSLATE");
+        int originalLength = chunk.getOriginalText().length();
+        long start = System.currentTimeMillis();
+        log.info("Traduciendo chunk {} ({} caracteres)", chunkId, originalLength);
+
         chunk.setStatus(ChunkStatus.PROCESSING);
         chunksRepository.save(chunk);
 
@@ -62,12 +80,18 @@ public class ChunkTranslationService {
             String translated = nvidiaAiService.translateChunk(chunk.getOriginalText(), "en", "es", glossary);
             chunk.setTranslatedText(translated);
             chunk.setStatus(ChunkStatus.COMPLETED);
+            log.info("Chunk {} traducido ({} → {} caracteres, {} ms)",
+                    chunkId, originalLength,
+                    translated != null ? translated.length() : 0,
+                    System.currentTimeMillis() - start);
         } catch (Exception e) {
-            log.error("Error translating chunk {}: {}", chunkId, e.getMessage());
+            log.error("Error translating chunk {} tras {} ms: {}",
+                    chunkId, System.currentTimeMillis() - start, e.getMessage());
             chunk.setStatus(ChunkStatus.FAILED);
             throw new RuntimeException("Translation failed for chunk " + chunkId, e);
         } finally {
             chunksRepository.save(chunk);
+            MDC.clear();
         }
         return CompletableFuture.completedFuture(null);
     }

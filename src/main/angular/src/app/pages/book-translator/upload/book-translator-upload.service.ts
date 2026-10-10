@@ -68,6 +68,10 @@ export interface Chunk {
     translatedText: string | null;
     status: 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'AWAITING';
     position: number;
+    /** Bloque semántico propietario (null para chunks legados sin bloque). */
+    blockId?: string | null;
+    blockType?: 'PROLOGUE' | 'CHAPTER' | 'EPILOGUE' | null;
+    blockNumber?: number | null;
 }
 
 /** Página de chunks serializada por Spring Data (PaginatedResponse). */
@@ -139,15 +143,38 @@ export class BookTranslatorUploadService {
         return this.http.get<BookListItem[]>(`${this.API_URL}/list`);
     }
 
+    /**
+     * Vista paralela de los chunks en orden de lectura, con el bloque
+     * propietario de cada uno. Con blockIds se limita a los chunks de esos
+     * bloques (vista del alcance de traducción marcado).
+     */
     getBookChunks(
         bookId: string,
         page: number,
         size: number,
+        blockIds: string[] = [],
     ): Observable<ChunkPage> {
-        const params = new HttpParams().set('page', page).set('size', size);
+        let params = new HttpParams().set('page', page).set('size', size);
+        if (blockIds.length > 0) {
+            params = params.set('blocks', blockIds.join(','));
+        }
         return this.http.get<ChunkPage>(`${this.API_URL}/${bookId}/chunks`, {
             params,
         });
+    }
+
+    /**
+     * Traduce UN chunk suelto sin afectar al resto del libro (202: el chunk
+     * pasa a PROCESSING y termina COMPLETED/FAILED en segundo plano).
+     */
+    translateChunk(
+        bookId: string,
+        chunkId: string,
+    ): Observable<{ message: string }> {
+        return this.http.post<{ message: string }>(
+            `${this.API_URL}/${bookId}/chunks/${chunkId}/translate`,
+            {},
+        );
     }
 
     getBookBlocks(bookId: string): Observable<BlockItem[]> {
