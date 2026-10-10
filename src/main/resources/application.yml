@@ -107,6 +107,15 @@ app:
     # of interrupted books on startup.
     max-attempts: 3
     auto-resume: true
+  log-persistence:
+    # Histórico de logs en BD para análisis a posteriori (tabla log_event,
+    # buscable vía GET /api/logs/search). El visor en vivo no cambia.
+    enabled: true
+    # Nivel mínimo persistido: por debajo solo va al visor en tiempo real.
+    min-level: INFO
+    # Retención: los eventos más antiguos que estos días se purgan (una
+    # vez al día y al arrancar).
+    retention-days: 7
   novels:
     # Remote library to sync (mirrors NovelsUpdater.py BASE_URL).
     base-url: "https://server.elscione.com/Officially%20Translated%20Light%20Novels/"
