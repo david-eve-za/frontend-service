@@ -49,6 +49,17 @@ public class AudioGeneratorService {
             "<br>", "\n"
     );
 
+    /**
+     * Sintetiza un texto (el de un bloque o el libro completo) a un mp3:
+     * trocea en fragmentos de ~1000 caracteres, los sintetiza en paralelo
+     * con Edge TTS (con un tope de concurrencia) y los mezcla con ffmpeg.
+     *
+     * <p>Hitos de log: el éxito se registra en INFO (ruta destino,
+     * fragmentos y caracteres — el tamaño de un audio puede sorprender en
+     * un análisis posterior) y los fallos ya tenían sus WARN/ERROR; el
+     * texto por debajo del mínimo del splitter se sintetiza como pieza
+     * única (el splitter lo descartaría en silencio).</p>
+     */
     public boolean processTextToAudio(String textContent, Path outputFilename) {
         if (textContent == null || textContent.isBlank()) {
             log.warn("El texto de entrada está vacío. Saltando generación de audio.");
@@ -62,6 +73,8 @@ public class AudioGeneratorService {
             if (chunks.isEmpty()) {
                 chunks = List.of(textContent);
             }
+            log.info("Sintetizando audio de {} caracteres en {} fragmento(s) hacia {}",
+                    textContent.length(), chunks.size(), outputFilename.getFileName());
 
             // 2. Crear directorio temporal gestionado
             Path tempDir = Files.createTempDirectory("audio_chunks_");

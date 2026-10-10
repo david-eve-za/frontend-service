@@ -12,15 +12,18 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Creates the query-driven database indexes idempotently on startup.
+ * Creates the query-driven database indexes — and the column additions the
+ * entity model needs — idempotently on startup.
  *
- * <p>They are declared on the entities via {@code @Table(indexes = ...)}
- * for fresh databases, but {@code hbm2ddl} update mode does not reliably
- * add NEW indexes to tables that already exist (like the long-lived H2
- * file database this service ships with), so this initializer guarantees
- * them with {@code CREATE INDEX IF NOT EXISTS}. Statements are cheap,
- * idempotent and named exactly like the {@code @Index} declarations, so
- * both mechanisms converge on the same physical indexes.</p>
+ * <p>They are declared on the entities via {@code @Table(indexes = ...)} /
+ * {@code @Column} for fresh databases, but {@code hbm2ddl} update mode does
+ * not reliably add NEW indexes to tables that already exist (like the
+ * long-lived H2 file database this service ships with) and CANNOT add a
+ * NOT NULL column to a populated table (no DEFAULT to backfill existing
+ * rows), so this initializer guarantees them with {@code CREATE INDEX IF
+ * NOT EXISTS} / {@code ALTER TABLE ... ADD COLUMN IF NOT EXISTS}. Statements
+ * are cheap, idempotent and named exactly like the entity declarations, so
+ * both mechanisms converge on the same physical schema.</p>
  *
  * <p>Each entry documents the query pattern it serves, so nobody deletes
  * an "unused" index without checking {@code EXPLAIN ANALYZE} first.</p>
@@ -30,6 +33,19 @@ import java.util.List;
 public class DatabaseIndexInitializer {
 
     private static final Logger log = LoggerFactory.getLogger(DatabaseIndexInitializer.class);
+
+    /**
+     * Column migrations for existing tables, in order. hbm2ddl-update cannot
+     * apply these: a NOT NULL column on a populated table needs an explicit
+     * DEFAULT to backfill, which the entity mapping cannot express.
+     */
+    private static final List<ColumnMigration> COLUMN_MIGRATIONS = List.of(
+            new ColumnMigration(
+                    "ALTER TABLE NOVEL ADD COLUMN IF NOT EXISTS LISTING_COMPLETE BOOLEAN DEFAULT FALSE NOT NULL",
+                    "flag de carpeta completada en la pasada de sync (saltos en pasadas incrementales)"),
+            new ColumnMigration(
+                    "ALTER TABLE NOVEL ADD COLUMN IF NOT EXISTS LAST_LISTED_AT TIMESTAMP WITH TIME ZONE",
+                    "momento del último listado completo de la carpeta de la obra"));
 
     /** (sql, purpose) pairs executed in order on startup. */
     private static final List<IndexDefinition> INDEXES = List.of(
@@ -56,6 +72,13 @@ public class DatabaseIndexInitializer {
     @Order(0)
     @EventListener(ApplicationReadyEvent.class)
     public void createIndexes() {
+        for (ColumnMigration migration : COLUMN_MIGRATIONS) {
+            try {
+                jdbcTemplate.execute(migration.sql());
+            } catch (Exception e) {
+                log.warn("Could not ensure column for: {} ({})", migration.purpose(), e.getMessage());
+            }
+        }
         for (IndexDefinition index : INDEXES) {
             try {
                 // IF NOT EXISTS: a no-op when hbm2ddl already created it.
@@ -75,5 +98,9 @@ public class DatabaseIndexInitializer {
     }
 
     private record IndexDefinition(String sql, String purpose) {
+    }
+
+    /** Column addition for existing tables (see COLUMN_MIGRATIONS). */
+    private record ColumnMigration(String sql, String purpose) {
     }
 }

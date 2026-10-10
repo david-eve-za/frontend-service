@@ -57,7 +57,7 @@ class LogStreamControllerTest {
                 .thenReturn(new PageImpl<>(List.of(event), PageRequest.of(0, 50), 1));
 
         ResponseEntity<PaginatedResponse<LogEventDto>> response =
-                controller.search(null, null, null, null, null, 0, 50);
+                controller.search(null, null, null, null, null, null, 0, 50);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -72,13 +72,28 @@ class LogStreamControllerTest {
     }
 
     @Test
+    @DisplayName("search accepts a multi-class selection (comma-separated loggers)")
+    void search_multipleLoggers_passesParsedListToTheSpecification() {
+        when(logEventRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.<LogEvent>of(), PageRequest.of(0, 50), 0));
+
+        ResponseEntity<PaginatedResponse<LogEventDto>> response = controller.search(
+                null, null, null,
+                "c.g.f.services.BookProcessingService , c.g.f.services.ChunkTranslationService, ",
+                null, null, 0, 50);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(logEventRepository).findAll(any(Specification.class), any(Pageable.class));
+    }
+
+    @Test
     @DisplayName("search clamps the page size to the maximum and negative pages to zero")
     void search_clampsPageSizeAndPage() {
         when(logEventRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.<LogEvent>of(), PageRequest.of(0, 200), 0));
 
         ResponseEntity<PaginatedResponse<LogEventDto>> response =
-                controller.search(null, null, null, null, null, -3, 99_999);
+                controller.search(null, null, null, null, null, null, -3, 99_999);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
@@ -93,7 +108,8 @@ class LogStreamControllerTest {
         when(logEventRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.<LogEvent>of(), PageRequest.of(0, 50), 0));
 
-        ResponseEntity<PaginatedResponse<LogEventDto>> response = controller.search(null, null, null, null, null, 0, 50);
+        ResponseEntity<PaginatedResponse<LogEventDto>> response =
+                controller.search(null, null, null, null, null, null, 0, 50);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());

@@ -14,6 +14,7 @@ import { FormsModule } from '@angular/forms';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
+import { MultiSelectModule } from 'primeng/multiselect';
 import { SelectModule } from 'primeng/select';
 import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
@@ -62,6 +63,7 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
         ButtonModule,
         CheckboxModule,
         InputTextModule,
+        MultiSelectModule,
         SelectModule,
         TagModule,
         TooltipModule,
@@ -160,18 +162,20 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
                     />
                 </div>
                 <div class="col-span-12 md:col-span-4 lg:col-span-3">
-                    <label class="block text-sm font-medium mb-2">Clase</label>
-                    <p-select
+                    <label class="block text-sm font-medium mb-2">Clases</label>
+                    <p-multiselect
                         [options]="classOptions()"
                         optionLabel="label"
                         optionValue="value"
-                        [ngModel]="classFilter()"
-                        (ngModelChange)="classFilter.set($event)"
+                        [ngModel]="selectedClasses()"
+                        (ngModelChange)="onClassesChange($event)"
                         placeholder="Todas las clases"
                         styleClass="w-full"
-                        [showClear]="true"
                         [filter]="true"
                         filterPlaceHolder="Buscar clase…"
+                        [showClear]="true"
+                        [maxSelectedLabels]="3"
+                        selectedItemsLabel="{0} clases"
                     />
                 </div>
                 <div class="col-span-12 md:col-span-4 lg:col-span-2">
@@ -289,7 +293,8 @@ export class LogViewer implements OnInit, OnDestroy {
     connection = signal<ConnectionState>('connecting');
     levels = signal<Record<Level, boolean>>({ ...DEFAULT_LEVELS });
     textFilter = signal('');
-    classFilter = signal<string | null>(null);
+    /** Selección múltiple de clases: vacío = todas. */
+    selectedClasses = signal<string[]>([]);
     traceFilter = signal('');
     /**
      * Exclusión por texto o clase: oculta el ruido dominante (por defecto
@@ -325,16 +330,25 @@ export class LogViewer implements OnInit, OnDestroy {
             }));
     });
 
+    /** Cambio de selección de clases (el clear del multiselect emite null). */
+    onClassesChange(value: string[] | null) {
+        this.selectedClasses.set(value ?? []);
+    }
+
     filtered = computed(() => {
         const text = this.textFilter().trim().toLowerCase();
-        const cls = this.classFilter();
+        const selectedClasses = this.selectedClasses();
         const trace = this.traceFilter().trim().toLowerCase();
         const exclude = this.excludeFilter().trim().toLowerCase();
         const levels = this.levels();
 
         return this.events().filter((ev) => {
             if (!levels[ev.level]) return false;
-            if (cls && ev.logger !== cls) return false;
+            if (
+                selectedClasses.length > 0 &&
+                !selectedClasses.includes(ev.logger)
+            )
+                return false;
             if (
                 trace &&
                 !Object.values(ev.mdc ?? {}).some((v) =>
