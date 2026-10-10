@@ -265,6 +265,24 @@ class OptimizedQueriesTest {
     }
 
     @Test
+    @DisplayName("requeueAllStaleProcessing heals orphan PROCESSING rows across ALL books (startup cure)")
+    void globalOrphanProcessingRequeue() {
+        Book bookA = book(ProcessingStatus.AWAITING, "a");
+        Book bookB = book(ProcessingStatus.AWAITING, "b");
+        chunk(bookA, null, ChunkStatus.PROCESSING, 0, 1);
+        chunk(bookB, null, ChunkStatus.PROCESSING, 0, 1);
+        chunk(bookA, null, ChunkStatus.COMPLETED, 1, 0);
+
+        int healed = chunksRepository.requeueAllStaleProcessing(ChunkStatus.PROCESSING, ChunkStatus.AWAITING);
+
+        assertEquals(2, healed, "GLOBAL: cruza libros, sin filtro de bookId");
+        assertEquals(0, chunksRepository.countByBookAndStatus(bookA, ChunkStatus.PROCESSING));
+        assertEquals(0, chunksRepository.countByBookAndStatus(bookB, ChunkStatus.PROCESSING));
+        assertEquals(1, chunksRepository.countByBookAndStatus(bookA, ChunkStatus.COMPLETED),
+                "Los COMPLETED quedan intactos");
+    }
+
+    @Test
     @DisplayName("Bulk deletes remove a book's chunks/blocks/traces/terms in one statement each")
     void bulkDeletesByBookId() {
         Book book = book(ProcessingStatus.FAILED, "x");

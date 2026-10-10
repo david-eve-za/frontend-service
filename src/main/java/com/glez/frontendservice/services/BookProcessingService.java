@@ -475,6 +475,12 @@ public class BookProcessingService {
         if (chunk.getOriginalText() == null || chunk.getOriginalText().isBlank()) {
             throw new IllegalArgumentException("Chunk " + chunkId + " has no original text to translate.");
         }
+        if (chunk.getStatus() == ChunkStatus.PROCESSING) {
+            // Con la cura de arranque, un PROCESSING en caliente es SIEMPRE
+            // una traducción realmente en curso: re-despacharlo pondría dos
+            // virtual threads escribiendo la misma fila.
+            throw new IllegalArgumentException("Chunk " + chunkId + " is already being translated.");
+        }
         // Mismo contexto de traza que el pipeline (bookId/traceId/step)
         // para que la solicitud sea visible y filtrable en el visor de
         // logs en vivo; el worker asíncrono rellena el suyo por chunk.

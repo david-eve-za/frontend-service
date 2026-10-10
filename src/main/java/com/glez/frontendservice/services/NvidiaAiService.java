@@ -96,7 +96,10 @@ public class NvidiaAiService {
             // global (RPM) antes de disparar la llamada.
             rateLimiter.acquire();
             long callStart = System.currentTimeMillis();
-            log.debug("[llm] Llamando al modelo {} (prompt de {} caracteres, intento {}/{})",
+            // INFO (no DEBUG): es la señal de progreso que debe quedar en el
+            // histórico de BD (min-level INFO) — con una llamada lenta o
+            // colgada, esta línea es la prueba de que el intento empezó.
+            log.info("[llm] Llamando al modelo {} (prompt de {} caracteres, intento {}/{})",
                     currentModel, prompt.length(), attempts + 1, totalModels * maxRetries);
             try {
                 ChatClient client = ChatClient.create(chatModel);
