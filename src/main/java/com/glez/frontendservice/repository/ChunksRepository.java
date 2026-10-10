@@ -139,6 +139,20 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
                         @Param("statuses") Collection<ChunkStatus> statuses,
                         @Param("target") ChunkStatus target);
 
+    /**
+     * Requeue GLOBAL de chunks huérfanos en PROCESSING (→ AWAITING): al
+     * arrancar, ningún hilo de traducción puede estar vivo, de modo que
+     * toda fila PROCESSING es un estado mentiroso heredado de la instancia
+     * anterior (su virtual thread murió con la aplicación). Sin esto, el
+     * badge "Traduciendo" queda congelado para siempre y el botón del
+     * chunk deshabilitado.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("update Chunks c set c.status = :target where c.status = :stale")
+    int requeueAllStaleProcessing(@Param("stale") ChunkStatus stale,
+                                  @Param("target") ChunkStatus target);
+
     /** Bulk heal of inflated legacy attempt counters; returns rows healed. */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Transactional

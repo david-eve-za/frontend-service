@@ -69,7 +69,7 @@ public class LogStreamController {
 
     @Operation(summary = "Búsqueda en el histórico de logs persistido en BD",
             description = "Consulta paginada del histórico (retención configurable, por defecto 7 días) "
-                    + "por rango de tiempo, nivel, libro del pipeline o texto en el mensaje/clase. "
+                    + "por rango de tiempo, nivel, clase(s), libro del pipeline o texto en el mensaje. "
                     + "El contexto MDC (bookId, traceId, step) se reconstruye en cada evento. "
                     + "Orden descendente por fecha (lo más reciente primero).")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Página de eventos de log persistidos"))
@@ -83,6 +83,8 @@ public class LogStreamController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @Parameter(description = "Nivel exacto (ERROR, WARN, INFO...), opcional")
             @RequestParam(required = false) String level,
+            @Parameter(description = "Clase(s) emisora(s), separadas por coma (selección múltiple), opcional")
+            @RequestParam(required = false) String loggers,
             @Parameter(description = "bookId del pipeline (MDC), opcional")
             @RequestParam(required = false) String bookId,
             @Parameter(description = "Texto contenido en el mensaje o en la clase, opcional")
@@ -91,17 +93,29 @@ public class LogStreamController {
             @RequestParam(defaultValue = "50") int size) {
         int pageSize = Math.min(Math.max(1, size), MAX_SEARCH_PAGE_SIZE);
         Pageable pageable = PageRequest.of(Math.max(0, page), pageSize, Sort.by(Sort.Direction.DESC, "loggedAt"));
+        List<String> loggerNames = parseLoggers(loggers);
         Page<LogEventDto> result = logEventRepository
-                .findAll(searchSpecification(from, to, level, bookId, q), pageable)
+                .findAll(searchSpecification(from, to, level, loggerNames, bookId, q), pageable)
                 .map(LogStreamController::toDto);
         return ResponseEntity.ok(new PaginatedResponse<>(result));
     }
 
+    /** Lista de clases seleccionadas (selección múltiple), sin elementos vacíos. */
+    private static List<String> parseLoggers(String loggers) {
+        if (loggers == null || loggers.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(loggers.split(","))
+                .map(String::trim)
+                .filter(name -> !name.isEmpty())
+                .toList();
+    }
+
     /**
      * Filtros opcionales del histórico: rango de tiempo, nivel exacto,
-     * libro del pipeline y texto en mensaje o clase. Los vacíos/nulos no
-     * filtran — una petición sin parámetros devuelve la primera página del
-     * histórico reciente.
+     * selección múltiple de clases (IN), libro del pipeline y texto en
+     * mensaje o clase. Los vacíos/nulos no filtran — una petición sin
+     * parámetros devuelve la primera página del histórico reciente.
      *
      * <p>NOTA: construir con {@code cb.conjunction().getExpressions().add(...)}
      * NO funciona en Hibernate 6 (getExpressions() es una vista no mutable y
@@ -109,7 +123,7 @@ public class LogStreamController {
      * una lista y se combinan con {@code cb.and(...)}.</p>
      */
     private static Specification<LogEvent> searchSpecification(
-            Instant from, Instant to, String level, String bookId, String q) {
+            Instant from, Instant to, String level, List<String> loggers, String bookId, String q) {
         return (root, query, cb) -> {
             List<Predicate> filters = new ArrayList<>();
             if (from != null) {
@@ -120,6 +134,11 @@ public class LogStreamController {
             }
             if (level != null && !level.isBlank()) {
                 filters.add(cb.equal(cb.upper(root.get("level")), level.trim().toUpperCase()));
+            }
+            if (!loggers.isEmpty()) {
+                // Path TIPADO: con root.get(...) sin tipo (Path<Object>) el
+                // bind de los parámetros del IN no compara correctamente.
+                filters.add(root.<String>get("logger").in(loggers));
             }
             if (bookId != null && !bookId.isBlank()) {
                 filters.add(cb.equal(root.get("bookId"), bookId.trim()));

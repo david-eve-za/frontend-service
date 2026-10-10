@@ -629,6 +629,23 @@ class BookProcessingServiceTest {
                 () -> bookProcessingService.translateSingleChunk(bookId, chunkId));
             verify(chunkTranslationService, never()).translateChunk(any(), any());
         }
+
+        @Test
+        @DisplayName("A chunk already translating is rejected: no double dispatch on the same row")
+        void translateSingleChunk_processingChunk_throwsException() {
+            UUID chunkId = UUID.randomUUID();
+            Chunks chunk = createChunk(ChunkStatus.PROCESSING, 0, null);
+
+            when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+            when(chunksRepository.findById(chunkId)).thenReturn(Optional.of(chunk));
+            when(chunksRepository.existsByIdAndBookId(chunkId, bookId)).thenReturn(true);
+
+            IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> bookProcessingService.translateSingleChunk(bookId, chunkId));
+
+            assertTrue(exception.getMessage().contains("already being translated"));
+            verify(chunkTranslationService, never()).translateChunk(any(), any());
+        }
     }
 
     /** ChunkView stub for the light projection (block metadata without loading the block CLOB). */

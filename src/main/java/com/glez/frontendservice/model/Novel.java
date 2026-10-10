@@ -51,6 +51,23 @@ public class Novel {
     @Column(name = "updated_at")
     private Instant updatedAt;
 
+    /**
+     * La carpeta remota de esta obra fue listada POR COMPLETO en la pasada
+     * de sincronización actual (todos sus volúmenes/archivos upsertados sin
+     * error). Las corridas incrementales saltan estas carpetas — un solo
+     * listing por carpeta hasta completar el 100% del catálogo — y al
+     * completarse el ciclo se reinician todos los flags para arrancar una
+     * pasada completa de nuevo. Nulo/irrelevante en las novelas de archivos
+     * sueltos (remotePath nulo), que se refrescan con el listado de la
+     * raíz en cada corrida.
+     */
+    @Column(name = "listing_complete", nullable = false)
+    private boolean listingComplete = false;
+
+    /** Momento del último listado completo de la carpeta remota. */
+    @Column(name = "last_listed_at")
+    private Instant lastListedAt;
+
     @OneToMany(mappedBy = "novel", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<NovelVolume> volumes = new ArrayList<>();
 }

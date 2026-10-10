@@ -59,6 +59,9 @@ spring:
       # sin él las llamadas van a /chat/completions y NVIDIA responde 404.
       base-url: https://integrate.api.nvidia.com/v1
       chat:
+        # Fallback residual: toda llamada real fija su modelo vía la
+        # rotación de app.nvidia.models; esto solo aplicaría a una
+        # llamada directa al ChatModel sin opciones.
         model: openai/gpt-oss-20b
     model:
       embedding: none
@@ -82,15 +85,46 @@ app:
     # bloque de audio, con este tope suave hacia el endpoint de Edge TTS.
     tts-concurrency: 3
   nvidia:
-    # Modelos vivos en integrate.api.nvidia.com (los anteriores llegaron a EOL):
-    # openai/gpt-oss-20b traduce limpio; nemotron-3-super como respaldo en rotación.
-    models: "openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b"
+    # Pool de modelos con ROTACIÓN AUTOMÁTICA. PRIORIDAD: NVIDIA siempre
+    # primero (z-ai/glm-5.3 como primario), y ollama:gpt-oss:20b como
+    # ÚLTIMO recurso — SOLO si el proveedor NVIDIA está completamente
+    # offline, la rotación cae al modelo local de Ollama para no dejar
+    # al pipeline sin traducción. El prefijo "ollama:" enruta la llamada
+    # al servidor local (http://localhost:11434), no a la API de NVIDIA.
+    models: "z-ai/glm-5.3,openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3,ollama:gpt-oss:20b"
     max-retries: 3
     # Cuota de la API de NVIDIA en solicitudes por minuto. El pipeline
     # completo (traducción con reintentos/rotación y extracción del
     # glosario) pasa por este limitador: los virtual threads aparcan
     # gratis mientras esperan cupo.
     rate-limit-rpm: 30
+    # Estrategia de presupuesto de SALIDA: el límite que corrompe la
+    # traducción no es el input (131K de contexto) sino los tokens que el
+    # modelo puede RESPONDER (traducción + razonamiento cuentan juntos).
+    # El texto se divide en piezas de hasta (max-output-tokens - reserve)
+    # * chars-per-token / expansion-factor caracteres para que la
+    # respuesta proyectada nunca sature el cupo, cortando SIEMPRE en
+    # fronteras de párrafo; si aún así el modelo trunca (finish_reason
+    # = length), la pieza se re-divide a la mitad automáticamente.
+    max-output-tokens: 8192
+    # Margen que se descuenta del cupo para el razonamiento interno del
+    # modelo antes de estimar la traducción visible.
+    reasoning-reserve-tokens: 1024
+    # Heurística conservadora de caracteres por token para el idioma de
+    # SALIDA (el español rinde ~3.5; inglés ~4).
+    chars-per-token: 3.5
+    # La traducción al español expande ~10-15% el texto origen; el
+    # presupuesto se calcula con este factor para no quedarse corto.
+    translation-expansion-factor: 1.15
+  ai-inspector:
+    # Sondas de disponibilidad antes de usar un modelo: timeout de conexión
+    # CORTO para que un DNS caído falle en segundos (no cuelgue la
+    # rotación), y caché con TTL para no sondear en cada llamada.
+    # Las especificaciones reales se leen de los modelos locales de Ollama
+    # (spring.ai.ollama.base-url: /api/show expone contexto, parámetros,
+    # cuantización y capacidades); NVIDIA no expone specs por modelo.
+    probe-timeout-seconds: 5
+    probe-cache-ttl-seconds: 60
   nlp:
     model-path: classpath:/model
     models:

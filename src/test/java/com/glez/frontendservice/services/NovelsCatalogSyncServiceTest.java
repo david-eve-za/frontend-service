@@ -23,8 +23,10 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -330,5 +332,85 @@ class NovelsCatalogSyncServiceTest {
             Thread.sleep(25);
         } while (System.currentTimeMillis() < deadline);
         return status;
+    }
+
+    // ------------------------------------------------------------------
+    // Flags de carpeta completa: pasadas incrementales + ciclo completo.
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("las carpetas listadas por completo quedan marcadas (listingComplete + lastListedAt)")
+    void flagsCompletedFolders() {
+        when(apiClient.listContents(BASE)).thenReturn(List.of(dir(BASE + "NovelA/")));
+        when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of(
+                dir(BASE), file(BASE + "NovelA/NovelA%20-%20Volume%2001.epub", 10)));
+
+        service.execute(new NovelsCatalogSyncService.SyncRun());
+
+        Novel novelA = novelRepository.findByRemotePath(BASE + "NovelA/").orElseThrow();
+        assertTrue(novelA.isListingComplete(), "La carpeta listada por completo queda marcada");
+        assertNotNull(novelA.getLastListedAt());
+    }
+
+    @Test
+    @DisplayName("tras el ciclo completo la pasada incremental salta las carpetas completas y reintenta las fallidas")
+    void incrementalRunSkipsCompletedAndRetriesFailedFolders() {
+        when(apiClient.listContents(BASE)).thenReturn(List.of(
+                dir(BASE + "NovelA/"), dir(BASE + "NovelB/")));
+        when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of(
+                dir(BASE), file(BASE + "NovelA/NovelA%20-%20Volume%2001.epub", 10)));
+        when(apiClient.listContents(BASE + "NovelB/")).thenReturn(List.of(
+                dir(BASE), file(BASE + "NovelB/NovelB%20-%20Volume%2001.epub", 30)));
+
+        // Pasada 1: ambas carpetas listan bien -> catálogo al 100%.
+        service.execute(new NovelsCatalogSyncService.SyncRun());
+        entityManager.clear();
+        assertEquals(0, novelRepository.countByRemotePathIsNotNullAndListingCompleteFalse());
+
+        // Pasada 2: 100% completo -> ciclo: flags reiniciados y re-listado; NovelB ahora falla.
+        when(apiClient.listContents(BASE + "NovelB/")).thenThrow(new RuntimeException("challenge"));
+        service.execute(new NovelsCatalogSyncService.SyncRun());
+        entityManager.clear();
+        assertFalse(novelRepository.findByRemotePath(BASE + "NovelB/").orElseThrow().isListingComplete(),
+                "El listado fallido deja la carpeta pendiente para la siguiente pasada");
+        assertTrue(novelRepository.findByRemotePath(BASE + "NovelA/").orElseThrow().isListingComplete(),
+                "NovelA volvió a listar bien en el ciclo");
+
+        // Pasada 3 (incremental: NovelB pendiente): doReturn (no when(...)) al
+        // re-stubear — when() EJECUTA el método y el thenThrow previo seguiría activo.
+        doReturn(List.of(dir(BASE), file(BASE + "NovelB/NovelB%20-%20Volume%2001.epub", 31)))
+                .when(apiClient).listContents(BASE + "NovelB/");
+        service.execute(new NovelsCatalogSyncService.SyncRun());
+        entityManager.clear();
+
+        verify(apiClient, times(2).description("La carpeta completa se lista solo en las pasadas de ciclo"
+                + " y se SALTA en las incrementales")).listContents(BASE + "NovelA/");
+        verify(apiClient, times(3)).listContents(BASE + "NovelB/");
+        assertTrue(novelRepository.findByRemotePath(BASE + "NovelB/").orElseThrow().isListingComplete());
+        // NovelA sigue presente a efectos de markUnvisitedNovelsRemoved: sus
+        // volúmenes no se marcan removed por no haberla re-listado.
+        for (NovelVolume volume : volumeRepository
+                .findByNovel(novelRepository.findByRemotePath(BASE + "NovelA/").orElseThrow())) {
+            assertFalse(volume.isRemovedFromSource());
+        }
+    }
+
+    @Test
+    @DisplayName("el ciclo completo se reinicia cuando el 100% de las carpetas está marcado")
+    void fullCycleResetsWhenEveryFolderIsComplete() {
+        when(apiClient.listContents(BASE)).thenReturn(List.of(dir(BASE + "NovelA/")));
+        when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of(
+                dir(BASE), file(BASE + "NovelA/NovelA%20-%20Volume%2001.epub", 10)));
+        // Pasada 1: la única carpeta queda completa -> catálogo al 100%.
+        service.execute(new NovelsCatalogSyncService.SyncRun());
+        entityManager.clear();
+        assertEquals(0, novelRepository.countByRemotePathIsNotNullAndListingCompleteFalse());
+
+        // Pasada 2: 0 pendientes -> reinicio de flags y re-listado completo.
+        service.execute(new NovelsCatalogSyncService.SyncRun());
+        entityManager.clear();
+
+        verify(apiClient, times(2)).listContents(BASE + "NovelA/");
+        assertTrue(novelRepository.findByRemotePath(BASE + "NovelA/").orElseThrow().isListingComplete());
     }
 }

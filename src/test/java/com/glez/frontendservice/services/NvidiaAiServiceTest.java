@@ -10,6 +10,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("NvidiaAiService Tests")
@@ -19,10 +22,18 @@ class NvidiaAiServiceTest {
 
     private final NvidiaRateLimiter rateLimiter = new NvidiaRateLimiter(0);
 
+    @Mock
+    private ModelInspectorService inspector;
+
     @BeforeEach
     void setUp() {
-        // We don't need to mock the ChatModel for testing private methods
-        nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3, rateLimiter);
+        // We don't need to mock the ChatModel for testing private methods.
+        // Presupuesto de salida por defecto: (8192-1024)*3.5/1.15 ≈ 21.8K chars.
+        // El inspector reporta NVIDIA online por defecto (los casos de offline
+        // lo cambian con when(...)).
+        org.mockito.Mockito.lenient().when(inspector.isNvidiaOnline()).thenReturn(true);
+        nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3, rateLimiter,
+                inspector, 8192, 1024, 3.5, 1.15);
     }
 
     @Nested
@@ -115,33 +126,75 @@ class NvidiaAiServiceTest {
     class BuildTranslationPromptTests {
 
         @Test
-        @DisplayName("Should build correct prompt format")
+        @DisplayName("Should build the multi-step protocol with the languages substituted")
         void buildTranslationPrompt_withParams_returnsFormattedPrompt() {
             String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world");
-            
+
             assertNotNull(prompt);
-            assertTrue(prompt.contains("Translate the following text from en to es"));
-            assertTrue(prompt.contains("Hello world"));
-            assertTrue(prompt.contains("Maintain the original formatting"));
-            assertTrue(prompt.contains("Do not add any explanations"));
+            assertTrue(prompt.contains("Translate the provided text from **en** to **es**"));
+            assertTrue(prompt.contains("Step 1: Deep Content Analysis and Pre-Correction (en)"));
+            assertTrue(prompt.contains("Step 3: High-Fidelity Translation (en to es)"));
+            assertTrue(prompt.contains("Step 4: Post-Translation Refinement and Validation (es)"));
+            assertTrue(prompt.contains("**Source Language:** en"));
+            assertTrue(prompt.contains("**Target Language:** es"));
+            assertTrue(prompt.contains("Hello world"), "El chunk viaja al final del prompt");
+            assertTrue(prompt.contains("**ONLY** the fully translated, cleaned, and refined narrative text"));
+            assertTrue(prompt.contains("Keep the original paragraph breaks EXACTLY"),
+                    "Los párrafos alimentan la vista paralela y el TTS: deben preservarse");
+        }
+
+        @Test
+        @DisplayName("Should not leave unsubstituted placeholders nor a hardcoded target language")
+        void buildTranslationPrompt_noPlaceholderOrHardcodedLanguageLeftBehind() {
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world");
+
+            assertFalse(prompt.contains("{source_lang}"));
+            assertFalse(prompt.contains("{target_lang}"));
+            assertFalse(prompt.contains("{{text_chunk}}"));
+            assertFalse(prompt.contains("idiomatic Spanish"),
+                    "El idioma destino es un parámetro: nada de idiomas hardcodeados");
+        }
+
+        @Test
+        @DisplayName("Should inject the series glossary into the translation step when present")
+        void buildTranslationPrompt_withGlossary_injectsEstablishedTerms() {
+            com.glez.frontendservice.model.TranslationTerm term =
+                    new com.glez.frontendservice.model.TranslationTerm();
+            term.setSourceTerm("Rimuru");
+            term.setTargetTerm("Rimuru");
+
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world", java.util.List.of(term));
+
+            assertTrue(prompt.contains("Established series glossary"));
+            assertTrue(prompt.contains("- \"Rimuru\" -> \"Rimuru\""));
+            assertTrue(prompt.indexOf("Established series glossary") < prompt.indexOf("Cultural Nuances"),
+                    "El glosario vive dentro del paso 3 de traducción");
+        }
+
+        @Test
+        @DisplayName("Should omit the glossary block entirely without terms")
+        void buildTranslationPrompt_withoutGlossary_omitsTheBlock() {
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world");
+
+            assertFalse(prompt.contains("Established series glossary"));
         }
 
         @Test
         @DisplayName("Should handle empty text")
         void buildTranslationPrompt_withEmptyText_includesEmptyText() {
             String prompt = invokeBuildTranslationPrompt("en", "es", "");
-            
+
             assertNotNull(prompt);
-            assertTrue(prompt.contains("Text to translate:"));
+            assertTrue(prompt.contains("Text for Processing"));
         }
 
         @Test
         @DisplayName("Should handle special characters in text")
         void buildTranslationPrompt_withSpecialChars_escapesCorrectly() {
-            String prompt = invokeBuildTranslationPrompt("en", "es", "Text with \"quotes\" and 'apostrophes'");
-            
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Text with \"quotes\" and 'apostrophes' and 100% sure");
+
             assertNotNull(prompt);
-            assertTrue(prompt.contains("Text with \"quotes\" and 'apostrophes'"));
+            assertTrue(prompt.contains("Text with \"quotes\" and 'apostrophes' and 100% sure"));
         }
     }
 
@@ -189,19 +242,293 @@ class NvidiaAiServiceTest {
             String prompt = invokeBuildTranslationPrompt("en", "es", "Text",
                     java.util.List.of(term("the Angel Lord", "el Señor de los Ángeles")));
 
-            assertTrue(prompt.contains("Use EXACTLY these established translations"));
+            assertTrue(prompt.contains("Established series glossary"));
+            assertTrue(prompt.contains("use EXACTLY these translations"));
             assertTrue(prompt.contains("- \"the Angel Lord\" -> \"el Señor de los Ángeles\""));
         }
 
         @Test
-        @DisplayName("Without glossary the prompt omits the glossary block but keeps the literary style")
+        @DisplayName("Without glossary the prompt omits the glossary block but keeps the literary persona")
         void buildTranslationPrompt_withoutGlossary_keepsStyle() {
             String prompt = invokeBuildTranslationPrompt("en", "es", "Text");
 
-            assertFalse(prompt.contains("Use EXACTLY these established translations"));
-            assertTrue(prompt.contains("expert literary translator"),
+            assertFalse(prompt.contains("Established series glossary"));
+            assertTrue(prompt.contains("WORLD-CLASS TRANSLATOR and a hyper-meticulous LITERARY EDITOR"),
                     "The role/style guidance must always be present to avoid literal translations");
-            assertTrue(prompt.contains("Restructure sentences"));
+            assertTrue(prompt.contains("fluent and idiomatic in es"));
+        }
+    }
+
+    @Nested
+    @DisplayName("Model pool rotation tests")
+    class ModelPoolRotationTests {
+
+        @Test
+        @DisplayName("rotateModel cycles through every configured model and wraps around")
+        void rotateModel_cyclesThroughTheWholePool() throws Exception {
+            // Pool de 7 modelos como en app.nvidia.models (glm-5.3 primario
+            // + 5 NVIDIA + ollama:gpt-oss:20b como último recurso local).
+            String pool = "z-ai/glm-5.3,openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,"
+                    + "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3,ollama:gpt-oss:20b";
+            NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15);
+
+            java.lang.reflect.Field index = NvidiaAiService.class
+                    .getDeclaredField("currentModelIndex");
+            index.setAccessible(true);
+
+            // Siete rotaciones recorren el pool completo y la octava vuelve al primario.
+            for (int i = 1; i <= 7; i++) {
+                invokeRotateModel(poolService);
+                int current = ((java.util.concurrent.atomic.AtomicInteger) index.get(poolService)).get();
+                assertEquals(i % 7, current, "La rotación " + i + " debe aterrizar en " + (i % 7));
+            }
+        }
+
+        private void invokeRotateModel(NvidiaAiService service) throws Exception {
+            java.lang.reflect.Method method = NvidiaAiService.class
+                    .getDeclaredMethod("rotateModel");
+            method.setAccessible(true);
+            method.invoke(service);
+        }
+    }
+
+    @Nested
+    @DisplayName("Provider availability pre-flight tests")
+    class ProviderPreFlightTests {
+
+        @Test
+        @DisplayName("An offline NVIDIA provider falls through to the local Ollama model (last resort)")
+        void offlineNvidia_fallsThroughToOllama() {
+            // NVIDIA offline, Ollama online (local): la rotación salta los 6
+            // modelos NVIDIA y cae al 7º — el modelo local de Ollama.
+            when(inspector.isNvidiaOnline()).thenReturn(false);
+            when(inspector.isOllamaOnline()).thenReturn(true);
+            String pool = "z-ai/glm-5.3,m2,m3,m4,m5,m6,ollama:gpt-oss:20b";
+            NvidiaAiService service = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15) {
+                @Override
+                String callOllamaModel(String modelName, String prompt) {
+                    return "Traducción local de Ollama";
+                }
+            };
+
+            String result = service.callModelWithRotation("test prompt");
+
+            assertEquals("Traducción local de Ollama", result,
+                    "El último recurso del pool es el modelo local cuando NVIDIA está offline");
+            // 6 sondeos a NVIDIA + al menos 1 a Ollama (el pre-flight local).
+            verify(inspector, org.mockito.Mockito.atLeast(6)).isNvidiaOnline();
+            verify(inspector, org.mockito.Mockito.atLeast(1)).isOllamaOnline();
+        }
+
+        @Test
+        @DisplayName("All providers offline fails fast without hanging")
+        void allProvidersOffline_failsFast() {
+            when(inspector.isNvidiaOnline()).thenReturn(false);
+            when(inspector.isOllamaOnline()).thenReturn(false);
+            String pool = "m1,m2,m3,m4,m5,m6,ollama:gpt-oss:20b";
+            NvidiaAiService offline = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15);
+
+            RuntimeException failure = assertThrows(RuntimeException.class,
+                    () -> offline.callModelWithRotation("prompt"));
+
+            assertTrue(failure.getMessage().contains("offline"),
+                    "Falla rápido cuando TODOS los proveedores están offline: " + failure.getMessage());
+        }
+
+        @Test
+        @DisplayName("poolModelNames exposes the rotation pool (glm-5.3 first, ollama last)")
+        void poolModelNames_exposesThePool() {
+            String pool = "z-ai/glm-5.3,openai/gpt-oss-20b,moonshotai/kimi-k3,ollama:gpt-oss:20b";
+            NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15);
+
+            java.util.List<String> names = poolService.poolModelNames();
+            assertEquals("z-ai/glm-5.3", names.get(0), "glm-5.3 es el PRIMARIO");
+            assertEquals("ollama:gpt-oss:20b", names.get(names.size() - 1),
+                    "El modelo local de Ollama es el ÚLTIMO recurso");
+        }
+    }
+
+    @Nested
+    @DisplayName("Output budget estimation tests")
+    class OutputBudgetEstimationTests {
+
+        @Test
+        @DisplayName("maxPieceChars derives from the safe output budget and the heuristics")
+        void estimateMaxPieceChars_appliesTheFormula() {
+            // (8192 - 1024) * 3.5 / 1.15 = 21818 (con los valores por defecto)
+            assertEquals(21_815, nvidiaAiService.estimateMaxPieceChars());
+        }
+
+        @Test
+        @DisplayName("A tighter budget yields proportionally smaller pieces")
+        void estimateMaxPieceChars_scalesWithTheBudget() {
+            NvidiaAiService tiny = new NvidiaAiService(null, "m", 1, rateLimiter,
+                    inspector, 2_048, 1_024, 3.5, 1.15);
+            assertEquals(3_116, tiny.estimateMaxPieceChars());
+        }
+
+        @Test
+        @DisplayName("Projected output tokens apply chars-per-token and expansion")
+        void estimateProjectedOutputTokens_appliesTheHeuristics() {
+            // 21818 chars / 3.5 * 1.15 = 7167.9 -> 7168 tokens
+            assertEquals(7_169, nvidiaAiService.estimateProjectedOutputTokens(21_818));
+        }
+    }
+
+    @Nested
+    @DisplayName("Output budget splitting tests")
+    class OutputBudgetSplittingTests {
+
+        private static final int BUDGET = 100;
+
+        @Test
+        @DisplayName("A text that fits the budget returns a single paragraph piece")
+        void split_smallText_singlePiece() {
+            var pieces = nvidiaAiService.splitForOutputBudget("Hello\n\nworld", BUDGET);
+            assertEquals(1, pieces.size());
+            assertEquals("Hello\n\nworld", pieces.get(0).text());
+            assertFalse(pieces.get(0).joinWithSpace());
+        }
+
+        @Test
+        @DisplayName("Cuts happen ONLY at paragraph boundaries and content is preserved")
+        void split_multiParagraph_cutAtParagraphs() {
+            String text = "a".repeat(40) + "\n\n" + "b".repeat(40) + "\n\n" + "c".repeat(40);
+            var pieces = nvidiaAiService.splitForOutputBudget(text, BUDGET);
+
+            assertEquals(2, pieces.size());
+            assertFalse(pieces.get(0).joinWithSpace());
+            assertFalse(pieces.get(1).joinWithSpace());
+            // Re-ensamblado fiel: las piezas reconstruyen el original.
+            assertEquals(text, pieces.stream().map(p -> p.text())
+                    .reduce((x, y) -> x + "\n\n" + y).orElseThrow());
+            // Cada pieza respeta el presupuesto.
+            for (var piece : pieces) {
+                assertTrue(piece.text().length() <= BUDGET);
+            }
+        }
+
+        @Test
+        @DisplayName("A giant paragraph without paragraph breaks cuts at sentence boundaries")
+        void split_giantParagraph_sentenceCutsMarkedWithSpaceJoin() {
+            String text = ("Sentence one ends here. " + "And another one follows. ").repeat(10);
+
+            var pieces = nvidiaAiService.splitForOutputBudget(text, BUDGET);
+
+            assertTrue(pieces.size() > 1);
+            for (var piece : pieces) {
+                assertTrue(piece.text().length() <= BUDGET);
+                assertTrue(piece.joinWithSpace(), "Los cortes intra-párrafo re-ensamblan con espacio");
+            }
+            // El re-ensamblado con espacios reconstruye el original sin perder contenido.
+            String rejoined = pieces.stream().map(p -> p.text())
+                    .reduce((x, y) -> x + " " + y).orElseThrow();
+            assertEquals(text.strip().replaceAll("\\s+", " "),
+                    rejoined.replaceAll("\\s+", " "));
+        }
+
+        @Test
+        @DisplayName("Blank or empty text degrades to a single piece without breaking")
+        void split_blankText_singleEmptyPiece() {
+            var pieces = nvidiaAiService.splitForOutputBudget("   ", BUDGET);
+            assertEquals(1, pieces.size());
+        }
+    }
+
+    @Nested
+    @DisplayName("Budgeted translation orchestration tests")
+    class BudgetedTranslationOrchestrationTests {
+
+        /** Seam: cuenta y sirve las llamadas al modelo sin tocar el HTTP real. */
+        private java.util.List<String> servedPrompts = new java.util.ArrayList<>();
+
+        private NvidiaAiService serviceWithCountingSeam(java.util.function.Function<String, String> responder) {
+            servedPrompts = new java.util.ArrayList<>();
+            return new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
+                @Override
+                public String callModelWithRotation(String prompt) {
+                    servedPrompts.add(prompt);
+                    return responder.apply(prompt);
+                }
+            };
+        }
+
+        @Test
+        @DisplayName("A text within the budget translates in a single model call")
+        void translate_smallText_singleCall() {
+            NvidiaAiService service = serviceWithCountingSeam(p -> "TRAD");
+            String out = service.translateChunk("Hello world", "en", "es", java.util.List.of());
+
+            assertEquals("TRAD", out);
+            assertEquals(1, servedPrompts.size());
+        }
+
+        @Test
+        @DisplayName("An oversized multi-paragraph text splits and rejoins with paragraph breaks")
+        void translate_oversizedText_splitsAndJoinsWithParagraphs() {
+            // Presupuesto del seam: (200-50)*10/1.0 = 1500 chars.
+            String text = "a".repeat(900) + "\n\n" + "b".repeat(900);
+            NvidiaAiService service = serviceWithCountingSeam(p -> "T" + servedPrompts.size());
+
+            String out = service.translateChunk(text, "en", "es", java.util.List.of());
+
+            assertEquals(2, servedPrompts.size(), "Una llamada por pieza");
+            assertEquals("T1\n\nT2", out);
+            assertTrue(servedPrompts.get(0).contains("a".repeat(900)));
+            assertTrue(servedPrompts.get(1).contains("b".repeat(900)));
+        }
+
+        @Test
+        @DisplayName("A truncation self-heals: the piece is re-split and retried")
+        void translate_truncatedPiece_selfHealsByReSplitting() {
+            // Pieza de ~1400 chars (cabe en el presupuesto de 1500 y supera
+            // el piso de auto-sanación de 1000), pero el modelo trunca la
+            // primera respuesta: se re-divide y reintenta.
+            String text = "x".repeat(600) + ". " + "y".repeat(600) + ". " + "z".repeat(200);
+            java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
+                @Override
+                public String callModelWithRotation(String prompt) {
+                    if (calls.incrementAndGet() == 1) {
+                        throw new NvidiaAiService.TranslationTruncatedException("length");
+                    }
+                    return "OK[" + calls.get() + "]";
+                }
+            };
+
+            String out = service.translateChunk(text, "en", "es", java.util.List.of());
+
+            assertTrue(calls.get() > 1, "La pieza truncada se re-dividió y reintentó");
+            assertTrue(out.startsWith("OK["), "El reintentó produce traducción: " + out);
+        }
+
+        @Test
+        @DisplayName("A truncation below the self-healing floor propagates visibly")
+        void translate_truncatedTinyPiece_failsVisibly() {
+            String text = "tiny text";
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
+                @Override
+                public String callModelWithRotation(String prompt) {
+                    throw new NvidiaAiService.TranslationTruncatedException("length");
+                }
+            };
+
+            assertThrows(NvidiaAiService.TranslationTruncatedException.class,
+                    () -> service.translateChunk(text, "en", "es", java.util.List.of()));
+        }
+
+        @Test
+        @DisplayName("A truncated response does not waste rotation retries")
+        void truncatedException_isNotRotationRetryable() {
+            Exception e = new NvidiaAiService.TranslationTruncatedException(
+                    "Response truncated by the model output token limit");
+
+            assertFalse(invokeIsRetryableError(e),
+                    "Reintentar el mismo prompt sobredimensionado solo quemaría cuota");
         }
     }
 }

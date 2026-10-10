@@ -4,8 +4,10 @@ import com.glez.frontendservice.model.Novel;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -32,4 +34,28 @@ public interface NovelRepository extends JpaRepository<Novel, UUID> {
 
         String getRemotePath();
     }
+
+    // ------------------------------------------------------------------
+    // Pass-completion flags: each catalog-sync pass flags the novel folders
+    // it fully lists, later incremental runs skip them, and a new cycle
+    // (full re-sync) starts once every folder is flagged.
+    // ------------------------------------------------------------------
+
+    /** Carpetas completadas en la pasada actual (para saltarlas con un solo query por corrida). */
+    @Query("select n.remotePath from Novel n where n.listingComplete = true")
+    List<String> findRemotePathsByListingCompleteTrue();
+
+    /** Carpetas de obra que faltan por listar en la pasada actual. */
+    long countByRemotePathIsNotNullAndListingCompleteFalse();
+
+    /**
+     * Reinicia todos los flags de la pasada (arranque de un ciclo completo):
+     * un solo bulk update, sin materializar entidades.
+     *
+     * @return filas reiniciadas
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("update Novel n set n.listingComplete = false where n.remotePath is not null")
+    int resetListingComplete();
 }

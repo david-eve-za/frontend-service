@@ -18,6 +18,7 @@ import org.springframework.data.jpa.domain.Specification;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -101,6 +102,15 @@ class LogEventPersistenceRepositoryTest {
                 PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "loggedAt")));
         assertEquals(1, page.getTotalElements());
         assertEquals("Traducción individual solicitada", page.getContent().get(0).getMessage());
+
+        // Selección múltiple de clases (IN): con el path SIN tipar el bind
+        // de los parámetros no compara — debe ser root.<String>get(...).
+        Specification<LogEvent> loggerIn = (root, query, cb) ->
+                root.<String>get("logger").in(List.of(
+                        "c.g.f.services.ChunkTranslationService", "c.g.f.services.NovelsCatalogSyncService"));
+        assertEquals(2, repository.count(loggerIn));
+        assertEquals(0, repository.count((root, query, cb) ->
+                root.<String>get("logger").in(List.of("c.g.f.services.Nobody"))));
     }
 
     @Test

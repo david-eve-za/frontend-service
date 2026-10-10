@@ -43,12 +43,25 @@ import java.util.concurrent.atomic.AtomicReference;
  * local (volúmenes desaparecidos se marcan removedFromSource) y se ejecuta
  * cada 3 horas vía @Scheduled además del trigger manual.
  *
- * Anti-ban por lotes: los listados se procesan en grupos de
+ * <p><b>Pasadas incrementales por carpetas completas:</b> cada carpeta de obra
+ * listada por completo en una pasada queda marcada en {@code Novel.listingComplete}
+ * (+ {@code lastListedAt}); las corridas siguientes <i>saltan</i> esas carpetas
+ * (un solo query precarga el conjunto completo por corrida — el ahorro real:
+ * un listing HTTP + pausa anti-ban por carpeta evitada) y solo listan las
+ * carpetas pendientes, las categorías (baratas, necesarias para descubrir
+ * obras nuevas) y la raíz. Una corrida cancelada retoma donde se quedó. Las
+ * carpetas saltadas se siguen considerando "visitadas": no hay que
+ * re-verificar su presencia hasta el ciclo completo. Cuando el 100% de las
+ * carpetas está marcado (catálogo local = catálogo del servidor), la siguiente
+ * corrida reinicia todos los flags con un único bulk update y arranca un
+ * <i>ciclo completo</i> de re-sincronización.</p>
+ *
+ * <p>Anti-ban por lotes: los listados se procesan en grupos de
  * {@code sync-batch-size} peticiones separados por pausas de
  * {@code sync-batch-pause-minutes} (default 100 listados / 10 minutos), de
  * modo que el patrón de tráfico sea de ráfagas cortas con recuperación larga
  * en lugar de una sesión sostenida de horas. La pausa es cancelable al
- * instante y se expone en el status como {@code pauseUntil}.
+ * instante y se expone en el status como {@code pauseUntil}.</p>
  */
 @Slf4j
 @Service
@@ -144,7 +157,19 @@ public class NovelsCatalogSyncService {
 
     public NovelsCatalogSyncStatus getStatus() {
         SyncRun run = activeRun.get();
-        return run != null ? snapshot(run) : NovelsCatalogSyncStatus.idle();
+        return run != null ? snapshot(run) : idleProgress();
+    }
+
+    /**
+     * Estado de reposo con el progreso real del ciclo: aunque no haya corrida
+     * activa, el UI puede mostrar cuántas carpetas de obra están completas y
+     * cuántas faltan para el 100% que dispara el ciclo completo.
+     */
+    private NovelsCatalogSyncStatus idleProgress() {
+        long total = novelRepository.countByRemotePathIsNotNull();
+        long pending = novelRepository.countByRemotePathIsNotNullAndListingCompleteFalse();
+        return new NovelsCatalogSyncStatus(NovelsCatalogSyncStatus.State.IDLE, null, 0, 0, 0, 0, 0, 0,
+                null, null, null, null, false, total - pending, pending, 0);
     }
 
     public boolean cancel() {
@@ -170,8 +195,40 @@ public class NovelsCatalogSyncService {
         }
     }
 
+    /**
+     * Corre una pasada de sincronización sobre el executor propio.
+     *
+     * <p>Modo de la pasada (decidido al arrancar): si todas las carpetas de
+     * obra están marcadas como completas (catálogo 100% sincronizado), se
+     * reinician los flags y la corrida es un <b>ciclo completo</b>; si no,
+     * es una <b>pasada incremental</b> que solo listan las carpetas
+     * pendientes (ver {@link #walk}). El modo, el progreso del ciclo y las
+     * carpetas saltadas quedan en el log y en el status expuesto al UI.</p>
+     */
     void execute(SyncRun run) {
         try {
+            long totalFolders = novelRepository.countByRemotePathIsNotNull();
+            long pendingFolders = novelRepository.countByRemotePathIsNotNullAndListingCompleteFalse();
+            run.foldersTotal = totalFolders;
+            if (totalFolders > 0 && pendingFolders == 0) {
+                // Ciclo completo: el catálogo local ya espeja el 100% del
+                // servidor; reiniciamos todos los flags y re-sincronizamos
+                // desde cero (regla de reinicio del ciclo).
+                int reset = novelRepository.resetListingComplete();
+                pendingFolders = totalFolders;
+                run.fullCycle = true;
+                log.info("[sync-catálogo] Ciclo completo: {}/{} carpetas sincronizadas al 100%; "
+                                + "reiniciados {} flags, iniciando pasada completa desde cero",
+                        totalFolders, totalFolders, reset);
+            } else {
+                run.fullCycle = false;
+                log.info("[sync-catálogo] Pasada incremental: {}/{} carpetas completas, faltan {} por listar",
+                        totalFolders - pendingFolders, totalFolders, pendingFolders);
+            }
+            // Un solo query por corrida precarga las carpetas completas: el
+            // walk() consulta el Set en memoria (O(1) por carpeta) en lugar
+            // de ir a la BD por cada directorio hijo.
+            run.completeFolders.addAll(novelRepository.findRemotePathsByListingCompleteTrue());
             Set<String> visitedNovelPaths = new HashSet<>();
             walk(run, startPath, null, 0, visitedNovelPaths);
             markUnvisitedNovelsRemoved(run, visitedNovelPaths);
@@ -180,12 +237,15 @@ public class NovelsCatalogSyncService {
             } else {
                 run.state = NovelsCatalogSyncStatus.State.COMPLETED;
             }
-            log.info("Catalog sync finished with state {} ({} novels, {} volumes, {} files)",
-                    run.state, run.novelsSeen, run.volumesSeen, run.filesSeen);
+            log.info("[sync-catálogo] Pasada terminada con estado {} ({} novelas listadas, {} volúmenes, "
+                            + "{} archivos, {} carpetas completas saltadas)",
+                    run.state, run.novelsSeen.get(), run.volumesSeen.get(), run.filesSeen.get(),
+                    run.skippedFolders.get());
         } catch (Exception e) {
             run.state = NovelsCatalogSyncStatus.State.FAILED;
             run.lastError = e.getMessage();
-            log.error("Catalog sync failed", e);
+            log.error("[sync-catálogo] Pasada fallida tras {} novelas, {} carpetas saltadas",
+                    run.novelsSeen.get(), run.skippedFolders.get(), e);
         } finally {
             run.finishedAt = java.time.Instant.now();
             run.currentPath = null;
@@ -210,6 +270,21 @@ public class NovelsCatalogSyncService {
         }
     }
 
+    /**
+     * Recorre el árbol remoto en profundidad listando cada carpeta: las
+     * carpetas con archivos de libro se upsertean como obras (y quedan
+     * marcadas como completas en la pasada), las demás (categorías) se
+     * recorren para descubrir obras nuevas.
+     *
+     * <p>Las carpetas de obra marcadas como completas en una pasada
+     * anterior se saltan por completo (ver {@code SyncRun.completeFolders},
+     * precargado al inicio de la corrida): no se consumen listings ni
+     * pausas anti-ban por ellas, pero sí se registran como visitadas para
+     * que {@link #markUnvisitedNovelsRemoved} no las marque como
+     * desaparecidas. El listado de una carpeta puede fallar (red, ban,
+     * challenge): la carpeta queda pendiente y la siguiente pasada la
+     * reintenta — una corrida cancelada retoma exactamente donde se quedó.</p>
+     */
     private void walk(SyncRun run, String remotePath, String category, int depth,
                       Set<String> visitedNovelPaths) {
         if (run.cancelled || depth > maxDepth) {
@@ -267,6 +342,17 @@ public class NovelsCatalogSyncService {
         for (ElscioneApiClient.ApiItem directory : directories) {
             if (run.cancelled) {
                 return;
+            }
+            // Carpeta de obra ya completada en una pasada anterior: se
+            // SALTA el listing (el ahorro real de la pasada incremental)
+            // pero se marca como visitada — sigue presente en el servidor
+            // a efectos de markUnvisitedNovelsRemoved, que no debe marcar
+            // sus volúmenes como eliminados por no haberla re-listado.
+            if (run.completeFolders.contains(directory.href())) {
+                visitedNovelPaths.add(directory.href());
+                run.skippedFolders.incrementAndGet();
+                log.debug("[sync-catálogo] Carpeta completa saltada: {}", lastDecodedSegment(directory.href()));
+                continue;
             }
             // depth 0 -> direct children are novels or categories without a
             // category of their own; from depth 1 onwards the current folder
@@ -331,7 +417,12 @@ public class NovelsCatalogSyncService {
         }
     }
 
-    /** Carpeta remota que contiene archivos de libro directamente = una obra. */
+    /**
+     * Carpeta remota que contiene archivos de libro directamente = una obra.
+     * El upsert queda marcado como {@code listingComplete}: su listado se
+     * procesó por completo (volúmenes y archivos persistidos) y las pasadas
+     * incrementales siguientes la saltarán hasta el próximo ciclo completo.
+     */
     private void upsertNovel(SyncRun run, String remotePath, String category,
                              List<ElscioneApiClient.ApiItem> bookFiles) {
         Novel novel = novelRepository.findByRemotePath(remotePath)
@@ -346,12 +437,23 @@ public class NovelsCatalogSyncService {
         novel.setCategory(category);
         novel.setLastSyncedAt(java.time.Instant.now());
         novel.setUpdatedAt(java.time.Instant.now());
+        novel.setListingComplete(true);
+        novel.setLastListedAt(java.time.Instant.now());
         upsertNovelVolumes(run, novel, bookFiles);
     }
 
+    /**
+     * Upsert de los volúmenes/archivos de una obra a partir del listado de
+     * su carpeta: los existentes se refrescan (label, grupo traductor,
+     * removedFromSource reseteado), los nuevos se crean, y los volúmenes que
+     * ya no están en la fuente se marcan — todo en lotes (un saveAll por
+     * tipo). Al terminar deja un DEBUG con el detalle por obra para el
+     * seguimiento de la pasada.
+     */
     private void upsertNovelVolumes(SyncRun run, Novel novel, List<ElscioneApiClient.ApiItem> bookFiles) {
         Instant now = java.time.Instant.now();
         run.novelsSeen.incrementAndGet();
+        int newVolumesBefore = run.newVolumes.get();
         // Persist first: brand-new novels need an ID before volumes reference them.
         novelRepository.saveAndFlush(novel);
         List<NovelVolume> existingVolumes = volumeRepository.findByNovel(novel);
@@ -443,6 +545,9 @@ public class NovelsCatalogSyncService {
         volumeRepository.saveAllAndFlush(unvisited);
 
         novelRepository.save(novel);
+        log.debug("[sync-catálogo] Obra '{}' upsertada: {} volúmenes, {} archivos ({} nuevos, {} marcados como eliminados de la fuente)",
+                novel.getTitle(), seenVolumeKeys.size(), bookFiles.size(),
+                run.newVolumes.get() - newVolumesBefore, unvisited.size());
     }
 
     /**
@@ -475,6 +580,8 @@ public class NovelsCatalogSyncService {
     }
 
     private NovelsCatalogSyncStatus snapshot(SyncRun run) {
+        long total = novelRepository.countByRemotePathIsNotNull();
+        long pending = novelRepository.countByRemotePathIsNotNullAndListingCompleteFalse();
         return new NovelsCatalogSyncStatus(
                 run.state,
                 run.currentPath,
@@ -487,7 +594,11 @@ public class NovelsCatalogSyncService {
                 run.startedAt,
                 run.finishedAt,
                 run.lastError,
-                run.pauseUntil);
+                run.pauseUntil,
+                run.fullCycle,
+                total - pending,
+                pending,
+                run.skippedFolders.get());
     }
 
     /** Estado mutable de la ejecución en curso. */
@@ -508,5 +619,13 @@ public class NovelsCatalogSyncService {
         final AtomicInteger newNovels = new AtomicInteger();
         final AtomicInteger newVolumes = new AtomicInteger();
         final AtomicInteger removedVolumes = new AtomicInteger();
+        /** Carpetas completas saltadas en esta corrida (listings ahorrados). */
+        final AtomicInteger skippedFolders = new AtomicInteger();
+        /** Carpetas de obra completas precargadas al iniciar la corrida. */
+        final Set<String> completeFolders = new HashSet<>();
+        /** Total de carpetas de obra del catálogo al iniciar la corrida. */
+        volatile long foldersTotal;
+        /** true si esta corrida es un ciclo completo (flags reiniciados). */
+        volatile boolean fullCycle;
     }
 }

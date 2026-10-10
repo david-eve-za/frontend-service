@@ -118,6 +118,13 @@ public class BookProcessingService {
         bookRepository.save(finalBook);
     }
 
+    /**
+     * Elimina un libro y TODO su estado derivado (chunks, bloques, trazas del
+     * pipeline y términos del glosario) con borrados en bloque — ninguna
+     * fila se materializa antes de borrar — y cancela las tareas asíncronas
+     * activas del libro. Es destructivo e irreversible: el hito queda en el
+     * log para auditoría posterior.
+     */
     @Transactional
     public void deleteBook(UUID bookId) {
         if (!bookRepository.existsById(bookId)) {
@@ -134,11 +141,13 @@ public class BookProcessingService {
         // Bulk deletes in JPQL: none of them loads the chunk/block/trace/
         // term rows (nor the book CLOB) before deleting, in contrast with
         // the derived deleteAllBy* methods.
-        chunksRepository.deleteByBookIdInBulk(bookId);
-        blockRepository.deleteByBookIdInBulk(bookId);
-        processTraceEventRepository.deleteByBookIdInBulk(bookId);
-        translationTermRepository.deleteByBookIdInBulk(bookId);
+        int chunks = chunksRepository.deleteByBookIdInBulk(bookId);
+        int blocks = blockRepository.deleteByBookIdInBulk(bookId);
+        int traces = processTraceEventRepository.deleteByBookIdInBulk(bookId);
+        int terms = translationTermRepository.deleteByBookIdInBulk(bookId);
         bookRepository.deleteByIdInBulk(bookId);
+        log.info("Libro {} eliminado con su estado derivado: {} chunks, {} bloques, {} trazas, {} términos de glosario",
+                bookId, chunks, blocks, traces, terms);
     }
 
     public String getFullText(UUID bookId) {
@@ -187,6 +196,8 @@ public class BookProcessingService {
         // Texto limpio: los tags jamás se persisten ni llegan al traductor.
         book.setFullText(cleanText.toString());
         bookRepository.save(book);
+        log.info("Bloques guardados del libro {}: {} bloques, texto limpio reconstruido de {} caracteres",
+                bookId, position, cleanText.length());
         return position;
     }
 
@@ -308,6 +319,8 @@ public class BookProcessingService {
             // Chunks de todos los bloques en un saveAll: transacción única
             // + INSERTs con JDBC batching (antes: uno por chunk).
             chunksRepository.saveAll(toSave);
+            log.info("Chunks regenerados por bloque (libro {}): {} chunks en {} bloque(s) seleccionado(s)",
+                    bookId, toSave.size(), blocks.size());
             book.setStatus(ProcessingStatus.UPLOADED);
             bookRepository.save(book);
             return;
@@ -348,6 +361,7 @@ public class BookProcessingService {
             toSave.add(chunk);
         }
         chunksRepository.saveAll(toSave);
+        log.info("Chunks regenerados del texto completo (libro {}): {} chunks", book.getId(), toSave.size());
 
         book.setStatus(ProcessingStatus.UPLOADED);
         bookRepository.save(book);
@@ -394,6 +408,7 @@ public class BookProcessingService {
         // se recarga por id dentro de su propia transacción de traducción).
         List<UUID> pendingChunkIds = chunksRepository.findIdsByBookIdAndStatus(
                 bookId, com.glez.frontendservice.model.ChunkStatus.AWAITING);
+        log.info("Traducción despachada (libro {}): {} chunks pendientes", bookId, pendingChunkIds.size());
         // Despacho a través del PROXY (bean separado, nunca
         // auto-invocación): cada chunk traduce en su propio virtual
         // thread, en paralelo, con la cuota RPM gobernando el ritmo.
@@ -459,6 +474,12 @@ public class BookProcessingService {
         }
         if (chunk.getOriginalText() == null || chunk.getOriginalText().isBlank()) {
             throw new IllegalArgumentException("Chunk " + chunkId + " has no original text to translate.");
+        }
+        if (chunk.getStatus() == ChunkStatus.PROCESSING) {
+            // Con la cura de arranque, un PROCESSING en caliente es SIEMPRE
+            // una traducción realmente en curso: re-despacharlo pondría dos
+            // virtual threads escribiendo la misma fila.
+            throw new IllegalArgumentException("Chunk " + chunkId + " is already being translated.");
         }
         // Mismo contexto de traza que el pipeline (bookId/traceId/step)
         // para que la solicitud sea visible y filtrable en el visor de
