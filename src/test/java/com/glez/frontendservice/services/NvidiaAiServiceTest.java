@@ -266,9 +266,10 @@ class NvidiaAiServiceTest {
         @Test
         @DisplayName("rotateModel cycles through every configured model and wraps around")
         void rotateModel_cyclesThroughTheWholePool() throws Exception {
-            // Pool de 6 modelos como en app.nvidia.models (primario + alternativos).
-            String pool = "openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,"
-                    + "z-ai/glm-5.3,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3";
+            // Pool de 7 modelos como en app.nvidia.models (glm-5.3 primario
+            // + 5 NVIDIA + ollama:gpt-oss:20b como último recurso local).
+            String pool = "z-ai/glm-5.3,openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,"
+                    + "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3,ollama:gpt-oss:20b";
             NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
                     inspector, 8192, 1024, 3.5, 1.15);
 
@@ -276,11 +277,11 @@ class NvidiaAiServiceTest {
                     .getDeclaredField("currentModelIndex");
             index.setAccessible(true);
 
-            // Seis rotaciones recorren el pool completo y la séptima vuelve al primario.
-            for (int i = 1; i <= 6; i++) {
+            // Siete rotaciones recorren el pool completo y la octava vuelve al primario.
+            for (int i = 1; i <= 7; i++) {
                 invokeRotateModel(poolService);
                 int current = ((java.util.concurrent.atomic.AtomicInteger) index.get(poolService)).get();
-                assertEquals(i % 6, current, "La rotación " + i + " debe aterrizar en " + (i % 6));
+                assertEquals(i % 7, current, "La rotación " + i + " debe aterrizar en " + (i % 7));
             }
         }
 
@@ -297,10 +298,36 @@ class NvidiaAiServiceTest {
     class ProviderPreFlightTests {
 
         @Test
-        @DisplayName("An offline provider fails fast instead of hanging through 18 rotation timeouts")
-        void offlineProvider_failsFast() {
+        @DisplayName("An offline NVIDIA provider falls through to the local Ollama model (last resort)")
+        void offlineNvidia_fallsThroughToOllama() {
+            // NVIDIA offline, Ollama online (local): la rotación salta los 6
+            // modelos NVIDIA y cae al 7º — el modelo local de Ollama.
             when(inspector.isNvidiaOnline()).thenReturn(false);
-            String pool = "m1,m2,m3,m4,m5,m6";
+            when(inspector.isOllamaOnline()).thenReturn(true);
+            String pool = "z-ai/glm-5.3,m2,m3,m4,m5,m6,ollama:gpt-oss:20b";
+            NvidiaAiService service = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15) {
+                @Override
+                String callOllamaModel(String modelName, String prompt) {
+                    return "Traducción local de Ollama";
+                }
+            };
+
+            String result = service.callModelWithRotation("test prompt");
+
+            assertEquals("Traducción local de Ollama", result,
+                    "El último recurso del pool es el modelo local cuando NVIDIA está offline");
+            // 6 sondeos a NVIDIA + al menos 1 a Ollama (el pre-flight local).
+            verify(inspector, org.mockito.Mockito.atLeast(6)).isNvidiaOnline();
+            verify(inspector, org.mockito.Mockito.atLeast(1)).isOllamaOnline();
+        }
+
+        @Test
+        @DisplayName("All providers offline fails fast without hanging")
+        void allProvidersOffline_failsFast() {
+            when(inspector.isNvidiaOnline()).thenReturn(false);
+            when(inspector.isOllamaOnline()).thenReturn(false);
+            String pool = "m1,m2,m3,m4,m5,m6,ollama:gpt-oss:20b";
             NvidiaAiService offline = new NvidiaAiService(null, pool, 3, rateLimiter,
                     inspector, 8192, 1024, 3.5, 1.15);
 
@@ -308,20 +335,20 @@ class NvidiaAiServiceTest {
                     () -> offline.callModelWithRotation("prompt"));
 
             assertTrue(failure.getMessage().contains("offline"),
-                    "Falla rápido cuando toda la vuelta al pool está offline: " + failure.getMessage());
-            // Una consulta de sonda por slot del pool y ni un solo intento quemado.
-            verify(inspector, times(6)).isNvidiaOnline();
+                    "Falla rápido cuando TODOS los proveedores están offline: " + failure.getMessage());
         }
 
         @Test
-        @DisplayName("poolModelNames exposes the rotation pool for the model catalog")
+        @DisplayName("poolModelNames exposes the rotation pool (glm-5.3 first, ollama last)")
         void poolModelNames_exposesThePool() {
-            String pool = "openai/gpt-oss-20b,z-ai/glm-5.3,moonshotai/kimi-k3";
+            String pool = "z-ai/glm-5.3,openai/gpt-oss-20b,moonshotai/kimi-k3,ollama:gpt-oss:20b";
             NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
                     inspector, 8192, 1024, 3.5, 1.15);
 
-            assertEquals(java.util.List.of("openai/gpt-oss-20b", "z-ai/glm-5.3", "moonshotai/kimi-k3"),
-                    poolService.poolModelNames());
+            java.util.List<String> names = poolService.poolModelNames();
+            assertEquals("z-ai/glm-5.3", names.get(0), "glm-5.3 es el PRIMARIO");
+            assertEquals("ollama:gpt-oss:20b", names.get(names.size() - 1),
+                    "El modelo local de Ollama es el ÚLTIMO recurso");
         }
     }
 

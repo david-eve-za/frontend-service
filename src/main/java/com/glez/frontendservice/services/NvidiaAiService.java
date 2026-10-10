@@ -10,6 +10,11 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -105,19 +110,25 @@ public class NvidiaAiService {
 
         while (attempts < totalModels * maxRetries) {
             String currentModel = modelNames.get(currentModelIndex.get());
-            // Pre-flight: sonda del proveedor con caché corta (3 s de
-            // conexión): un fallo de red/DSS caído falla en segundos.
-            if (!inspector.isNvidiaOnline()) {
+            // Pre-flight CONSCIENTE DEL PROVEEDOR: los modelos ollama: son
+            // LOCALES (siempre disponibles, sin depender de la red); los
+            // demás son de NVIDIA y solo se intentan si el proveedor
+            // responde a la sonda corta (cacheada).
+            boolean isOllama = currentModel.startsWith("ollama:");
+            boolean providerOnline = isOllama
+                    ? inspector.isOllamaOnline()
+                    : inspector.isNvidiaOnline();
+            if (!providerOnline) {
                 skippedOffline++;
                 if (skippedOffline >= totalModels) {
                     // Toda una vuelta al pool está offline: fallar rápido
                     // en vez de colgarse en timeouts agotando los reintentos.
                     throw new RuntimeException(
-                            "All NVIDIA models are offline/unavailable (probe failed for "
+                            "All models are offline/unavailable (probe failed for "
                                     + skippedOffline + " rotation slots)");
                 }
-                log.warn("[llm] Modelo {} saltado: proveedor NVIDIA offline (sonda cacheada). Rotando al siguiente",
-                        currentModel);
+                log.warn("[llm] Modelo {} saltado: proveedor {} offline (sonda cacheada). Rotando al siguiente",
+                        currentModel, isOllama ? "Ollama" : "NVIDIA");
                 rotateModel();
                 continue;
             }
@@ -132,37 +143,45 @@ public class NvidiaAiService {
             log.info("[llm] Llamando al modelo {} (prompt de {} caracteres, intento {}/{})",
                     currentModel, prompt.length(), attempts + 1, totalModels * maxRetries);
             try {
-                ChatClient client = ChatClient.create(chatModel);
-                ChatResponse response = client.prompt()
-                        .user(prompt)
-                        .options(OpenAiChatOptions.builder()
-                                .model(currentModel)
-                                .temperature(0.2)
-                                .topP(0.95)
-                                // Tope EXPLÍCITO de salida: el límite del
-                                // modelo nunca se descubre por respuesta
-                                // cortada a ciegas.
-                                .maxTokens(maxOutputTokens))
-                        .call()
-                        .chatResponse();
-
-                if (response != null && response.getResult() != null
-                        && response.getResult().getOutput() != null) {
-                    if (wasTruncated(response)) {
-                        // NO rota el modelo: reintentar el mismo prompt
-                        // sobredimensionado solo quemaría cuota — el
-                        // llamador re-divide la pieza (auto-sanación).
-                        throw new TranslationTruncatedException(
-                                "Response truncated by the model output token limit (finish_reason="
-                                        + finishReasonOf(response) + ") for model " + currentModel);
+                String text;
+                if (isOllama) {
+                    // ÚLTIMO RECURSO: modelo local de Ollama — llamada HTTP
+                    // directa al servidor local (localhost:11434/api/chat),
+                    // sin depender de la red ni de la API de NVIDIA. Ya
+                    // detecta el truncado (done_reason="length") y devuelve
+                    // el texto directamente.
+                    text = callOllamaModel(currentModel.substring("ollama:".length()), prompt);
+                } else {
+                    ChatResponse response = ChatClient.create(chatModel)
+                            .prompt()
+                            .user(prompt)
+                            .options(OpenAiChatOptions.builder()
+                                    .model(currentModel)
+                                    .temperature(0.2)
+                                    .topP(0.95)
+                                    .maxTokens(maxOutputTokens))
+                            .call()
+                            .chatResponse();
+                    if (response != null && response.getResult() != null
+                            && response.getResult().getOutput() != null) {
+                        if (wasTruncated(response)) {
+                            throw new TranslationTruncatedException(
+                                    "Response truncated by the model output token limit (finish_reason="
+                                            + finishReasonOf(response) + ") for model " + currentModel);
+                        }
+                        text = response.getResult().getOutput().getText();
+                    } else {
+                        throw new IllegalStateException("Empty response from model: " + currentModel);
                     }
-                    String text = response.getResult().getOutput().getText();
-                    log.info("[llm] Respuesta de {}: {} caracteres en {} ms (tope de salida: {} tokens, prompt de {} caracteres)",
-                            currentModel, text != null ? text.length() : 0,
-                            System.currentTimeMillis() - callStart, maxOutputTokens, prompt.length());
-                    return text;
                 }
-                throw new IllegalStateException("Empty response from model: " + currentModel);
+
+                if (text == null || text.isBlank()) {
+                    throw new IllegalStateException("Empty response from model: " + currentModel);
+                }
+                log.info("[llm] Respuesta de {}: {} caracteres en {} ms (tope de salida: {} tokens, prompt de {} caracteres)",
+                        currentModel, text.length(), System.currentTimeMillis() - callStart,
+                        maxOutputTokens, prompt.length());
+                return text;
 
             } catch (TranslationTruncatedException e) {
                 throw e;
@@ -398,6 +417,73 @@ public class NvidiaAiService {
      * forzado dentro de un párrafo ({@code joinWithSpace=true}, se une
      * con " ").
      */
+    /**
+     * Llama a un modelo LOCAL de Ollama ({@code POST /api/chat} en el
+     * servidor local, sin depender de la red ni de la API de NVIDIA) —
+     * es el ÚLTIMO RECURSO de la rotación: solo se alcanza cuando el
+     * proveedor NVIDIA está completamente offline.
+     *
+     * <p>Ollama reporta el truncamiento en {@code done_reason="length"} (el
+     * equivalente del {@code finish_reason=length} de la API de NVIDIA):
+     * se traduce a la misma {@link TranslationTruncatedException} para que
+     * el auto-sanado re-divida la pieza.</p>
+     */
+    String callOllamaModel(String modelName, String prompt) {
+        try {
+            String body = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(
+                    java.util.Map.of(
+                            "model", modelName,
+                            "messages", java.util.List.of(java.util.Map.of(
+                                    "role", "user",
+                                    "content", prompt)),
+                            "stream", false,
+                            "options", java.util.Map.of(
+                                    "temperature", 0.2,
+                                    "top_p", 0.95,
+                                    "num_predict", maxOutputTokens)));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(ollamaBaseUrl + "/api/chat"))
+                    .timeout(Duration.ofMillis(120_000))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            HttpResponse<String> response =
+                    ollamaHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalStateException(
+                        "Ollama HTTP " + response.statusCode() + " for model " + modelName);
+            }
+            com.fasterxml.jackson.databind.JsonNode root =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body());
+            String text = root.path("message").path("content").asText(null);
+            String doneReason = root.path("done_reason").asText(null);
+            if (text == null || text.isBlank()) {
+                throw new IllegalStateException("Empty Ollama response for model " + modelName);
+            }
+            if (doneReason != null && doneReason.contains("length")) {
+                throw new TranslationTruncatedException(
+                        "Ollama response truncated by the output token limit (done_reason="
+                                + doneReason + ") for model " + modelName);
+            }
+            // Envuelve en un ChatResponse del mismo tipo para que el
+            // logging del ciclo de vida del llamador no cambie.
+            return text;
+        } catch (TranslationTruncatedException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Error calling Ollama model " + modelName + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** URL base del servidor Ollama (localhost, sin depender del DNS). */
+    private final String ollamaBaseUrl =
+            java.net.URI.create("http://localhost:11434").toString();
+
+    /** Cliente HTTP para Ollama: localhost, sin timeout de conexión largo. */
+    private final HttpClient ollamaHttpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(3))
+            .build();
+
     record Piece(String text, boolean joinWithSpace) {
     }
 
