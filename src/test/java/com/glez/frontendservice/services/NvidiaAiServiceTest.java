@@ -10,6 +10,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("NvidiaAiService Tests")
@@ -19,12 +22,18 @@ class NvidiaAiServiceTest {
 
     private final NvidiaRateLimiter rateLimiter = new NvidiaRateLimiter(0);
 
+    @Mock
+    private ModelInspectorService inspector;
+
     @BeforeEach
     void setUp() {
         // We don't need to mock the ChatModel for testing private methods.
         // Presupuesto de salida por defecto: (8192-1024)*3.5/1.15 ≈ 21.8K chars.
+        // El inspector reporta NVIDIA online por defecto (los casos de offline
+        // lo cambian con when(...)).
+        org.mockito.Mockito.lenient().when(inspector.isNvidiaOnline()).thenReturn(true);
         nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3, rateLimiter,
-                8192, 1024, 3.5, 1.15);
+                inspector, 8192, 1024, 3.5, 1.15);
     }
 
     @Nested
@@ -261,7 +270,7 @@ class NvidiaAiServiceTest {
             String pool = "openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,"
                     + "z-ai/glm-5.3,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3";
             NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
-                    8192, 1024, 3.5, 1.15);
+                    inspector, 8192, 1024, 3.5, 1.15);
 
             java.lang.reflect.Field index = NvidiaAiService.class
                     .getDeclaredField("currentModelIndex");
@@ -284,6 +293,39 @@ class NvidiaAiServiceTest {
     }
 
     @Nested
+    @DisplayName("Provider availability pre-flight tests")
+    class ProviderPreFlightTests {
+
+        @Test
+        @DisplayName("An offline provider fails fast instead of hanging through 18 rotation timeouts")
+        void offlineProvider_failsFast() {
+            when(inspector.isNvidiaOnline()).thenReturn(false);
+            String pool = "m1,m2,m3,m4,m5,m6";
+            NvidiaAiService offline = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15);
+
+            RuntimeException failure = assertThrows(RuntimeException.class,
+                    () -> offline.callModelWithRotation("prompt"));
+
+            assertTrue(failure.getMessage().contains("offline"),
+                    "Falla rápido cuando toda la vuelta al pool está offline: " + failure.getMessage());
+            // Una consulta de sonda por slot del pool y ni un solo intento quemado.
+            verify(inspector, times(6)).isNvidiaOnline();
+        }
+
+        @Test
+        @DisplayName("poolModelNames exposes the rotation pool for the model catalog")
+        void poolModelNames_exposesThePool() {
+            String pool = "openai/gpt-oss-20b,z-ai/glm-5.3,moonshotai/kimi-k3";
+            NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15);
+
+            assertEquals(java.util.List.of("openai/gpt-oss-20b", "z-ai/glm-5.3", "moonshotai/kimi-k3"),
+                    poolService.poolModelNames());
+        }
+    }
+
+    @Nested
     @DisplayName("Output budget estimation tests")
     class OutputBudgetEstimationTests {
 
@@ -298,7 +340,7 @@ class NvidiaAiServiceTest {
         @DisplayName("A tighter budget yields proportionally smaller pieces")
         void estimateMaxPieceChars_scalesWithTheBudget() {
             NvidiaAiService tiny = new NvidiaAiService(null, "m", 1, rateLimiter,
-                    2_048, 1_024, 3.5, 1.15);
+                    inspector, 2_048, 1_024, 3.5, 1.15);
             assertEquals(3_116, tiny.estimateMaxPieceChars());
         }
 
@@ -379,7 +421,7 @@ class NvidiaAiServiceTest {
 
         private NvidiaAiService serviceWithCountingSeam(java.util.function.Function<String, String> responder) {
             servedPrompts = new java.util.ArrayList<>();
-            return new NvidiaAiService(null, "m", 1, rateLimiter, 200, 50, 10.0, 1.0) {
+            return new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
                 @Override
                 public String callModelWithRotation(String prompt) {
                     servedPrompts.add(prompt);
@@ -421,7 +463,7 @@ class NvidiaAiServiceTest {
             // primera respuesta: se re-divide y reintenta.
             String text = "x".repeat(600) + ". " + "y".repeat(600) + ". " + "z".repeat(200);
             java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
-            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, 200, 50, 10.0, 1.0) {
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
                 @Override
                 public String callModelWithRotation(String prompt) {
                     if (calls.incrementAndGet() == 1) {
@@ -441,7 +483,7 @@ class NvidiaAiServiceTest {
         @DisplayName("A truncation below the self-healing floor propagates visibly")
         void translate_truncatedTinyPiece_failsVisibly() {
             String text = "tiny text";
-            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, 200, 50, 10.0, 1.0) {
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
                 @Override
                 public String callModelWithRotation(String prompt) {
                     throw new NvidiaAiService.TranslationTruncatedException("length");

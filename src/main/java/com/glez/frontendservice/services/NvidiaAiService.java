@@ -50,6 +50,7 @@ public class NvidiaAiService {
     private final AtomicInteger currentModelIndex = new AtomicInteger(0);
     private final int maxRetries;
     private final NvidiaRateLimiter rateLimiter;
+    private final ModelInspectorService inspector;
     private final int maxOutputTokens;
     private final int reasoningReserveTokens;
     private final double charsPerToken;
@@ -60,6 +61,7 @@ public class NvidiaAiService {
             @Value("${app.nvidia.models}") String models,
             @Value("${app.nvidia.max-retries:3}") int maxRetries,
             NvidiaRateLimiter rateLimiter,
+            ModelInspectorService inspector,
             @Value("${app.nvidia.max-output-tokens:8192}") int maxOutputTokens,
             @Value("${app.nvidia.reasoning-reserve-tokens:1024}") int reasoningReserveTokens,
             @Value("${app.nvidia.chars-per-token:3.5}") double charsPerToken,
@@ -71,15 +73,25 @@ public class NvidiaAiService {
                 .toList();
         this.maxRetries = maxRetries;
         this.rateLimiter = rateLimiter;
+        this.inspector = inspector;
         this.maxOutputTokens = maxOutputTokens;
         this.reasoningReserveTokens = reasoningReserveTokens;
         this.charsPerToken = charsPerToken;
         this.expansionFactor = expansionFactor;
     }
 
+    /** Exposición del pool para el catálogo de modelos (ModelCatalogController). */
+    public List<String> poolModelNames() {
+        return List.copyOf(modelNames);
+    }
+
     /**
      * Llama al modelo activo de la rotación con reintentos/rotación por
-     * fallos transitorios. Ciclo de vida observable en el visor/histórico
+     * fallos transitorios. <b>Pre-flight</b>: antes de intentar un modelo se
+     * consulta la sonda de disponibilidad del proveedor (cacheada con TTL) —
+     * un proveedor caído se salta con WARN SIN quemar reintentos ni cuota;
+     * si toda una vuelta al pool está offline, se falla rápido en vez de
+     * colgarse en timeouts. Ciclo de vida observable en el visor/histórico
      * de logs: DEBUG antes de cada intento, INFO con el resultado (modelo,
      * caracteres de respuesta, duración, tope de salida), WARN en cada
      * fallo reintentable con rotación — y el truncate/length sube como
@@ -89,9 +101,27 @@ public class NvidiaAiService {
     public String callModelWithRotation(String prompt) {
         int attempts = 0;
         int totalModels = modelNames.size();
+        int skippedOffline = 0;
 
         while (attempts < totalModels * maxRetries) {
             String currentModel = modelNames.get(currentModelIndex.get());
+            // Pre-flight: sonda del proveedor con caché corta (3 s de
+            // conexión): un fallo de red/DSS caído falla en segundos.
+            if (!inspector.isNvidiaOnline()) {
+                skippedOffline++;
+                if (skippedOffline >= totalModels) {
+                    // Toda una vuelta al pool está offline: fallar rápido
+                    // en vez de colgarse en timeouts agotando los reintentos.
+                    throw new RuntimeException(
+                            "All NVIDIA models are offline/unavailable (probe failed for "
+                                    + skippedOffline + " rotation slots)");
+                }
+                log.warn("[llm] Modelo {} saltado: proveedor NVIDIA offline (sonda cacheada). Rotando al siguiente",
+                        currentModel);
+                rotateModel();
+                continue;
+            }
+            skippedOffline = 0;
             // Cada intento es una solicitud a la API: respeta la cuota
             // global (RPM) antes de disparar la llamada.
             rateLimiter.acquire();

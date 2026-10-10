@@ -116,6 +116,15 @@ app:
     # La traducción al español expande ~10-15% el texto origen; el
     # presupuesto se calcula con este factor para no quedarse corto.
     translation-expansion-factor: 1.15
+  ai-inspector:
+    # Sondas de disponibilidad antes de usar un modelo: timeout de conexión
+    # CORTO para que un DNS caído falle en segundos (no cuelgue la
+    # rotación), y caché con TTL para no sondear en cada llamada.
+    # Las especificaciones reales se leen de los modelos locales de Ollama
+    # (spring.ai.ollama.base-url: /api/show expone contexto, parámetros,
+    # cuantización y capacidades); NVIDIA no expone specs por modelo.
+    probe-timeout-seconds: 5
+    probe-cache-ttl-seconds: 60
   nlp:
     model-path: classpath:/model
     models:
