@@ -115,33 +115,75 @@ class NvidiaAiServiceTest {
     class BuildTranslationPromptTests {
 
         @Test
-        @DisplayName("Should build correct prompt format")
+        @DisplayName("Should build the multi-step protocol with the languages substituted")
         void buildTranslationPrompt_withParams_returnsFormattedPrompt() {
             String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world");
-            
+
             assertNotNull(prompt);
-            assertTrue(prompt.contains("Translate the following text from en to es"));
-            assertTrue(prompt.contains("Hello world"));
-            assertTrue(prompt.contains("Maintain the original formatting"));
-            assertTrue(prompt.contains("Do not add any explanations"));
+            assertTrue(prompt.contains("Translate the provided text from **en** to **es**"));
+            assertTrue(prompt.contains("Step 1: Deep Content Analysis and Pre-Correction (en)"));
+            assertTrue(prompt.contains("Step 3: High-Fidelity Translation (en to es)"));
+            assertTrue(prompt.contains("Step 4: Post-Translation Refinement and Validation (es)"));
+            assertTrue(prompt.contains("**Source Language:** en"));
+            assertTrue(prompt.contains("**Target Language:** es"));
+            assertTrue(prompt.contains("Hello world"), "El chunk viaja al final del prompt");
+            assertTrue(prompt.contains("**ONLY** the fully translated, cleaned, and refined narrative text"));
+            assertTrue(prompt.contains("Keep the original paragraph breaks EXACTLY"),
+                    "Los párrafos alimentan la vista paralela y el TTS: deben preservarse");
+        }
+
+        @Test
+        @DisplayName("Should not leave unsubstituted placeholders nor a hardcoded target language")
+        void buildTranslationPrompt_noPlaceholderOrHardcodedLanguageLeftBehind() {
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world");
+
+            assertFalse(prompt.contains("{source_lang}"));
+            assertFalse(prompt.contains("{target_lang}"));
+            assertFalse(prompt.contains("{{text_chunk}}"));
+            assertFalse(prompt.contains("idiomatic Spanish"),
+                    "El idioma destino es un parámetro: nada de idiomas hardcodeados");
+        }
+
+        @Test
+        @DisplayName("Should inject the series glossary into the translation step when present")
+        void buildTranslationPrompt_withGlossary_injectsEstablishedTerms() {
+            com.glez.frontendservice.model.TranslationTerm term =
+                    new com.glez.frontendservice.model.TranslationTerm();
+            term.setSourceTerm("Rimuru");
+            term.setTargetTerm("Rimuru");
+
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world", java.util.List.of(term));
+
+            assertTrue(prompt.contains("Established series glossary"));
+            assertTrue(prompt.contains("- \"Rimuru\" -> \"Rimuru\""));
+            assertTrue(prompt.indexOf("Established series glossary") < prompt.indexOf("Cultural Nuances"),
+                    "El glosario vive dentro del paso 3 de traducción");
+        }
+
+        @Test
+        @DisplayName("Should omit the glossary block entirely without terms")
+        void buildTranslationPrompt_withoutGlossary_omitsTheBlock() {
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Hello world");
+
+            assertFalse(prompt.contains("Established series glossary"));
         }
 
         @Test
         @DisplayName("Should handle empty text")
         void buildTranslationPrompt_withEmptyText_includesEmptyText() {
             String prompt = invokeBuildTranslationPrompt("en", "es", "");
-            
+
             assertNotNull(prompt);
-            assertTrue(prompt.contains("Text to translate:"));
+            assertTrue(prompt.contains("Text for Processing"));
         }
 
         @Test
         @DisplayName("Should handle special characters in text")
         void buildTranslationPrompt_withSpecialChars_escapesCorrectly() {
-            String prompt = invokeBuildTranslationPrompt("en", "es", "Text with \"quotes\" and 'apostrophes'");
-            
+            String prompt = invokeBuildTranslationPrompt("en", "es", "Text with \"quotes\" and 'apostrophes' and 100% sure");
+
             assertNotNull(prompt);
-            assertTrue(prompt.contains("Text with \"quotes\" and 'apostrophes'"));
+            assertTrue(prompt.contains("Text with \"quotes\" and 'apostrophes' and 100% sure"));
         }
     }
 
@@ -189,19 +231,20 @@ class NvidiaAiServiceTest {
             String prompt = invokeBuildTranslationPrompt("en", "es", "Text",
                     java.util.List.of(term("the Angel Lord", "el Señor de los Ángeles")));
 
-            assertTrue(prompt.contains("Use EXACTLY these established translations"));
+            assertTrue(prompt.contains("Established series glossary"));
+            assertTrue(prompt.contains("use EXACTLY these translations"));
             assertTrue(prompt.contains("- \"the Angel Lord\" -> \"el Señor de los Ángeles\""));
         }
 
         @Test
-        @DisplayName("Without glossary the prompt omits the glossary block but keeps the literary style")
+        @DisplayName("Without glossary the prompt omits the glossary block but keeps the literary persona")
         void buildTranslationPrompt_withoutGlossary_keepsStyle() {
             String prompt = invokeBuildTranslationPrompt("en", "es", "Text");
 
-            assertFalse(prompt.contains("Use EXACTLY these established translations"));
-            assertTrue(prompt.contains("expert literary translator"),
+            assertFalse(prompt.contains("Established series glossary"));
+            assertTrue(prompt.contains("WORLD-CLASS TRANSLATOR and a hyper-meticulous LITERARY EDITOR"),
                     "The role/style guidance must always be present to avoid literal translations");
-            assertTrue(prompt.contains("Restructure sentences"));
+            assertTrue(prompt.contains("fluent and idiomatic in es"));
         }
     }
 }
