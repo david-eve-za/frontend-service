@@ -251,6 +251,39 @@ class NvidiaAiServiceTest {
     }
 
     @Nested
+    @DisplayName("Model pool rotation tests")
+    class ModelPoolRotationTests {
+
+        @Test
+        @DisplayName("rotateModel cycles through every configured model and wraps around")
+        void rotateModel_cyclesThroughTheWholePool() throws Exception {
+            // Pool de 6 modelos como en app.nvidia.models (primario + alternativos).
+            String pool = "openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,"
+                    + "z-ai/glm-5.3,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3";
+            NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
+                    8192, 1024, 3.5, 1.15);
+
+            java.lang.reflect.Field index = NvidiaAiService.class
+                    .getDeclaredField("currentModelIndex");
+            index.setAccessible(true);
+
+            // Seis rotaciones recorren el pool completo y la séptima vuelve al primario.
+            for (int i = 1; i <= 6; i++) {
+                invokeRotateModel(poolService);
+                int current = ((java.util.concurrent.atomic.AtomicInteger) index.get(poolService)).get();
+                assertEquals(i % 6, current, "La rotación " + i + " debe aterrizar en " + (i % 6));
+            }
+        }
+
+        private void invokeRotateModel(NvidiaAiService service) throws Exception {
+            java.lang.reflect.Method method = NvidiaAiService.class
+                    .getDeclaredMethod("rotateModel");
+            method.setAccessible(true);
+            method.invoke(service);
+        }
+    }
+
+    @Nested
     @DisplayName("Output budget estimation tests")
     class OutputBudgetEstimationTests {
 

@@ -1,5 +1,8 @@
 package com.glez.frontendservice.services;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.NovelVolume;
 import com.glez.frontendservice.model.TranslationTerm;
@@ -8,9 +11,6 @@ import com.glez.frontendservice.repository.NovelVolumeRepository;
 import com.glez.frontendservice.repository.TranslationTermRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.openai.OpenAiChatModel;
-import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -43,19 +43,18 @@ public class GlossaryService {
     private final TranslationTermRepository termRepository;
     private final BlockRepository blockRepository;
     private final NovelVolumeRepository volumeRepository;
-    private final OpenAiChatModel chatModel;
-    private final NvidiaRateLimiter rateLimiter;
+    /** Rotación/reintentos del pool de modelos (app.nvidia.models). */
+    private final NvidiaAiService nvidiaAiService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public GlossaryService(TranslationTermRepository termRepository,
                            BlockRepository blockRepository,
                            NovelVolumeRepository volumeRepository,
-                           OpenAiChatModel chatModel,
-                           NvidiaRateLimiter rateLimiter) {
+                           NvidiaAiService nvidiaAiService) {
         this.termRepository = termRepository;
         this.blockRepository = blockRepository;
         this.volumeRepository = volumeRepository;
-        this.chatModel = chatModel;
-        this.rateLimiter = rateLimiter;
+        this.nvidiaAiService = nvidiaAiService;
     }
 
     /** Par de términos devuelto por el LLM en la extracción. */
@@ -126,8 +125,6 @@ public class GlossaryService {
             return List.of();
         }
 
-        // La extracción también consume cuota de la API de NVIDIA.
-        rateLimiter.acquire();
         String prompt = """
                 You are building a translation glossary for a fantasy book series.
                 From the chapter titles and the excerpt below, extract the recurring
@@ -150,12 +147,34 @@ public class GlossaryService {
                 %s
                 """.formatted(MAX_TERMS, input);
 
-        return ChatClient.create(chatModel)
-                .prompt()
-                .user(prompt)
-                .call()
-                .entity(new ParameterizedTypeReference<List<TermPair>>() {
-                });
+        // La extracción pasa por la MISMA rotación de modelos que la
+        // traducción (reintentos, tope de salida, detección de truncado y
+        // cuota RPM incluidos): un modelo caído no tumba la extracción —
+        // se rota al siguiente del pool (app.nvidia.models).
+        String raw = nvidiaAiService.callModelWithRotation(prompt);
+        return parseTermPairs(raw);
+    }
+
+    /**
+     * Parsea la respuesta del LLM: los modelos envuelven el JSON en
+     * vallas de código con frecuencia, así que se extrae del primer '[' al
+     * último ']' antes de deserializar. Un formato incomprensible sube
+     * como excepción y el llamador degrada (traducción sin glosario).
+     */
+    private List<TermPair> parseTermPairs(String raw) {
+        try {
+            int start = raw.indexOf('[');
+            int end = raw.lastIndexOf(']');
+            if (start < 0 || end <= start) {
+                throw new IllegalStateException("Glossary extraction response is not a JSON array");
+            }
+            return objectMapper.readValue(
+                    raw.substring(start, end + 1),
+                    new TypeReference<List<TermPair>>() {
+                    });
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Could not parse the glossary extraction response", e);
+        }
     }
 
     /** Títulos de bloques + muestra inicial del texto del libro. */

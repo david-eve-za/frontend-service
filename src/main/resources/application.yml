@@ -59,6 +59,9 @@ spring:
       # sin él las llamadas van a /chat/completions y NVIDIA responde 404.
       base-url: https://integrate.api.nvidia.com/v1
       chat:
+        # Fallback residual: toda llamada real fija su modelo vía la
+        # rotación de app.nvidia.models; esto solo aplicaría a una
+        # llamada directa al ChatModel sin opciones.
         model: openai/gpt-oss-20b
     model:
       embedding: none
@@ -82,9 +85,13 @@ app:
     # bloque de audio, con este tope suave hacia el endpoint de Edge TTS.
     tts-concurrency: 3
   nvidia:
-    # Modelos vivos en integrate.api.nvidia.com (los anteriores llegaron a EOL):
-    # openai/gpt-oss-20b traduce limpio; nemotron-3-super como respaldo en rotación.
-    models: "openai/gpt-oss-120b,nvidia/nemotron-3-super-120b-a12b"
+    # Pool de modelos con ROTACIÓN AUTOMÁTICA: el primario primero, y si
+    # falla (429/quota/timeout/503/errores de red) cada reintento pasa al
+    # siguiente del pool (max-retries por modelo; la rotación es cíclica).
+    # openai/gpt-oss-20b traduce limpio; nemotron-3-super, GLM-5.3 (y su
+    # variante flash), deepseek-v4.1-flash y kimi-k3 como alternativas de
+    # traducción y propósito general (extracción del glosario incluida).
+    models: "openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,z-ai/glm-5.3,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3"
     max-retries: 3
     # Cuota de la API de NVIDIA en solicitudes por minuto. El pipeline
     # completo (traducción con reintentos/rotación y extracción del
