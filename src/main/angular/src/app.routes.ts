@@ -32,6 +32,11 @@ export const appRoutes: Routes = [
                 loadChildren: () =>
                     import('./app/pages/book-pipeline/book-pipeline.routes'),
             },
+            {
+                path: 'video-stories',
+                loadChildren: () =>
+                    import('./app/pages/video-stories/video-stories.routes'),
+            },
         ],
     },
     { path: 'landing', component: Landing },
