@@ -62,7 +62,7 @@ import {Product, ProductService} from '@/app/pages/service/product.service';
                             </ng-template>
                         </p-table>
                     </p-popover>
-                    <p-toast />
+                    <p-toast [life]="12000" />
                 </div>
             </div>
 
@@ -195,7 +195,7 @@ export class OverlayDemo implements OnInit {
             },
             reject: () => {
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Rejected',
                     detail: 'You have rejected'
                 });

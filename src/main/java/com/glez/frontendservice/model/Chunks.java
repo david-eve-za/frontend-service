@@ -57,6 +57,10 @@ public class Chunks {
     @Column(nullable = false)
     private Integer position;
 
+    /** Causa del último fallo de traducción (para el popup en vivo del FE); null si el chunk está sano. */
+    @Column(name = "error_message", length = 4000)
+    private String errorMessage;
+
     @Column(nullable = false)
     private Integer attempts = 0;
 }

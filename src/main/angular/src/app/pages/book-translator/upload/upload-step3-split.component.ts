@@ -50,7 +50,7 @@ export type BlockTypeValue = 'PROLOGUE' | 'CHAPTER' | 'EPILOGUE';
         ToastModule,
     ],
     template: `
-        <p-toast></p-toast>
+        <p-toast [life]="12000"></p-toast>
 
         <div class="card">
             <div class="font-semibold text-xl mb-4">Dividir Texto</div>
@@ -233,7 +233,7 @@ export class UploadStep3SplitComponent implements OnInit {
             error: () => {
                 this.loadingBooks = false;
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Error',
                     detail: 'No se pudo cargar la lista de documentos.',
                 });
@@ -285,7 +285,7 @@ export class UploadStep3SplitComponent implements OnInit {
         const pos = el ? el.selectionStart : book.text.length;
         if (this.depthAt(book.text, pos) > 0) {
             this.messageService.add({
-                severity: 'warn',
+                sticky: true, severity: 'warn',
                 summary: 'Advertencia',
                 detail: 'No se puede anidar bloques: hay un bloque abierto sin cerrar.',
             });
@@ -301,7 +301,7 @@ export class UploadStep3SplitComponent implements OnInit {
         const last = stack.length > 0 ? stack[stack.length - 1] : null;
         if (!last) {
             this.messageService.add({
-                severity: 'warn',
+                sticky: true, severity: 'warn',
                 summary: 'Advertencia',
                 detail: 'No hay ningún bloque abierto para cerrar.',
             });
@@ -317,7 +317,7 @@ export class UploadStep3SplitComponent implements OnInit {
         const balanceError = this.validateBalance(book.text);
         if (balanceError) {
             this.messageService.add({
-                severity: 'error',
+                sticky: true, severity: 'error',
                 summary: 'Error',
                 detail: balanceError,
             });
@@ -328,7 +328,7 @@ export class UploadStep3SplitComponent implements OnInit {
         if (uncovered > 0 && !this.forceSave) {
             this.forceSave = true;
             this.messageService.add({
-                severity: 'warn',
+                sticky: true, severity: 'warn',
                 summary: 'Texto fuera de los bloques',
                 detail:
                     `Al guardar se descartarían ${uncovered} caracteres ` +
@@ -372,7 +372,7 @@ export class UploadStep3SplitComponent implements OnInit {
                     this.saving = false;
                     this.forceSave = false;
                     this.messageService.add({
-                        severity: 'error',
+                        sticky: true, severity: 'error',
                         summary: 'Error',
                         detail: 'Error al guardar los bloques.',
                     });
@@ -406,7 +406,7 @@ export class UploadStep3SplitComponent implements OnInit {
             error: () => {
                 this.loadingText = false;
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Error',
                     detail: 'No se pudo cargar el texto del documento.',
                 });

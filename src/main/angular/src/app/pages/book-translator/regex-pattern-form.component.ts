@@ -40,7 +40,7 @@ import { FieldsetModule } from 'primeng/fieldset';
   ],
   providers: [ConfirmationService, MessageService],
   template: `
-    <p-toast></p-toast>
+    <p-toast [life]="12000"></p-toast>
     <p-confirmDialog></p-confirmDialog>
 
     <div class="card">
@@ -230,7 +230,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
         this.cdr.markForCheck();
       },
       error: (err) => {
-        this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar los patrones' });
+        this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'No se pudieron cargar los patrones' });
       }
     });
   }
@@ -313,7 +313,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
               this.messageService.add({ severity: 'success', summary: 'Éxito', detail: 'Patrón eliminado' });
               this.cdr.markForCheck();
             },
-            error: () => this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudo eliminar' })
+            error: () => this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'No se pudo eliminar' })
           });
         } else {
           this.patterns.removeAt(index);
@@ -389,7 +389,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
   saveAll() {
     if (this.form.invalid) {
       this.markAllAsTouched();
-      this.messageService.add({ severity: 'error', summary: 'Error', detail: 'Hay campos inválidos en el formulario' });
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'Hay campos inválidos en el formulario' });
       return;
     }
 
@@ -414,7 +414,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
           next: () => saveNext(index + 1),
           error: () => {
             this.saving = false;
-            this.messageService.add({ severity: 'error', summary: 'Error', detail: `Error guardando ${pattern.displayName}` });
+            this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: `Error guardando ${pattern.displayName}` });
             this.cdr.markForCheck();
           }
         });
@@ -423,7 +423,7 @@ export class RegexPatternFormComponent implements OnInit, OnDestroy {
           next: () => saveNext(index + 1),
           error: () => {
             this.saving = false;
-            this.messageService.add({ severity: 'error', summary: 'Error', detail: `Error creando ${pattern.displayName}` });
+            this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: `Error creando ${pattern.displayName}` });
             this.cdr.markForCheck();
           }
         });

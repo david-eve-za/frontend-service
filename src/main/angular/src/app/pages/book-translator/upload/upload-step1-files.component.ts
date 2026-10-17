@@ -51,7 +51,7 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
         TagModule,
     ],
     template: `
-        <p-toast></p-toast>
+        <p-toast [life]="12000"></p-toast>
 
         <div class="card">
             <div class="font-semibold text-xl mb-4">Subir Archivos</div>
@@ -371,7 +371,7 @@ export class UploadStep1FilesComponent implements OnInit {
         }
         if (successes < validFiles.length) {
             this.messageService.add({
-                severity: 'error',
+                sticky: true, severity: 'error',
                 summary: 'Errores en la subida',
                 detail: `${validFiles.length - successes} archivo(s) no se pudieron subir`,
             });

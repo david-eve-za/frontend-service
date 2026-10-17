@@ -9,7 +9,7 @@ import { ToastModule } from 'primeng/toast';
     selector: 'app-file-demo',
     standalone: true,
     imports: [CommonModule, FileUploadModule, ToastModule, ButtonModule],
-    template: `<p-toast />
+    template: `<p-toast [life]="12000" />
         <div class="grid grid-cols-12 gap-8">
             <div class="col-span-full lg:col-span-6">
                 <div class="card">
