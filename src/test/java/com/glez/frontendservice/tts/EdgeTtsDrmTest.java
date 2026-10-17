@@ -18,14 +18,43 @@ class EdgeTtsDrmTest {
     }
 
     @Test
-    @DisplayName("Sec-MS-GEC token is 64 uppercase hex characters")
-    void generateSecMsGec_returnsUppercaseHexToken() {
+    @DisplayName("Sec-MS-GEC v2 token is '<16 uppercase hex>-<64 uppercase hex>'")
+    void generateSecMsGec_returnsUppercaseV2Format() {
         String token = EdgeTtsDrm.generateSecMsGec();
 
         assertNotNull(token);
-        assertEquals(64, token.length());
-        assertTrue(token.matches("[0-9A-F]{64}"),
-                "Token must be 64 uppercase hex chars but was: " + token);
+        assertEquals(81, token.length(), "16 hex + '-' + 64 hex");
+        assertTrue(token.matches("[0-9A-F]{16}-[0-9A-F]{64}"),
+                "Token must be <16 hex>-<64 hex> uppercase but was: " + token);
+    }
+
+    @Test
+    @DisplayName("v2 tokens match the Python reference implementation (edge-tts 7.3.1) byte-for-byte")
+    void generateSecMsGec_matchesPythonReferenceVectors() {
+        // Vectores generados con drm.py 7.3.1 VERBATIM (script de
+        // referencia de edge-tts upstream) para timestamps explícitos.
+        assertEquals("52BC7A17B50DFEC9-28C4394775C8751CD2F6859C030C06DB1489ACAB3B3A7651831FC26895177ED6",
+                EdgeTtsDrm.generateSecMsGec(0.0));
+        assertEquals("F7535A20A262E331-28675BF85C7106BBF20035A78FCB0B6890813EAD5C3B983EF3424931B720BABB",
+                EdgeTtsDrm.generateSecMsGec(300.0));
+        assertEquals("BA405D1577B8E0CE-61F01E88539977A1A1E969572D82EECFA45FB1E5DEBD122D6ACBAF0054F959E5",
+                EdgeTtsDrm.generateSecMsGec(1234567890.5));
+        assertEquals("35331C6609FA5EAD-4C75F4FE7755668221F8FF1E0968992B87161A1A8961121625C04F26300932D3",
+                EdgeTtsDrm.generateSecMsGec(1660000000.125));
+        assertEquals("3689BC1F78238B9A-DD2A2B71647FAA9B316154E46E5EEA92B85708C5C753EC77984ED8A78A848763",
+                EdgeTtsDrm.generateSecMsGec(1763000000.75));
+        assertEquals("452146D9A9DBED9A-8D3964906D00EB5E7D124996A1B864F710389C6007B99C551316A53768E95F37",
+                EdgeTtsDrm.generateSecMsGec(1792249234.9));
+    }
+
+    @Test
+    @DisplayName("Timestamps within the same 300-second window share one token")
+    void generateSecMsGec_sameWindow_sameToken() {
+        // 300.0 y 301.25 caen en la misma ventana redondeada de 5 minutos.
+        assertEquals(EdgeTtsDrm.generateSecMsGec(300.0),
+                EdgeTtsDrm.generateSecMsGec(301.25));
+        assertNotEquals(EdgeTtsDrm.generateSecMsGec(300.0),
+                EdgeTtsDrm.generateSecMsGec(600.0));
     }
 
     @Test

@@ -17,7 +17,16 @@ final class EdgeTtsProtocol {
 
     static final String CHROMIUM_FULL_VERSION = "143.0.3650.75";
     static final String CHROMIUM_MAJOR_VERSION = CHROMIUM_FULL_VERSION.split("\\.", 2)[0];
-    static final String SEC_MS_GEC_VERSION = "1-" + CHROMIUM_FULL_VERSION;
+
+    /**
+     * Sec-MS-GEC v2 (despliegue de Microsoft desde 2026-10): el token viaja
+     * en formato "<16 hex CS64>-<64 hex SHA-256 modificado>" y la versión
+     * declarada debe llevar el prefijo 2-. Un token v1 obtiene HTTP 403 en
+     * el handshake del WebSocket en las regiones con el despliegue activo.
+     * Alineado con edge-tts 7.3.1 (constants.py: CHROMIUM_FULL_VERSION se
+     * mantiene en 143.0.3650.75 — el fix es el TOKEN, no el host ni el UA).
+     */
+    static final String SEC_MS_GEC_VERSION = "2-" + CHROMIUM_FULL_VERSION;
 
     static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             + " (KHTML, like Gecko) Chrome/" + CHROMIUM_MAJOR_VERSION + ".0.0.0 Safari/537.36"
