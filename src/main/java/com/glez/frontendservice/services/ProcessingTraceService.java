@@ -103,6 +103,21 @@ public class ProcessingTraceService {
     }
 
     /**
+     * Marks a step attempt as interrupted by an explicit user stop: the
+     * event closes as CANCELLED (not FAILED) so the attempt never counts
+     * toward the genuine-failure retry budget and the timeline shows the
+     * interruption with its reason.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void cancelStep(ProcessTraceEvent event, String reason) {
+        event.setStatus(TraceEventStatus.CANCELLED);
+        event.setFinishedAt(Instant.now());
+        event.setDetails(reason);
+        traceEventRepository.save(event);
+        log.info("Step {} cancelled: {}", event.getStep(), reason);
+    }
+
+    /**
      * Records that a step was skipped because it was already satisfied by
      * the persisted state (idempotent re-entry).
      */

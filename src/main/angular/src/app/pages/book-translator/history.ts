@@ -27,7 +27,7 @@ interface BookRow {
   imports: [CommonModule, ButtonModule, TagModule, ToastModule, TableModule],
   providers: [MessageService],
   template: `
-    <p-toast></p-toast>
+    <p-toast [life]="12000"></p-toast>
 
     <div class="card mb-4">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-content-between gap-4 mb-4 p-4 bg-blue-50 border-l-4 border-blue-500 rounded-r">
@@ -180,7 +180,7 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
       }));
     } catch (err) {
       this.messageService.add({
-        severity: 'error',
+        sticky: true, severity: 'error',
         summary: 'Error',
         detail: 'No se pudo cargar la lista de libros.'
       });
@@ -197,7 +197,7 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
       this.trace = await firstValueFrom(this.uploadService.getBookTrace(bookId));
     } catch {
       this.messageService.add({
-        severity: 'error',
+        sticky: true, severity: 'error',
         summary: 'Error',
         detail: 'No se pudo cargar la línea de tiempo.'
       });
@@ -225,7 +225,7 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
       this.watchBook(book.id);
     } catch (err: any) {
       const detail = err?.error?.error || 'No se pudo iniciar el procesamiento.';
-      this.messageService.add({ severity: 'error', summary: 'Error', detail });
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
       this.resuming[book.id] = false;
     }
   }
@@ -274,6 +274,7 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
       case 'COMPLETED': return 'success';
       case 'FAILED': return 'danger';
       case 'STARTED': return 'warn';
+      case 'CANCELLED': return 'warn';
       default: return 'info';
     }
   }
@@ -283,6 +284,7 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
       case 'COMPLETED': return 'Completado';
       case 'FAILED': return 'Fallido';
       case 'STARTED': return 'En progreso';
+      case 'CANCELLED': return 'Cancelado';
       default: return 'Omitido';
     }
   }
@@ -292,6 +294,7 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
       case 'COMPLETED': return 'bg-green-100 border-green-500 text-green-600';
       case 'FAILED': return 'bg-red-100 border-red-500 text-red-600';
       case 'STARTED': return 'bg-yellow-100 border-yellow-500 text-yellow-600';
+      case 'CANCELLED': return 'bg-orange-100 border-orange-500 text-orange-600';
       default: return 'bg-gray-100 border-gray-400 text-gray-500';
     }
   }
@@ -301,6 +304,7 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
       case 'COMPLETED': return 'pi-check';
       case 'FAILED': return 'pi-times';
       case 'STARTED': return 'pi-spin pi-spinner';
+      case 'CANCELLED': return 'pi-ban';
       default: return 'pi-minus';
     }
   }

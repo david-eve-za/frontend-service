@@ -190,6 +190,86 @@ class BookPipelineOrchestratorTest {
         }
     }
 
+    /** Light (id, name, audioFilePath) projection row used by the AUDIO step. */
+    private record BookAudioViewRow(UUID id, String name, String audioFilePath)
+            implements BookRepository.BookAudioView {
+        @Override
+        public UUID getId() {
+            return id;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public String getAudioFilePath() {
+            return audioFilePath;
+        }
+    }
+
+    /** Light block row (no content CLOB) used by the per-block AUDIO step. */
+    private record BlockAudioViewRow(UUID id, Block.BlockType blockType, Integer blockNumber,
+                                     Integer position, String audioFilePath)
+            implements com.glez.frontendservice.repository.BlockRepository.BlockAudioView {
+        @Override
+        public UUID getId() {
+            return id;
+        }
+
+        @Override
+        public Block.BlockType getBlockType() {
+            return blockType;
+        }
+
+        @Override
+        public Integer getBlockNumber() {
+            return blockNumber;
+        }
+
+        @Override
+        public Integer getPosition() {
+            return position;
+        }
+
+        @Override
+        public String getAudioFilePath() {
+            return audioFilePath;
+        }
+    }
+
+    /** Light block-bound chunk row (no original_text CLOB) for the AUDIO step. */
+    private record BlockChunkAudioViewRow(UUID blockId, ChunkStatus status, int position,
+                                          String translatedText)
+            implements ChunksRepository.BlockChunkAudioView {
+        @Override
+        public UUID getBlockId() {
+            return blockId;
+        }
+
+        @Override
+        public ChunkStatus getStatus() {
+            return status;
+        }
+
+        @Override
+        public int getPosition() {
+            return position;
+        }
+
+        @Override
+        public String getTranslatedText() {
+            return translatedText;
+        }
+    }
+
+    /** AUDIO step stub: light book view (name + audio path), no entity load. */
+    private void stubAudioView(String audioFilePath) {
+        lenient().when(bookRepository.findAudioViewById(bookId))
+                .thenReturn(Optional.of(new BookAudioViewRow(bookId, book.getName(), audioFilePath)));
+    }
+
     /** Entry guard stub: the pipeline reads the book status as a light projection. */
     private void stubBookState(ProcessingStatus status) {
         lenient().when(bookRepository.findStatusViews(List.of(bookId)))
@@ -239,19 +319,19 @@ class BookPipelineOrchestratorTest {
         stubTraceEvents();
         stubExtractedText();
         stubBookState(ProcessingStatus.UPLOADED);
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book)); // audio step loads the book
-        lenient().when(bookRepository.save(any(Book.class))).thenReturn(book);
+        stubAudioView(null); // audio step reads the light (id, name, path) view
         Chunks done = chunk(ChunkStatus.COMPLETED, 0, 1, "texto traducido");
         lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(1L);
         stubChunkViews(List.of(done));
-        when(chunksRepository.findByBook(book)).thenReturn(List.of(done));
+        when(chunksRepository.findTranslatedTextByBookId(bookId)).thenReturn(List.of("texto traducido"));
         when(audioGeneratorService.processTextToAudio(any(), any())).thenReturn(true);
 
         orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
 
         verify(audioGeneratorService, times(1)).processTextToAudio(any(), any());
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.AWAITING);
-        assertNotNull(book.getAudioFilePath());
+        // The audio path is persisted with the bulk update (no CLOB rewrite)
+        verify(bookRepository).updateAudioPathInBulk(bookId, Path.of("mi-libro.mp3").toString());
     }
 
     @Test
@@ -260,22 +340,20 @@ class BookPipelineOrchestratorTest {
         stubTraceEvents();
         stubExtractedText();
         stubBookState(ProcessingStatus.UPLOADED);
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book)); // audio step loads the book
+        stubAudioView(null); // audio step reads the light (id, name, path) view
 
         // After split: 2 chunks awaiting translation
         List<Chunks> awaiting = List.of(
                 chunk(ChunkStatus.AWAITING, 0, 0, null),
                 chunk(ChunkStatus.AWAITING, 1, 0, null));
         // After translation: both completed
-        List<Chunks> completed = List.of(
-                chunk(ChunkStatus.COMPLETED, 0, 1, "traducido 0"),
-                chunk(ChunkStatus.COMPLETED, 1, 1, "traducido 1"));
+        List<String> translated = List.of("traducido 0", "traducido 1");
 
         when(chunksRepository.countByBookId(bookId))
                 .thenReturn(0L)  // split check: no chunks yet
                 .thenReturn(2L); // count after the split
         stubChunkViews(awaiting);
-        when(chunksRepository.findByBook(book)).thenReturn(completed); // audio join
+        when(chunksRepository.findTranslatedTextByBookId(bookId)).thenReturn(translated); // audio join
 
         when(bookProcessingService.processBookChunksAsync(bookId))
                 .thenReturn(CompletableFuture.completedFuture(null));
@@ -302,11 +380,11 @@ class BookPipelineOrchestratorTest {
         ArgumentCaptor<Path> audioPath = ArgumentCaptor.forClass(Path.class);
         verify(audioGeneratorService).processTextToAudio(eq("traducido 0\n\ntraducido 1"), audioPath.capture());
         assertEquals(Path.of("mi-libro.mp3"), audioPath.getValue());
+        verify(bookRepository).updateAudioPathInBulk(bookId, "mi-libro.mp3");
 
         // FINALIZE: book completed via the guarded bulk status update
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
                 ProcessingStatus.COMPLETED);
-        assertEquals("mi-libro.mp3", book.getAudioFilePath());
 
         verify(traceService, atLeastOnce()).completeStep(any(), any());
         verify(traceService, never()).failStep(any(), any());
@@ -318,18 +396,16 @@ class BookPipelineOrchestratorTest {
         stubTraceEvents();
         stubExtractedText();
         stubBookState(ProcessingStatus.UPLOADED);
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book)); // audio step loads the book
+        stubAudioView(null); // audio step reads the light book view
 
         Chunks stale = chunk(ChunkStatus.PROCESSING, 0, 1, null);
         Chunks done = chunk(ChunkStatus.COMPLETED, 1, 1, "ya traducido");
         List<Chunks> mixed = List.of(stale, done);
-        List<Chunks> completed = List.of(
-                chunk(ChunkStatus.COMPLETED, 0, 0, "recuperado"),
-                done);
 
         when(chunksRepository.countByBookId(bookId)).thenReturn(2L); // split check: chunks exist -> skip
         stubChunkViews(mixed);
-        when(chunksRepository.findByBook(book)).thenReturn(completed); // audio join
+        when(chunksRepository.findTranslatedTextByBookId(bookId))
+                .thenReturn(java.util.Arrays.asList("recuperado", "ya traducido")); // audio join
 
         when(bookProcessingService.processBookChunksAsync(bookId))
                 .thenReturn(CompletableFuture.completedFuture(null));
@@ -505,34 +581,28 @@ class BookPipelineOrchestratorTest {
         stubTraceEvents();
         stubExtractedText();
         stubBookState(ProcessingStatus.UPLOADED);
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book)); // audio step loads the book
         book.setStatus(ProcessingStatus.AWAITING);
         // Audio files go inside the JUnit temp dir so the test never
         // writes into the repository working directory.
         book.setName(tempDir.resolve("mi-libro").toString());
+        stubAudioView(null); // audio step reads the light book view (name = temp dir)
 
-        // Two blocks: prologue + chapter 1
-        Block prologue = new Block();
-        prologue.setId(UUID.randomUUID());
-        prologue.setBook(book);
-        prologue.setBlockType(Block.BlockType.PROLOGUE);
-        prologue.setBlockNumber(1);
-        prologue.setPosition(0);
-        Block chapter = new Block();
-        chapter.setId(UUID.randomUUID());
-        chapter.setBook(book);
-        chapter.setBlockType(Block.BlockType.CHAPTER);
-        chapter.setBlockNumber(1);
-        chapter.setPosition(1);
-        when(blockRepository.findByBookIdOrderByPositionAsc(bookId)).thenReturn(List.of(prologue, chapter));
+        // Two blocks: prologue + chapter 1 (light rows, no content CLOB)
+        UUID prologueId = UUID.randomUUID();
+        UUID chapterId = UUID.randomUUID();
+        List<com.glez.frontendservice.repository.BlockRepository.BlockAudioView> blocks = List.of(
+                new BlockAudioViewRow(prologueId, Block.BlockType.PROLOGUE, 1, 0, null),
+                new BlockAudioViewRow(chapterId, Block.BlockType.CHAPTER, 1, 1, null));
+        when(blockRepository.findAudioViewsByBookId(bookId)).thenReturn(blocks);
 
         // Translated chunks per block (and for the translate step's evaluation)
-        Chunks prologueChunk = chunk(prologue, ChunkStatus.COMPLETED, 0, 1, "prólogo traducido");
-        Chunks chapterChunk = chunk(chapter, ChunkStatus.COMPLETED, 0, 1, "capítulo traducido");
         lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(2L); // split check
-        stubChunkViews(List.of(prologueChunk, chapterChunk));
-        when(chunksRepository.findBlockChunksByBookId(bookId))
-                .thenReturn(List.of(prologueChunk, chapterChunk));
+        stubChunkViews(List.of(
+                chunk(ChunkStatus.COMPLETED, 0, 1, "prólogo traducido"),
+                chunk(ChunkStatus.COMPLETED, 1, 1, "capítulo traducido")));
+        when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockChunkAudioViewRow(prologueId, ChunkStatus.COMPLETED, 0, "prólogo traducido"),
+                new BlockChunkAudioViewRow(chapterId, ChunkStatus.COMPLETED, 0, "capítulo traducido")));
 
         when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
             Path output = inv.getArgument(1);
@@ -542,7 +612,6 @@ class BookPipelineOrchestratorTest {
             Files.writeString(output, "fake mp3");
             return true;
         });
-        when(bookRepository.save(any(Book.class))).thenReturn(book);
 
         orchestrator.processBook(bookId).join();
 
@@ -557,10 +626,13 @@ class BookPipelineOrchestratorTest {
         org.junit.jupiter.api.Assertions.assertTrue(captured.get(0).getParent().toString()
                 .endsWith("mi-libro - audiolibro"), captured.get(0).toString());
 
-        // Each block persists its audio path and the book points to the directory
-        org.junit.jupiter.api.Assertions.assertNotNull(prologue.getAudioFilePath());
-        org.junit.jupiter.api.Assertions.assertNotNull(chapter.getAudioFilePath());
-        org.junit.jupiter.api.Assertions.assertTrue(book.getAudioFilePath().endsWith("mi-libro - audiolibro"));
+        // Each block persists its audio path (bulk update) and the book points to the directory
+        org.mockito.ArgumentCaptor<String> blockPaths = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(blockRepository, times(2)).updateAudioPathInBulk(any(UUID.class), blockPaths.capture());
+        org.junit.jupiter.api.Assertions.assertTrue(blockPaths.getAllValues().get(0).endsWith("01 - Prologo.mp3"));
+        org.junit.jupiter.api.Assertions.assertTrue(blockPaths.getAllValues().get(1).endsWith("02 - Capitulo 01.mp3"));
+        verify(bookRepository).updateAudioPathInBulk(eq(bookId), org.mockito.ArgumentMatchers.argThat(
+                path -> path != null && path.endsWith("mi-libro - audiolibro")));
         verify(traceService).completeStep(any(), org.mockito.ArgumentMatchers.argThat(
                 (String details) -> details != null && details.contains("2 block audio(s) generated")));
     }
@@ -571,7 +643,7 @@ class BookPipelineOrchestratorTest {
         stubTraceEvents();
         stubExtractedText();
         stubBookState(ProcessingStatus.UPLOADED);
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book)); // audio step loads the book
+        stubAudioView(null); // audio step reads the light book view
         // The book lived through 2 interrupted runs + 1 genuine failure
         when(traceService.countGenuineAttempts(eq(bookId), eq(ProcessStep.TRANSLATE)))
                 .thenReturn(1);
@@ -579,11 +651,10 @@ class BookPipelineOrchestratorTest {
         // All chunks carry attempts=3 inflated by the interrupted runs
         Chunks inflated = chunk(ChunkStatus.AWAITING, 0, 3, null);
         List<Chunks> pending = List.of(inflated);
-        List<Chunks> completed = List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido"));
 
         when(chunksRepository.countByBookId(bookId)).thenReturn(1L); // split check: not empty -> skip
         stubChunkViews(pending);
-        when(chunksRepository.findByBook(book)).thenReturn(completed); // audio join
+        when(chunksRepository.findTranslatedTextByBookId(bookId)).thenReturn(List.of("traducido")); // audio join
 
         when(bookProcessingService.processBookChunksAsync(bookId))
                 .thenReturn(CompletableFuture.completedFuture(null));
@@ -610,8 +681,7 @@ class BookPipelineOrchestratorTest {
         stubBookState(ProcessingStatus.UPLOADED);
         Path existingAudio = tempDir.resolve("mi-libro.mp3");
         Files.writeString(existingAudio, "fake mp3");
-        book.setAudioFilePath(existingAudio.toString());
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book)); // audio step loads the book
+        stubAudioView(existingAudio.toString()); // light book view with the audio path set
 
         List<Chunks> completed = List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido"));
         when(chunksRepository.countByBookId(bookId)).thenReturn(1L); // split check
@@ -644,13 +714,10 @@ class BookPipelineOrchestratorTest {
     @Test
     @DisplayName("audioPathFor forces the .mp3 extension")
     void audioPathFor_variants() {
-        assertEquals(Path.of("mi-libro.mp3"), BookPipelineOrchestrator.audioPathFor(book));
-        book.setName("libro");
-        assertEquals(Path.of("libro.mp3"), BookPipelineOrchestrator.audioPathFor(book));
-        book.setName("carpeta/libro.epub");
-        assertEquals(Path.of("carpeta/libro.mp3"), BookPipelineOrchestrator.audioPathFor(book));
-        book.setName(null);
-        assertEquals(Path.of("book.mp3"), BookPipelineOrchestrator.audioPathFor(book));
+        assertEquals(Path.of("mi-libro.mp3"), BookPipelineOrchestrator.audioPathFor("mi-libro.pdf"));
+        assertEquals(Path.of("libro.mp3"), BookPipelineOrchestrator.audioPathFor("libro"));
+        assertEquals(Path.of("carpeta/libro.mp3"), BookPipelineOrchestrator.audioPathFor("carpeta/libro.epub"));
+        assertEquals(Path.of("book.mp3"), BookPipelineOrchestrator.audioPathFor(null));
     }
 
     @Test
@@ -659,15 +726,14 @@ class BookPipelineOrchestratorTest {
         stubTraceEvents();
         stubExtractedText();
         stubBookState(ProcessingStatus.UPLOADED);
-        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book)); // audio step loads the book
+        stubAudioView(null); // audio step reads the light book view
 
         // A chunk awaiting translation: the first run will block inside the
         // TRANSLATE phase waiting for the (never-completing) translation future.
         Chunks awaiting = chunk(ChunkStatus.AWAITING, 0, 0, null);
-        Chunks done = chunk(ChunkStatus.COMPLETED, 0, 1, "traducido");
         when(chunksRepository.countByBookId(bookId)).thenReturn(1L); // split check: skip
         stubChunkViews(List.of(awaiting));
-        when(chunksRepository.findByBook(book)).thenReturn(List.of(done)); // audio join after unblock
+        when(chunksRepository.findTranslatedTextByBookId(bookId)).thenReturn(List.of("traducido")); // audio join after unblock
 
         CompletableFuture<Void> blocked = new CompletableFuture<>();
         when(bookProcessingService.processBookChunksAsync(bookId)).thenReturn(blocked);
@@ -694,5 +760,94 @@ class BookPipelineOrchestratorTest {
         // FINALIZE completes the book via the guarded bulk status update
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
                 ProcessingStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("Pause requested mid-run: the current step finishes, the book stays AWAITING and no audio runs")
+    void processBook_withPauseRequested_stopsAtNextCheckpoint() {
+        stubTraceEvents();
+        stubExtractedText();
+        stubBookState(ProcessingStatus.UPLOADED);
+
+        Chunks awaiting = chunk(ChunkStatus.AWAITING, 0, 0, null);
+        when(chunksRepository.countByBookId(bookId)).thenReturn(1L); // split check: skip
+        stubChunkViews(List.of(awaiting));
+
+        // The pause arrives WHILE the translate step is in flight (exactly
+        // like the dashboard button does): the step completes normally.
+        when(bookProcessingService.processBookChunksAsync(bookId)).thenAnswer(inv -> {
+            assertTrue(orchestrator.requestPause(bookId), "Pause must be accepted while running");
+            return CompletableFuture.completedFuture(null);
+        });
+
+        orchestrator.processBook(bookId).join();
+
+        // The translate step finished for real; the run stopped at the checkpoint
+        verify(traceService).completeStep(any(), eq("All chunks translated"));
+        // The book is parked AWAITING by the pause handler (guarded update)
+        verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.AWAITING);
+        // No audio, no finalize, no failure marking, no retry budget spent
+        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any());
+        verify(bookRepository, never()).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.COMPLETED);
+        verify(bookRepository, never()).updateStatusAndTrace(eq(bookId), eq(ProcessingStatus.FAILED), anyString());
+        verify(traceService, never()).failStep(any(), any());
+    }
+
+    @Test
+    @DisplayName("Stop requested mid-translation: in-flight work is cancelled, the step closes CANCELLED and the book stays STOPPED")
+    void processBook_withStopRequested_cancelsRunGracefully() {
+        stubTraceEvents();
+        stubExtractedText();
+        stubBookState(ProcessingStatus.UPLOADED);
+
+        Chunks awaiting = chunk(ChunkStatus.AWAITING, 0, 0, null);
+        when(chunksRepository.countByBookId(bookId)).thenReturn(1L); // split check: skip
+        stubChunkViews(List.of(awaiting));
+
+        // The stop lands while the translation pass is in flight: the
+        // cancellation collapses the join with an exception (like the real
+        // future.cancel(true) does).
+        when(bookProcessingService.processBookChunksAsync(bookId)).thenAnswer(inv -> {
+            assertTrue(orchestrator.requestStop(bookId), "Stop must be accepted while running");
+            return CompletableFuture.failedFuture(new RuntimeException("chunk translation cancelled"));
+        });
+
+        orchestrator.processBook(bookId).join(); // graceful: no exception escapes
+
+        // The stop persisted STOPPED immediately (guarded PROCESSING -> STOPPED)
+        verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.STOPPED);
+        // The step closes as CANCELLED in the trace, not as a failure
+        verify(traceService).cancelStep(any(), anyString());
+        // No retry budget consumed, no FAILED marking, no audio/finalize
+        verify(chunksRepository, never()).incrementFailedAttempts(any(), any());
+        verify(bookRepository, never()).updateStatusAndTrace(eq(bookId), eq(ProcessingStatus.FAILED), anyString());
+        verify(traceService, never()).failStep(any(), any());
+        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any());
+        // The run guard was released: a new run can start
+        assertFalse(orchestrator.isRunning(bookId));
+    }
+
+    @Test
+    @DisplayName("Stop of a book without an active run parks it as STOPPED; completed books refuse")
+    void requestStop_withoutRun_marksBookStopped() {
+        when(bookRepository.updateStatusIfNot(bookId, ProcessingStatus.COMPLETED, ProcessingStatus.STOPPED))
+                .thenReturn(1);
+        assertTrue(orchestrator.requestStop(bookId));
+        verify(bookRepository).updateStatusIfNot(bookId, ProcessingStatus.COMPLETED,
+                ProcessingStatus.STOPPED);
+
+        // A COMPLETED book refuses the stop (0 rows changed)
+        when(bookRepository.updateStatusIfNot(bookId, ProcessingStatus.COMPLETED, ProcessingStatus.STOPPED))
+                .thenReturn(0);
+        assertFalse(orchestrator.requestStop(bookId));
+    }
+
+    @Test
+    @DisplayName("Pause is rejected when the book has no active run")
+    void requestPause_withoutRun_isRejected() {
+        assertFalse(orchestrator.requestPause(bookId));
     }
 }

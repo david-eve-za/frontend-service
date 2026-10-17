@@ -22,7 +22,7 @@ export interface TraceEvent {
     id: string;
     traceId: string;
     step: 'EXTRACT' | 'SPLIT' | 'TRANSLATE' | 'AUDIO' | 'FINALIZE';
-    status: 'STARTED' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+    status: 'STARTED' | 'COMPLETED' | 'FAILED' | 'SKIPPED' | 'CANCELLED';
     attempt: number;
     startedAt: string;
     finishedAt?: string;
@@ -68,6 +68,8 @@ export interface Chunk {
     translatedText: string | null;
     status: 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'AWAITING';
     position: number;
+    /** Causa del último fallo de traducción (null si el chunk está sano) — popup en vivo. */
+    errorMessage?: string | null;
     /** Bloque semántico propietario (null para chunks legados sin bloque). */
     blockId?: string | null;
     blockType?: 'PROLOGUE' | 'CHAPTER' | 'EPILOGUE' | null;

@@ -7,5 +7,7 @@ public enum TraceEventStatus {
     STARTED,
     COMPLETED,
     FAILED,
-    SKIPPED
+    SKIPPED,
+    /** Step interrupted by an explicit user stop: not a genuine failure. */
+    CANCELLED
 }

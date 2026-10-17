@@ -16,6 +16,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -122,7 +123,7 @@ class DashboardStatsServiceTest {
         when(pipelineOrchestrator.getRunningBookIds()).thenReturn(Set.of(book2));
         when(catalogSyncService.getStatus()).thenReturn(NovelsCatalogSyncStatus.idle());
         when(catalogStatsService.catalogStats()).thenReturn(
-                new DashboardStatsDto.CatalogStatsDto(7L, 19L));
+                new DashboardStatsDto.CatalogStatsDto(7L, 19L, List.of()));
 
         DashboardStatsDto stats = service.getStats();
 
@@ -144,6 +145,16 @@ class DashboardStatsServiceTest {
         assertEquals("libro-2", stats.processes().running().get(0).name());
         assertEquals(ProcessingStatus.PROCESSING.name(), stats.processes().running().get(0).status());
         assertEquals(ProcessStep.TRANSLATE.name(), stats.processes().running().get(0).currentStep());
+
+        // Panel de procesos: todo libro no COMPLETED con el flag de corrida real
+        assertEquals(2, stats.processes().books().size(), "COMPLETED books are not processes");
+        DashboardStatsDto.BookProcessDto processingBook = stats.processes().books().stream()
+                .filter(p -> ProcessingStatus.PROCESSING.name().equals(p.status()))
+                .findFirst().orElseThrow();
+        assertEquals(book2, processingBook.bookId());
+        assertTrue(processingBook.running(), "The book under a live run reports running=true");
+        assertTrue(stats.processes().books().stream().anyMatch(p ->
+                ProcessingStatus.FAILED.name().equals(p.status()) && !p.running()));
 
         assertEquals("UP", stats.database().status());
         assertEquals("H2", stats.database().product());
@@ -168,6 +179,7 @@ class DashboardStatsServiceTest {
         // El resto del panel sigue funcionando aunque la BD caiga a mitad de llamada.
         assertEquals(0, stats.books().total());
         assertTrue(stats.processes().running().isEmpty());
+        assertTrue(stats.processes().books().isEmpty());
     }
 
     @Test
@@ -176,7 +188,7 @@ class DashboardStatsServiceTest {
         when(pipelineOrchestrator.getRunningBookIds()).thenReturn(Set.of());
         when(catalogSyncService.getStatus()).thenReturn(NovelsCatalogSyncStatus.idle());
         when(catalogStatsService.catalogStats()).thenReturn(
-                new DashboardStatsDto.CatalogStatsDto(0L, 0L));
+                new DashboardStatsDto.CatalogStatsDto(0L, 0L, List.of()));
 
         DashboardStatsDto stats = service.getStats();
 

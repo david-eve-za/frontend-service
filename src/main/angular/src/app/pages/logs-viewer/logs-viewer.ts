@@ -11,6 +11,7 @@ import {
 } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute, Router } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
@@ -47,6 +48,13 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
     WARN: true,
     ERROR: true,
 };
+
+/**
+ * Exclusión por defecto: oculta el ruido dominante (el sync del catálogo
+ * de elscione) para que el seguimiento de los procesos del pipeline
+ * respire. Se desactiva al aterrizar desde el botón de logs del sync.
+ */
+const DEFAULT_EXCLUDE = 'NovelsCatalogSync';
 
 /**
  * Visor de logs en tiempo real: suscribe un EventSource al stream SSE del
@@ -95,6 +103,17 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
                         />
                         @if (paused()) {
                             <p-tag value="En pausa" severity="warn" />
+                        }
+                        @if (linkedProcessName(); as name) {
+                            <p-tag
+                                [value]="'Logs de: ' + name"
+                                severity="info"
+                                styleClass="cursor-pointer"
+                                [rounded]="true"
+                                pTooltip="Filtro aplicado al llegar desde el panel — clic para quitarlo"
+                                tooltipPosition="bottom"
+                                (click)="clearLinkedFilter()"
+                            />
                         }
                     </div>
                     <p class="text-muted-color text-sm mt-1">
@@ -282,6 +301,8 @@ const DEFAULT_LEVELS: Record<Level, boolean> = {
 })
 export class LogViewer implements OnInit, OnDestroy {
     private readonly cdr = inject(ChangeDetectorRef);
+    private readonly route = inject(ActivatedRoute);
+    private readonly router = inject(Router);
     private readonly container =
         viewChild<ElementRef<HTMLDivElement>>('container');
 
@@ -296,12 +317,13 @@ export class LogViewer implements OnInit, OnDestroy {
     /** Selección múltiple de clases: vacío = todas. */
     selectedClasses = signal<string[]>([]);
     traceFilter = signal('');
+    excludeFilter = signal(DEFAULT_EXCLUDE);
     /**
-     * Exclusión por texto o clase: oculta el ruido dominante (por defecto
-     * el sync del catálogo de elscione) para que el seguimiento de los
-     * procesos del pipeline respire. Vacío = mostrar todo.
+     * Nombre del proceso cuyo filtro llegó por deep-link (botón "Ver logs"
+     * del panel): alimenta el chip desactivable del encabezado; null = sin
+     * filtro enlazado.
      */
-    excludeFilter = signal('NovelsCatalogSync');
+    linkedProcessName = signal<string | null>(null);
 
     private source?: EventSource;
     private pending: LogEvent[] = [];
@@ -364,6 +386,28 @@ export class LogViewer implements OnInit, OnDestroy {
     });
 
     ngOnInit() {
+        // Deep-link desde el panel de procesos: ?book=<id> (filtro MDC del
+        // libro), ?text=<q> (texto), ?clearExclude=1 (muestra los eventos
+        // del sync, ocultos por defecto) y ?name= para el chip del
+        // encabezado. Suscripción (no snapshot): Angular REUSA el
+        // componente al re-navegar a /logs con otros parámetros.
+        this.route.queryParamMap.subscribe((params) => {
+            const book = params.get('book');
+            const text = params.get('text');
+            const name = params.get('name');
+            if (book) {
+                this.traceFilter.set(book);
+                this.linkedProcessName.set(name ?? book);
+            }
+            if (text) {
+                this.textFilter.set(text);
+                this.linkedProcessName.set(name ?? text);
+            }
+            if (params.get('clearExclude')) {
+                this.excludeFilter.set('');
+            }
+        });
+
         this.source = new EventSource('/api/logs/stream');
         this.source.onopen = () => this.connection.set('open');
         this.source.onerror = () => {
@@ -389,6 +433,22 @@ export class LogViewer implements OnInit, OnDestroy {
     clear() {
         this.events.set([]);
         this.pausedCount.set(0);
+    }
+
+    /**
+     * Quita el filtro enlazado desde el panel: restaura los valores por
+     * defecto (incluida la exclusión del sync) y limpia los query params
+     * para que un F5 no lo reaplique.
+     */
+    clearLinkedFilter() {
+        this.traceFilter.set('');
+        this.textFilter.set('');
+        this.excludeFilter.set(DEFAULT_EXCLUDE);
+        this.linkedProcessName.set(null);
+        this.router.navigate([], {
+            relativeTo: this.route,
+            queryParams: {},
+        });
     }
 
     togglePause() {

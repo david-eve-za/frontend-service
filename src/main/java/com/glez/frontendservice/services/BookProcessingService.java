@@ -119,6 +119,26 @@ public class BookProcessingService {
     }
 
     /**
+     * Cancela las tareas de traducción en vuelo del libro (petición de
+     * stop del panel): interrumpe los virtual threads de los chunks que
+     * aún no terminan y devuelve cuántas se cancelaron de verdad. El
+     * borrado de libros reusa este mismo mecanismo.
+     */
+    public int cancelActiveTasks(UUID bookId) {
+        List<CompletableFuture<?>> futures = activeTasks.remove(bookId);
+        if (futures == null) {
+            return 0;
+        }
+        int cancelled = 0;
+        for (CompletableFuture<?> future : futures) {
+            if (future.cancel(true)) {
+                cancelled++;
+            }
+        }
+        return cancelled;
+    }
+
+    /**
      * Elimina un libro y TODO su estado derivado (chunks, bloques, trazas del
      * pipeline y términos del glosario) con borrados en bloque — ninguna
      * fila se materializa antes de borrar — y cancela las tareas asíncronas
@@ -131,12 +151,7 @@ public class BookProcessingService {
             throw new IllegalArgumentException("Book with ID " + bookId + " not found.");
         }
 
-        List<CompletableFuture<?>> futures = activeTasks.remove(bookId);
-        if (futures != null) {
-            for (CompletableFuture<?> future : futures) {
-                future.cancel(true);
-            }
-        }
+        cancelActiveTasks(bookId);
 
         // Bulk deletes in JPQL: none of them loads the chunk/block/trace/
         // term rows (nor the book CLOB) before deleting, in contrast with
@@ -442,6 +457,7 @@ public class BookProcessingService {
                 view.getTranslatedText(),
                 view.getStatus(),
                 view.getPosition(),
+                view.getErrorMessage(),
                 view.getBlockId(),
                 view.getBlockType() != null ? view.getBlockType().name() : null,
                 view.getBlockNumber()

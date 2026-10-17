@@ -1,7 +1,19 @@
-import { Component, input } from '@angular/core';
+import { Component, inject, input, output, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { TagModule } from 'primeng/tag';
-import { DashboardStats } from '../dashboard.service';
+import { ButtonModule } from 'primeng/button';
+import { TooltipModule } from 'primeng/tooltip';
+import { ConfirmationService } from 'primeng/api';
+import { ConfirmDialogModule } from 'primeng/confirmdialog';
+import { ToastModule } from 'primeng/toast';
+import { MessageService } from 'primeng/api';
+import { Observable } from 'rxjs';
+import { Router } from '@angular/router';
+import {
+    DashboardService,
+    DashboardStats,
+    BookProcess,
+} from '../dashboard.service';
 
 /** Etiqueta en español de cada paso del pipeline. */
 const STEP_LABELS: Record<string, string> = {
@@ -13,51 +25,139 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 /**
- * Panel de procesos activos: libros dentro del pipeline en este momento
- * y estado de la sincronización del catálogo de novelas.
+ * Panel de procesos: cada libro con ciclo de vida activo con su estado
+ * (Running / En espera / Detenido / Fallido) y acciones manuales —
+ * pausar (checkpoint), detener (inmediato) y arrancar — más el estado y
+ * control de la sincronización del catálogo de elscione.
  */
 @Component({
     selector: 'app-processes-widget',
-    imports: [CommonModule, TagModule],
+    imports: [
+        CommonModule,
+        TagModule,
+        ButtonModule,
+        TooltipModule,
+        ConfirmDialogModule,
+        ToastModule,
+    ],
+    providers: [ConfirmationService, MessageService],
     template: `<div class="card mb-8!">
-        <div class="font-semibold text-xl mb-4">Procesos en ejecución</div>
+        <div class="font-semibold text-xl mb-4">Procesos</div>
 
         <span class="block text-muted-color font-medium mb-2"
             >Pipeline de libros</span
         >
         @if (stats(); as s) {
-            @if (s.processes.running.length > 0) {
+            @if (s.processes.books.length > 0) {
                 <ul class="list-none p-0 m-0">
                     @for (
-                        process of s.processes.running;
+                        process of s.processes.books;
                         track process.bookId
                     ) {
                         <li
-                            class="flex items-center justify-between py-3 border-b border-surface"
+                            class="flex items-center justify-between gap-3 py-3 border-b border-surface"
                         >
-                            <div class="flex items-center gap-3">
+                            <div class="flex items-center gap-3 min-w-0">
                                 <i
-                                    class="pi pi-spin pi-spinner text-primary"
+                                    [class]="
+                                        process.running
+                                            ? 'pi pi-spin pi-spinner text-primary'
+                                            : statusIcon(process.status)
+                                    "
                                 ></i>
-                                <div>
-                                    <span class="font-medium block">{{
+                                <div class="min-w-0">
+                                    <span class="font-medium block truncate">{{
                                         process.name || process.bookId
                                     }}</span>
-                                    <span class="text-muted-color text-sm">{{
-                                        process.bookId
-                                    }}</span>
+                                    <span
+                                        class="text-muted-color text-sm block"
+                                        >{{ stepLabel(process.currentStep) }}</span
+                                    >
                                 </div>
                             </div>
-                            <p-tag
-                                [value]="stepLabel(process.currentStep)"
-                                severity="info"
-                            />
+                            <div
+                                class="flex items-center gap-2 shrink-0"
+                            >
+                                <p-button
+                                    icon="pi pi-list"
+                                    size="small"
+                                    severity="secondary"
+                                    [outlined]="true"
+                                    [disabled]="busy()"
+                                    pTooltip="Ver logs en vivo de este proceso"
+                                    tooltipPosition="top"
+                                    (click)="viewLogs(process)"
+                                />
+                                <p-tag
+                                    [value]="statusLabel(process.status)"
+                                    [severity]="
+                                        statusSeverity(process.status)
+                                    "
+                                />
+                                @if (process.running) {
+                                    <p-button
+                                        icon="pi pi-pause"
+                                        label="Pausar"
+                                        size="small"
+                                        severity="warn"
+                                        [outlined]="true"
+                                        [disabled]="busy()"
+                                        pTooltip="Termina el paso en curso y se detiene en el checkpoint"
+                                        tooltipPosition="top"
+                                        (click)="pause(process)"
+                                    />
+                                    <p-button
+                                        icon="pi pi-stop-circle"
+                                        label="Detener"
+                                        size="small"
+                                        severity="danger"
+                                        [outlined]="true"
+                                        [disabled]="busy()"
+                                        pTooltip="Cancela el trabajo en vuelo y deja el libro detenido"
+                                        tooltipPosition="top"
+                                        (click)="stop(process)"
+                                    />
+                                } @else {
+                                    <p-button
+                                        icon="pi pi-play"
+                                        [label]="
+                                            process.status === 'STOPPED'
+                                                ? 'Arrancar'
+                                                : 'Reanudar'
+                                        "
+                                        size="small"
+                                        severity="success"
+                                        [outlined]="true"
+                                        [disabled]="busy()"
+                                        pTooltip="Arranca el pipeline desde el último checkpoint"
+                                        tooltipPosition="top"
+                                        (click)="start(process)"
+                                    />
+                                    @if (
+                                        process.status === 'AWAITING' ||
+                                        process.status === 'UPLOADED' ||
+                                        process.status === 'FAILED'
+                                    ) {
+                                        <p-button
+                                            icon="pi pi-stop-circle"
+                                            label="Detener"
+                                            size="small"
+                                            severity="danger"
+                                            [outlined]="true"
+                                            [disabled]="busy()"
+                                            pTooltip="Lo saca de la rotación: quedará detenido hasta que lo arranques"
+                                            tooltipPosition="top"
+                                            (click)="stop(process)"
+                                        />
+                                    }
+                                }
+                            </div>
                         </li>
                     }
                 </ul>
             } @else {
                 <div class="text-muted-color py-3">
-                    Ningún libro se está procesando ahora.
+                    Ningún libro con proceso activo.
                 </div>
             }
 
@@ -65,11 +165,11 @@ const STEP_LABELS: Record<string, string> = {
                 >Sincronización del catálogo</span
             >
             <div
-                class="flex items-center justify-between py-3 border-t border-surface"
+                class="flex items-center justify-between gap-3 py-3 border-t border-surface"
             >
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-3 min-w-0">
                     <i class="pi pi-cloud-download text-primary"></i>
-                    <div>
+                    <div class="min-w-0">
                         <span class="font-medium block">{{
                             syncLabel(s.processes.catalogSync.state)
                         }}</span>
@@ -78,7 +178,7 @@ const STEP_LABELS: Record<string, string> = {
                                 >Última sync:
                                 {{
                                     s.processes.catalogSync.finishedAt
-                                        | date: 'dd/MM/yyyy HH:mm'
+                                    | date: 'dd/MM/yyyy HH:mm'
                                 }}</span
                             >
                         } @else if (s.processes.catalogSync.startedAt) {
@@ -86,7 +186,7 @@ const STEP_LABELS: Record<string, string> = {
                                 >Iniciada:
                                 {{
                                     s.processes.catalogSync.startedAt
-                                        | date: 'dd/MM/yyyy HH:mm'
+                                    | date: 'dd/MM/yyyy HH:mm'
                                 }}</span
                             >
                         } @else {
@@ -96,10 +196,49 @@ const STEP_LABELS: Record<string, string> = {
                         }
                     </div>
                 </div>
-                <p-tag
-                    [value]="s.processes.catalogSync.state"
-                    [severity]="syncSeverity(s.processes.catalogSync.state)"
-                />
+                <div class="flex items-center gap-2 shrink-0">
+                    <p-button
+                        icon="pi pi-list"
+                        size="small"
+                        severity="secondary"
+                        [outlined]="true"
+                        [disabled]="busy()"
+                        pTooltip="Ver logs de la sincronización en curso"
+                        tooltipPosition="top"
+                        (click)="viewSyncLogs()"
+                    />
+                    <p-tag
+                        [value]="s.processes.catalogSync.state"
+                        [severity]="
+                            syncSeverity(s.processes.catalogSync.state)
+                        "
+                    />
+                    @if (s.processes.catalogSync.state === 'RUNNING') {
+                        <p-button
+                            icon="pi pi-stop-circle"
+                            label="Cancelar"
+                            size="small"
+                            severity="danger"
+                            [outlined]="true"
+                            [disabled]="busy()"
+                            pTooltip="Cancela la sincronización actual (retoma donde quedó en la próxima)"
+                            tooltipPosition="top"
+                            (click)="cancelSync()"
+                        />
+                    } @else {
+                        <p-button
+                            icon="pi pi-play"
+                            label="Arrancar"
+                            size="small"
+                            severity="success"
+                            [outlined]="true"
+                            [disabled]="busy()"
+                            pTooltip="Lanza una sincronización del catálogo de elscione ahora"
+                            tooltipPosition="top"
+                            (click)="startSync()"
+                        />
+                    }
+                </div>
             </div>
             @if (s.processes.catalogSync.lastError) {
                 <div class="text-red-500 text-sm mt-2">
@@ -107,13 +246,75 @@ const STEP_LABELS: Record<string, string> = {
                 </div>
             }
         }
+        <p-confirmDialog />
+        <p-toast position="top-right" />
     </div>`,
 })
 export class ProcessesWidget {
+    private readonly dashboardService = inject(DashboardService);
+    private readonly confirmationService = inject(ConfirmationService);
+    private readonly messageService = inject(MessageService);
+    private readonly router = inject(Router);
+
     stats = input<DashboardStats | null>(null);
+
+    /** Notifica al dashboard que refresque las métricas tras una acción. */
+    processesActionPerformed = output<void>();
+
+    busy = signal(false);
 
     stepLabel(step: string | null): string {
         return step ? (STEP_LABELS[step] ?? step) : 'En cola';
+    }
+
+    statusLabel(status: string): string {
+        switch (status) {
+            case 'PROCESSING':
+                return 'Running';
+            case 'AWAITING':
+            case 'UPLOADED':
+                return 'En espera';
+            case 'STOPPED':
+                return 'Detenido';
+            case 'FAILED':
+                return 'Fallido';
+            default:
+                return status;
+        }
+    }
+
+    statusSeverity(
+        status: string,
+    ): 'info' | 'success' | 'danger' | 'warn' | 'secondary' {
+        switch (status) {
+            case 'PROCESSING':
+                return 'info';
+            case 'AWAITING':
+            case 'UPLOADED':
+                return 'warn';
+            case 'STOPPED':
+                return 'danger';
+            case 'FAILED':
+                return 'danger';
+            default:
+                return 'secondary';
+        }
+    }
+
+    statusIcon(status: string): string {
+        switch (status) {
+            case 'PROCESSING':
+                return 'pi pi-cog text-primary';
+            case 'AWAITING':
+            case 'UPLOADED':
+                return 'pi pi-pause-circle text-muted-color';
+            case 'STOPPED':
+                return 'pi pi-stop-circle text-red-400';
+            case 'FAILED':
+                return 'pi pi-exclamation-triangle text-red-400';
+            default:
+                return 'pi pi-circle-fill text-muted-color';
+        }
     }
 
     syncLabel(state: string): string {
@@ -146,5 +347,92 @@ export class ProcessesWidget {
             default:
                 return 'secondary';
         }
+    }
+
+    start(process: BookProcess): void {
+        this.run(() => this.dashboardService.startBook(process.bookId));
+    }
+
+    pause(process: BookProcess): void {
+        this.run(() => this.dashboardService.pauseBook(process.bookId));
+    }
+
+    stop(process: BookProcess): void {
+        this.confirmationService.confirm({
+            header: 'Detener proceso',
+            message: `¿Detener «${
+                process.name || process.bookId
+            }»? Se cancela el trabajo en vuelo y el libro queda detenido hasta que lo arranques manualmente.`,
+            acceptLabel: 'Detener',
+            rejectLabel: 'Cancelar',
+            acceptButtonStyleClass: 'p-button-danger',
+            accept: () =>
+                this.run(() => this.dashboardService.stopBook(process.bookId)),
+        });
+    }
+
+    startSync(): void {
+        this.run(() => this.dashboardService.startCatalogSync());
+    }
+
+    cancelSync(): void {
+        this.run(() => this.dashboardService.cancelCatalogSync());
+    }
+
+    /**
+     * Lleva al visor de logs en vivo con el filtro MDC del libro ya
+     * aplicado: ?book= casa con el bookId de CADA evento del pipeline de
+     * ese libro (corridas del orquestador y traducciones por chunk, cuyo
+     * traceId es el chunk pero cuyo bookId siempre viaja).
+     */
+    viewLogs(process: BookProcess): void {
+        this.router.navigate(['/logs'], {
+            queryParams: {
+                book: process.bookId,
+                name: process.name ?? process.bookId,
+            },
+        });
+    }
+
+    /**
+     * Logs de la sincronización del catálogo: sus eventos no llevan MDC
+     * de libro y quedan FUERA del visor por la exclusión por defecto
+     * (NovelsCatalogSync), así que el enlace filtra por texto y desactiva
+     * la exclusión de entrada.
+     */
+    viewSyncLogs(): void {
+        this.router.navigate(['/logs'], {
+            queryParams: {
+                text: 'NovelsCatalogSync',
+                clearExclude: 1,
+                name: 'Sincronización del catálogo',
+            },
+        });
+    }
+
+    /** Ejecuta una acción: bloquea los botones, toast del resultado y refresco. */
+    private run(action: () => Observable<object>): void {
+        this.busy.set(true);
+        action().subscribe({
+            next: () => {
+                this.busy.set(false);
+                this.messageService.add({
+                    severity: 'success',
+                    summary: 'Acción aplicada',
+                    detail: 'El panel se actualizará en un momento.',
+                    life: 2000,
+                });
+                this.processesActionPerformed.emit();
+            },
+            error: (err) => {
+                this.busy.set(false);
+                this.messageService.add({
+                    severity: 'error',
+                    summary: 'No se pudo aplicar la acción',
+                    detail: err?.error?.error ?? err?.message ?? 'error',
+                    life: 4000,
+                });
+            },
+        });
     }
 }

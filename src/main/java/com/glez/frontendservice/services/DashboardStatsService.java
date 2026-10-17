@@ -1,6 +1,7 @@
 package com.glez.frontendservice.services;
 
 import com.glez.frontendservice.dtos.DashboardStatsDto;
+import com.glez.frontendservice.dtos.DashboardStatsDto.BookProcessDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.BookStatsDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.ChunkStatsDto;
 import com.glez.frontendservice.dtos.DashboardStatsDto.DatabaseStatusDto;
@@ -19,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -89,10 +91,10 @@ public class DashboardStatsService {
         // import del tipo anidado dentro de los argumentos del constructor del
         // record contenedor dispara una circularidad de atribución en javac.
         DatabaseStatusDto database = new DatabaseStatusDto("DOWN", null, null, datasourceUrl, null, error);
-        ProcessStatusDto processes = new ProcessStatusDto(List.of(), catalogSyncService.getStatus());
+        ProcessStatusDto processes = new ProcessStatusDto(List.of(), catalogSyncService.getStatus(), List.of());
         BookStatsDto books = new BookStatsDto(0, 0, 0, 0, 0, Map.of());
         ChunkStatsDto chunks = new ChunkStatsDto(0, 0);
-        DashboardStatsDto.CatalogStatsDto catalog = new DashboardStatsDto.CatalogStatsDto(0, 0);
+        DashboardStatsDto.CatalogStatsDto catalog = new DashboardStatsDto.CatalogStatsDto(0, 0, List.of());
         return new DashboardStatsDto(database, processes, books, chunks, catalog);
     }
 
@@ -176,8 +178,41 @@ public class DashboardStatsService {
                 })
                 .toList();
 
+        // Vista de "procesos" para el panel: todo libro con ciclo de vida
+        // activo (COMPLETED fuera), las corridas reales primero y luego
+        // por prioridad de estado. Sale del MISMO agregado: cero queries
+        // extra por poll.
+        List<BookProcessDto> bookProcesses = books.stream()
+                .filter(book -> !ProcessingStatus.COMPLETED.name().equals(book.status()))
+                .sorted(Comparator
+                        .comparing((BookAggregates book) -> runningIds.contains(book.id()) ? 0 : 1)
+                        .thenComparing(book -> statusPriority(book.status()))
+                        .thenComparing(book -> book.name() != null ? book.name() : ""))
+                .map(book -> new BookProcessDto(
+                        book.id(),
+                        book.name(),
+                        book.status(),
+                        book.currentStep(),
+                        runningIds.contains(book.id())))
+                .toList();
+
         NovelsCatalogSyncStatus sync = catalogSyncService.getStatus();
-        return new ProcessStatusDto(running, sync);
+        return new ProcessStatusDto(running, sync, bookProcesses);
+    }
+
+    /** Orden estable de estados para la lista de procesos del panel. */
+    private static int statusPriority(String status) {
+        if (status == null) {
+            return 9;
+        }
+        return switch (status) {
+            case "PROCESSING" -> 0; // Running
+            case "AWAITING" -> 1;   // Idle (checkpoint alcanzado)
+            case "STOPPED" -> 2;    // Detenido por el usuario
+            case "UPLOADED" -> 3;   // Idle (nunca arrancado)
+            case "FAILED" -> 4;     // Reintentable
+            default -> 9;
+        };
     }
 
     /**
