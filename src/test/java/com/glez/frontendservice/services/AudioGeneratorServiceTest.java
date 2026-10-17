@@ -37,7 +37,9 @@ class AudioGeneratorServiceTest {
 
     @BeforeEach
     void setUp() {
-        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient, 3);
+        // (concurrency, connect-timeout, receive-timeout, min-total-timeout, merge-timeout)
+        // replicates the injection performed by Spring from application.yml.
+        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient, 3, 10, 60, 600, 15);
     }
 
     @Nested

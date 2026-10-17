@@ -29,6 +29,35 @@ public interface BlockRepository extends JpaRepository<Block, UUID> {
     @Query("select b from Block b where b.book.id = :bookId and b.audioFilePath is null order by b.position asc")
     List<Block> findBookIdWithoutAudio(@Param("bookId") UUID bookId);
 
+    /**
+     * Light block rows (id, type, number, position, audio path) for the
+     * AUDIO step, in reading order: the block entities are NOT loaded,
+     * so the chapter-length content CLOB of every block is never read.
+     */
+    @Query("select b.id as id, b.blockType as blockType, b.blockNumber as blockNumber, "
+            + "b.position as position, b.audioFilePath as audioFilePath "
+            + "from Block b where b.book.id = :bookId order by b.position asc")
+    List<BlockAudioView> findAudioViewsByBookId(@Param("bookId") UUID bookId);
+
+    /** Light block row for the AUDIO step (no content CLOB). */
+    interface BlockAudioView {
+        UUID getId();
+
+        Block.BlockType getBlockType();
+
+        Integer getBlockNumber();
+
+        Integer getPosition();
+
+        String getAudioFilePath();
+    }
+
+    /** Audio path update without loading the block (and its content CLOB). */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("update Block b set b.audioFilePath = :path where b.id = :blockId")
+    int updateAudioPathInBulk(@Param("blockId") UUID blockId, @Param("path") String path);
+
     /** Bulk delete of a book's blocks without loading the entities first. */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Transactional

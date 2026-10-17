@@ -28,16 +28,30 @@ public class AudioGeneratorService {
     private final SmartTextSplitter textSplitter;
     private final EdgeTtsClient edgeTtsClient;
     private final Semaphore ttsConcurrency;
+    private final int ttsPermits;
+    private final int connectTimeoutSeconds;
+    private final int receiveTimeoutSeconds;
+    private final long minTtsTotalTimeoutSeconds;
+    private final int mergeTimeoutMinutes;
     private final ExecutorService ttsExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private static final Logger log = LoggerFactory.getLogger(AudioGeneratorService.class);
 
 
     public AudioGeneratorService(SmartTextSplitter textSplitter,
                                  EdgeTtsClient edgeTtsClient,
-                                 @Value("${app.audio.tts-concurrency:3}") int ttsConcurrency) {
+                                 @Value("${app.audio.tts-concurrency:3}") int ttsConcurrency,
+                                 @Value("${app.audio.connect-timeout:10}") int connectTimeoutSeconds,
+                                 @Value("${app.audio.receive-timeout:60}") int receiveTimeoutSeconds,
+                                 @Value("${app.audio.tts-min-total-timeout-seconds:600}") long minTtsTotalTimeoutSeconds,
+                                 @Value("${app.audio.merge-timeout-minutes:15}") int mergeTimeoutMinutes) {
         this.textSplitter = textSplitter;
         this.edgeTtsClient = edgeTtsClient;
-        this.ttsConcurrency = new Semaphore(Math.max(1, ttsConcurrency), true);
+        this.ttsPermits = Math.max(1, ttsConcurrency);
+        this.ttsConcurrency = new Semaphore(ttsPermits, true);
+        this.connectTimeoutSeconds = connectTimeoutSeconds;
+        this.receiveTimeoutSeconds = receiveTimeoutSeconds;
+        this.minTtsTotalTimeoutSeconds = minTtsTotalTimeoutSeconds;
+        this.mergeTimeoutMinutes = mergeTimeoutMinutes;
     }
 
     // Mapa de normalización idéntico a tu versión Python
@@ -100,7 +114,7 @@ public class AudioGeneratorService {
                         }
                     }, ttsExecutor);
                 }
-                CompletableFuture.allOf(futures).get(10, TimeUnit.MINUTES);
+                CompletableFuture.allOf(futures).get(ttsTotalTimeoutSeconds(total), TimeUnit.SECONDS);
                 List<Path> audioFiles = new ArrayList<>(total);
                 for (CompletableFuture<Path> future : futures) {
                     Path path = future.getNow(null);
@@ -136,6 +150,22 @@ public class AudioGeneratorService {
         return result;
     }
 
+    /**
+     * Presupuesto total de la síntesis (red de seguridad, no el detector
+     * de cuelgues — cada fragmento ya está acotado por los timeouts de
+     * Edge TTS): cada "ola" de {@code ttsPermits} fragmentos en paralelo
+     * solo puede durar lo que su fragmento más lento (connect + receive
+     * timeout + margen), así que el total es olas × techo por fragmento
+     * con un suelo mínimo configurable. El cap FIJO de 10 min mataba
+     * corridas legítimas de libros completos (cientos de fragmentos a
+     * ~15 s por pieza con 3 en paralelo).
+     */
+    long ttsTotalTimeoutSeconds(int fragments) {
+        long waves = (long) Math.ceil((double) fragments / ttsPermits);
+        long perFragmentCeiling = connectTimeoutSeconds + receiveTimeoutSeconds + 15L;
+        return Math.max(minTtsTotalTimeoutSeconds, waves * perFragmentCeiling);
+    }
+
     private boolean textToAudio(String text, Path outputPath) {
         try {
             edgeTtsClient.synthesizeToFile(text, outputPath);
@@ -161,8 +191,24 @@ public class AudioGeneratorService {
                 "-af", "volume=0.3dB", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "64k", "-ar", "24000",
                 targetFile.toString()
         );
+        // ffmpeg escribe su banner y las estadísticas de progreso en
+        // stderr: con los pipes por defecto de ProcessBuilder, el búfer
+        // del SO (~64 KB) se llena en mezclas largas y ffmpeg se BLOQUEA
+        // escribiendo — waitFor() nunca regresaría y el paso AUDIO
+        // quedaría colgado con el libro en PROCESSING. La salida se
+        // descarta: el exit code es el veredicto.
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
 
-        return pb.start().waitFor() == 0;
+        Process process = pb.start();
+        boolean finished = process.waitFor(mergeTimeoutMinutes, TimeUnit.MINUTES);
+        if (!finished) {
+            process.destroyForcibly();
+            log.error("ffmpeg excedió el tope de {} min mezclando {} fragmentos hacia {}; proceso terminado a la fuerza",
+                    mergeTimeoutMinutes, audioFiles.size(), targetFile);
+            return false;
+        }
+        return process.exitValue() == 0;
     }
 
     private void deleteDirectoryRecursively(Path path) throws IOException {
