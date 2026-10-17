@@ -1,6 +1,7 @@
 package com.glez.frontendservice.services;
 
 import com.openai.errors.OpenAIIoException;
+import com.openai.errors.OpenAIServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -10,6 +11,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -52,14 +54,22 @@ public class NvidiaAiService {
 
     private final OpenAiChatModel chatModel;
     private final List<String> modelNames;
+    /** Pool 100% local (app.ollama.models) para el proveedor "ollama". */
+    private final List<String> ollamaModelNames;
     private final AtomicInteger currentModelIndex = new AtomicInteger(0);
     private final int maxRetries;
     private final NvidiaRateLimiter rateLimiter;
     private final ModelInspectorService inspector;
+    /** Selección de proveedor por caso de uso (traducción / asistente). */
+    private final AiProviderSettingsService providerSettings;
     private final int maxOutputTokens;
     private final int reasoningReserveTokens;
     private final double charsPerToken;
     private final double expansionFactor;
+    /** Techo de tiempo del servidor: una generación mayor muere (~243 s como "Request failed"). */
+    private final int serverCeilingSeconds;
+    /** Fallos al techo tolerados antes de re-dividir la pieza (auto-sanado por tiempo). */
+    private final int maxSlowFailures;
 
     public NvidiaAiService(
             OpenAiChatModel chatModel,
@@ -70,24 +80,44 @@ public class NvidiaAiService {
             @Value("${app.nvidia.max-output-tokens:8192}") int maxOutputTokens,
             @Value("${app.nvidia.reasoning-reserve-tokens:1024}") int reasoningReserveTokens,
             @Value("${app.nvidia.chars-per-token:3.5}") double charsPerToken,
-            @Value("${app.nvidia.translation-expansion-factor:1.15}") double expansionFactor) {
+            @Value("${app.nvidia.translation-expansion-factor:1.15}") double expansionFactor,
+            AiProviderSettingsService providerSettings,
+            @Value("${app.ollama.models:}") String ollamaModels,
+            @Value("${app.nvidia.slow-piece-threshold-seconds:240}") int serverCeilingSeconds,
+            @Value("${app.nvidia.slow-piece-max-failures:2}") int maxSlowFailures) {
         this.chatModel = chatModel;
-        this.modelNames = Arrays.stream(models.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .toList();
+        this.modelNames = parsePool(models);
+        this.ollamaModelNames = parsePool(ollamaModels);
         this.maxRetries = maxRetries;
         this.rateLimiter = rateLimiter;
         this.inspector = inspector;
+        this.providerSettings = providerSettings;
         this.maxOutputTokens = maxOutputTokens;
         this.reasoningReserveTokens = reasoningReserveTokens;
         this.charsPerToken = charsPerToken;
         this.expansionFactor = expansionFactor;
+        this.serverCeilingSeconds = serverCeilingSeconds;
+        this.maxSlowFailures = Math.max(1, maxSlowFailures);
+    }
+
+    /** Parsea una lista de modelos separada por comas (pool de config). */
+    private static List<String> parsePool(String models) {
+        return models == null
+                ? List.of()
+                : Arrays.stream(models.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .toList();
     }
 
     /** Exposición del pool para el catálogo de modelos (ModelCatalogController). */
     public List<String> poolModelNames() {
         return List.copyOf(modelNames);
+    }
+
+    /** Exposición del pool LOCAL de Ollama (selector de proveedor en Configuración). */
+    public List<String> ollamaPoolModelNames() {
+        return List.copyOf(ollamaModelNames);
     }
 
     /**
@@ -103,13 +133,54 @@ public class NvidiaAiService {
      * {@link TranslationTruncatedException} para que el llamador re-divida
      * la pieza.
      */
+    /**
+     * Caso de uso de una llamada a la rotación: cada uno puede usar un
+     * proveedor distinto (nvidia | ollama) seleccionado en Configuración.
+     */
+    public enum AiUseCase {
+        /** Pipeline de traducción de libros (chunks, glosario). */
+        TRANSLATION,
+        /** Asistente de Historias en Video (los 5 pasos). */
+        STORY_WIZARD
+    }
+
+    /** Traducción: usa el proveedor elegido para TRADUCCIÓN (default NVIDIA). */
     public String callModelWithRotation(String prompt) {
+        return callModelWithRotation(prompt, maxOutputTokens, AiUseCase.TRANSLATION);
+    }
+
+    /**
+     * Asistente de Historias: usa el proveedor elegido para STORIES con el
+     * tope de salida ampliado para los pasos de documento largo (assets y
+     * escenas desbordan el tope global dimensionado para traducción).
+     */
+    public String callModelWithRotation(String prompt, int outputTokenLimit) {
+        return callModelWithRotation(prompt, outputTokenLimit, AiUseCase.STORY_WIZARD);
+    }
+
+    /**
+     * Núcleo de la rotación con POOL POR CASO DE USO: la selección
+     * (nvidia | ollama) se lee EN CALIENTE de
+     * {@link AiProviderSettingsService} — el pool NVIDIA
+     * ({@code app.nvidia.models}, cloud con fallbacks locales) o el pool
+     * 100% local ({@code app.ollama.models}). El resto del mecanismo
+     * (rotación, reintentos, pre-flight, truncado) es idéntico.
+     */
+    public String callModelWithRotation(String prompt, int outputTokenLimit, AiUseCase useCase) {
+        List<String> pool = poolFor(useCase);
+        if (pool.isEmpty()) {
+            throw new RuntimeException("No hay modelos configurados para el caso de uso " + useCase);
+        }
         int attempts = 0;
-        int totalModels = modelNames.size();
+        int totalModels = pool.size();
         int skippedOffline = 0;
+        // Fallos que agotaron el techo de tiempo del servidor en ESTA
+        // llamada: al acumular maxSlowFailures, la pieza se re-divide en
+        // vez de quemar el pool completo.
+        int slowTimeouts = 0;
 
         while (attempts < totalModels * maxRetries) {
-            String currentModel = modelNames.get(currentModelIndex.get());
+            String currentModel = pool.get(currentModelIndex.get() % totalModels);
             // Pre-flight CONSCIENTE DEL PROVEEDOR: los modelos ollama: son
             // LOCALES (siempre disponibles, sin depender de la red); los
             // demás son de NVIDIA y solo se intentan si el proveedor
@@ -129,7 +200,7 @@ public class NvidiaAiService {
                 }
                 log.warn("[llm] Modelo {} saltado: proveedor {} offline (sonda cacheada). Rotando al siguiente",
                         currentModel, isOllama ? "Ollama" : "NVIDIA");
-                rotateModel();
+                rotateModel(totalModels);
                 continue;
             }
             skippedOffline = 0;
@@ -150,7 +221,7 @@ public class NvidiaAiService {
                     // sin depender de la red ni de la API de NVIDIA. Ya
                     // detecta el truncado (done_reason="length") y devuelve
                     // el texto directamente.
-                    text = callOllamaModel(currentModel.substring("ollama:".length()), prompt);
+                    text = callOllamaModel(currentModel.substring("ollama:".length()), prompt, outputTokenLimit);
                 } else {
                     ChatResponse response = ChatClient.create(chatModel)
                             .prompt()
@@ -159,7 +230,7 @@ public class NvidiaAiService {
                                     .model(currentModel)
                                     .temperature(0.2)
                                     .topP(0.95)
-                                    .maxTokens(maxOutputTokens))
+                                    .maxTokens(outputTokenLimit))
                             .call()
                             .chatResponse();
                     if (response != null && response.getResult() != null
@@ -186,17 +257,50 @@ public class NvidiaAiService {
             } catch (TranslationTruncatedException e) {
                 throw e;
             } catch (Exception e) {
-                if (isRetryableError(e)) {
+                long elapsedSeconds = (System.currentTimeMillis() - callStart) / 1000;
+                if (isModelGone(e)) {
+                    // 410/404: EL MODELO murió para siempre (EOL de NVIDIA
+                    // o no desplegado) — la llamada es irrecuperable en
+                    // ESTE modelo, pero la pieza NO debe morir con él.
+                    // Rotar al siguiente Y avanzar el índice: clasificarlo
+                    // como no-reintentable directo mataba el chunk y, al
+                    // no avanzar el índice, la cascada mataba también
+                    // todos los chunks siguientes (incidente kimi-k3 EOL:
+                    // 10 chunks muertos sobre el mismo modelo 410).
+                    log.warn("[llm] Modelo {} retirado de forma permanente (410/404: fin de vida o no desplegado). "
+                            + "Rotando al siguiente sin reintentar este",
+                            currentModel);
+                    rotateModel(totalModels);
+                    attempts++;
+                } else if (countsAsSlowFailure(e, elapsedSeconds)) {
+                    // La generación no llegó a tiempo: el servidor corta
+                    // a ~240 s (los fallos llegan como "Request failed" a
+                    // ~243 s). Una rotación puede salvarla (un modelo más
+                    // rápido), pero si se repite, la pieza es demasiado
+                    // grande para el techo de ESTE pool — re-dividirla en
+                    // vez de quemar ~4 min + cuota RPM por cada modelo.
+                    slowTimeouts++;
+                    if (slowTimeouts >= maxSlowFailures) {
+                        throw new PieceGenerationTooSlowException(
+                                "La generación superó el techo de tiempo del servidor (~" + serverCeilingSeconds
+                                        + " s) en " + slowTimeouts + " modelo(s) del pool");
+                    }
+                    log.warn("[llm] La generación con {} agotó el techo de tiempo del servidor tras {} s "
+                                    + "(timeout lento {}/{}): rotando al siguiente modelo",
+                            currentModel, elapsedSeconds, slowTimeouts, maxSlowFailures);
+                    rotateModel(totalModels);
+                    attempts++;
+                } else if (isRetryableError(e)) {
                     log.warn("[llm] Fallo reintentable con el modelo {} tras {} ms: {}. Rotando al siguiente modelo",
                             currentModel, System.currentTimeMillis() - callStart, e.getMessage());
-                    rotateModel();
+                    rotateModel(totalModels);
                     attempts++;
                 } else {
                     throw new RuntimeException("Non-retryable error calling NVIDIA model: " + currentModel, e);
                 }
             }
         }
-        throw new RuntimeException("All NVIDIA models exhausted after " + attempts + " attempts");
+        throw new RuntimeException("All models exhausted after " + attempts + " attempts");
     }
 
     /** {@code finish_reason=length}: la respuesta se cortó por el tope de salida. */
@@ -215,12 +319,67 @@ public class NvidiaAiService {
         }
     }
 
+    /**
+     * El MODELO murió para siempre (a diferencia de la llamada): 410 Gone —
+     * NVIDIA retira los modelos al final de su vida ("end of life") — o
+     * 404 (no desplegado / nunca existió; en Ollama: modelo sin descargar).
+     * La rotación debe pasar al SIGUIENTE modelo sin reintentar este: la
+     * pieza no puede morir con el modelo. Clasificar el 410 como
+     * no-reintentable directo mataba el chunk Y dejaba el índice clavado
+     * en el modelo muerto, de modo que la cascada mataba también todos
+     * los chunks siguientes.
+     */
+    boolean isModelGone(Exception e) {
+        // Detección tipada del SDK caminando la cadena de causas (el wrap
+        // genérico de Spring AI oculta la excepción original): 410 llega
+        // como UnexpectedStatusCodeException, 404 como NotFoundException,
+        // ambos con statusCode() del contrato de OpenAIServiceException.
+        Throwable current = e;
+        int hops = 0;
+        while (current != null && hops < 6) {
+            if (current instanceof OpenAIServiceException apiException) {
+                return apiException.statusCode() == 410 || apiException.statusCode() == 404;
+            }
+            current = current.getCause();
+            hops++;
+        }
+        String message = e.getMessage();
+        if (message == null) {
+            return false;
+        }
+        // Fallback por mensaje para excepciones envueltas cuyo texto
+        // conserva el original (formato del SDK "<status>: <body>") y para
+        // el 404 del modelo local de Ollama.
+        return message.contains("end of life")
+                || message.contains("no longer available")
+                || message.contains("410:")
+                || message.contains("Ollama HTTP 404");
+    }
+
+    /**
+     * Cuenta como fallo lento un intento que era REINTENTABLE (la pieza
+     * seguía generándose, no fue un error de petición) y cuya duración
+     * alcanzó el techo de tiempo del servidor — la firma de una
+     * generación asesinada por el límite de ~240 s, no un blip de red
+     * (los blips fallan en segundos, sin acercarse al techo).
+     */
+    boolean countsAsSlowFailure(Exception e, long elapsedSeconds) {
+        return elapsedSeconds >= serverCeilingSeconds && isRetryableError(e);
+    }
+
     private boolean isRetryableError(Exception e) {
         // Network-level failures of the OpenAI SDK ("Request failed": reset
         // connections, DNS hiccups, socket errors mid-response) are
         // transient by nature: rotate the model and retry instead of
         // aborting a whole translation pass on a single blip.
         if (e instanceof OpenAIIoException) {
+            return true;
+        }
+        // Fallos TRANSITORIOS del modelo LOCAL de Ollama (5xx/429, reset de
+        // conexión a mitad de generación): el modelo es gratis y un
+        // reintento casi siempre completa la pieza — clasificarlos como
+        // no-reintentables mataba chunks enteros tras minutos de cola.
+        if (e instanceof OllamaTransientException) {
             return true;
         }
         String message = e.getMessage();
@@ -231,12 +390,35 @@ public class NvidiaAiService {
                 || message.contains("rate limit")
                 || message.contains("quota")
                 || message.contains("exhausted")
+                // "timed out" además de "timeout": el mensaje REAL de
+                // HttpTimeoutException es "request timed out" (con 'd'),
+                // que NO contiene el substring "timeout" — con la keyword
+                // antigua, un timeout del JDK mataba el chunk como
+                // no-reintentable.
                 || message.contains("timeout")
+                || message.contains("timed out")
                 || message.contains("503");
     }
 
-    private void rotateModel() {
-        currentModelIndex.updateAndGet(i -> (i + 1) % modelNames.size());
+    private void rotateModel(int poolSize) {
+        currentModelIndex.updateAndGet(i -> (i + 1) % poolSize);
+    }
+
+    /**
+     * Pool activo para el caso de uso: lee la selección EN CALIENTE de
+     * {@link AiProviderSettingsService}. "ollama" → pool 100% local
+     * (app.ollama.models); "nvidia" (o pool local vacío) → pool de NVIDIA
+     * (app.nvidia.models, que ya incluye sus fallbacks locales).
+     */
+    private List<String> poolFor(AiUseCase useCase) {
+        String provider = useCase == AiUseCase.STORY_WIZARD
+                ? providerSettings.storyProvider()
+                : providerSettings.translationProvider();
+        boolean useOllama = "ollama".equalsIgnoreCase(provider) && !ollamaModelNames.isEmpty();
+        log.debug("[llm] Pool para {}: proveedor {} ({} modelos)",
+                useCase, useOllama ? "ollama" : "nvidia",
+                useOllama ? ollamaModelNames.size() : modelNames.size());
+        return useOllama ? ollamaModelNames : modelNames;
     }
 
     public String translateChunk(String text, String sourceLang, String targetLang) {
@@ -290,6 +472,12 @@ public class NvidiaAiService {
      * {@link #MIN_SELF_HEAL_PIECE_CHARS}: bajo el piso el fallo sube sin
      * más reintentos (el chunk queda FAILED visiblemente en vez de
      * persistir una traducción corrupta).
+     *
+     * <p>El MISMO auto-sanado aplica cuando la generación no cabe en el
+     * techo de tiempo del servidor ({@link PieceGenerationTooSlowException}):
+     * las mitades (y sus mitades, recursivamente) tardan proporcionalmente
+     * menos y convergen bajo el techo, en vez de quemar el pool completo
+     * con intentos de ~4 min condenados al mismo corte.</p>
      */
     private String translateWithBudget(String text, String sourceLang, String targetLang,
                                         List<com.glez.frontendservice.model.TranslationTerm> glossary) {
@@ -302,18 +490,38 @@ public class NvidiaAiService {
             }
             log.warn("[traducción] Respuesta truncada por el límite de salida en una pieza de {} caracteres: "
                     + "re-dividiendo a la mitad y reintentando", text.length());
-            List<Piece> halves = splitForOutputBudget(text, Math.max(1, text.length() / 2));
-            StringBuilder joined = new StringBuilder(Math.max(text.length() * 2, 64));
-            for (int i = 0; i < halves.size(); i++) {
-                Piece half = halves.get(i);
-                String halfResult = translateWithBudget(half.text(), sourceLang, targetLang, glossary);
-                if (i > 0) {
-                    joined.append(half.joinWithSpace() ? ' ' : "\n\n");
-                }
-                joined.append(halfResult.strip());
+            return translateHalves(text, sourceLang, targetLang, glossary);
+        } catch (PieceGenerationTooSlowException e) {
+            if (text.length() <= MIN_SELF_HEAL_PIECE_CHARS) {
+                throw e;
             }
-            return joined.toString();
+            log.warn("[traducción] La pieza de {} caracteres no cupo en el techo de tiempo del servidor "
+                            + "(~{} s) en los modelos probados: re-dividiendo a la mitad (auto-sanado por tiempo)",
+                    text.length(), serverCeilingSeconds);
+            return translateHalves(text, sourceLang, targetLang, glossary);
         }
+    }
+
+    /**
+     * Auto-sanado compartido: re-divide la pieza a la mitad (siempre en
+     * fronteras de párrafo — el caso degenerado corta por oración) y
+     * traduce cada parte con el MISMO glosario, re-ensamblando con los
+     * separadores originales. Cada mitad abre su propia rotación con
+     * presupuesto de reintentos fresco.
+     */
+    private String translateHalves(String text, String sourceLang, String targetLang,
+                                   List<com.glez.frontendservice.model.TranslationTerm> glossary) {
+        List<Piece> halves = splitForOutputBudget(text, Math.max(1, text.length() / 2));
+        StringBuilder joined = new StringBuilder(Math.max(text.length() * 2, 64));
+        for (int i = 0; i < halves.size(); i++) {
+            Piece half = halves.get(i);
+            String halfResult = translateWithBudget(half.text(), sourceLang, targetLang, glossary);
+            if (i > 0) {
+                joined.append(half.joinWithSpace() ? ' ' : "\n\n");
+            }
+            joined.append(halfResult.strip());
+        }
+        return joined.toString();
     }
 
     /**
@@ -427,8 +635,15 @@ public class NvidiaAiService {
      * equivalente del {@code finish_reason=length} de la API de NVIDIA):
      * se traduce a la misma {@link TranslationTruncatedException} para que
      * el auto-sanado re-divida la pieza.</p>
+     *
+     * <p><b>Sin timeout de request</b> (deliberado): la inferencia local
+     * depende del hardware y una pieza grande de ~8K tokens de salida (más
+     * la carga inicial del modelo desde disco) puede tardar muchos minutos.
+     * El {@code connectTimeout} de 3 s del cliente sigue fallando rápido si
+     * el servidor está caído, y {@code num_predict} acota la generación, así
+     * que la espera no puede desbocarse eternamente.</p>
      */
-    String callOllamaModel(String modelName, String prompt) {
+    String callOllamaModel(String modelName, String prompt, int numPredict) {
         try {
             String body = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(
                     java.util.Map.of(
@@ -440,35 +655,65 @@ public class NvidiaAiService {
                             "options", java.util.Map.of(
                                     "temperature", 0.2,
                                     "top_p", 0.95,
-                                    "num_predict", maxOutputTokens)));
+                                    "num_predict", numPredict)));
+            // Sin .timeout(): request SIN límite de tiempo (infinito). La
+            // generación local de hasta ~8K tokens puede superar con creces
+            // los 2 minutos según el hardware; el connectTimeout de 3 s ya
+            // cubre el caso de servidor caído.
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(ollamaBaseUrl + "/api/chat"))
-                    .timeout(Duration.ofMillis(120_000))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
-            HttpResponse<String> response =
-                    ollamaHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            HttpResponse<String> response;
+            try {
+                response = ollamaHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            } catch (IOException e) {
+                // Caída/reset de la conexión (p. ej. el servidor muere a
+                // mitad de la generación): TRANSITORIA — el modelo local es
+                // gratis y un reintento casi siempre completa la pieza.
+                throw new OllamaTransientException(
+                        "Ollama connection error for model " + modelName + ": " + e.getMessage());
+            }
+            int status = response.statusCode();
+            if (status == 429 || status >= 500) {
+                // 5xx/429 del servidor local: TRANSITORIOS. Con decenas de
+                // chunks encolados (OLLAMA_NUM_PARALLEL=1) el servidor puede
+                // cancelar tareas sanas y responder 500; la rotación debe
+                // reintentar la pieza, no matar el chunk.
+                throw new OllamaTransientException(
+                        "Ollama HTTP " + status + " for model " + modelName);
+            }
+            if (status < 200 || status >= 300) {
+                // 404 = modelo no descargado, resto de 4xx = error de la
+                // petición: PERMANENTES, reintentar no ayuda.
                 throw new IllegalStateException(
-                        "Ollama HTTP " + response.statusCode() + " for model " + modelName);
+                        "Ollama HTTP " + status + " for model " + modelName);
             }
             com.fasterxml.jackson.databind.JsonNode root =
                     new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body());
             String text = root.path("message").path("content").asText(null);
             String doneReason = root.path("done_reason").asText(null);
-            if (text == null || text.isBlank()) {
-                throw new IllegalStateException("Empty Ollama response for model " + modelName);
-            }
+            // done_reason=length ANTES del chequeo de texto vacío: un modelo
+            // de razonamiento (gpt-oss) puede gastar TODO el presupuesto de
+            // salida en thinking y devolver content="" con done_reason=length;
+            // eso debe activar la re-división auto-sanadora (truncado), no
+            // morir como "respuesta vacía" no-reintentable.
             if (doneReason != null && doneReason.contains("length")) {
                 throw new TranslationTruncatedException(
                         "Ollama response truncated by the output token limit (done_reason="
                                 + doneReason + ") for model " + modelName);
             }
+            if (text == null || text.isBlank()) {
+                throw new IllegalStateException("Empty Ollama response for model " + modelName);
+            }
             // Envuelve en un ChatResponse del mismo tipo para que el
             // logging del ciclo de vida del llamador no cambie.
             return text;
-        } catch (TranslationTruncatedException e) {
+        } catch (TranslationTruncatedException | OllamaTransientException e) {
+            // Se re-lanzan SIN el wrap genérico para no perder el tipo: la
+            // rotación clasifica ambas por TIPO (truncado → re-división de
+            // la pieza; transitorio → reintentar), no por substrings.
             throw e;
         } catch (Exception e) {
             throw new RuntimeException("Error calling Ollama model " + modelName + ": " + e.getMessage(), e);
@@ -495,6 +740,37 @@ public class NvidiaAiService {
      */
     static class TranslationTruncatedException extends RuntimeException {
         TranslationTruncatedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * La generación de la pieza superó el techo de tiempo del servidor
+     * (~240 s en NVIDIA: los fallos llegan como "Request failed" a ~243 s)
+     * en los modelos probados. La llamada es sana pero la pieza no cabe en
+     * el techo: NO es reintentable por rotación — el llamador re-divide la
+     * pieza a la mitad (auto-sanado por tiempo, el mismo mecanismo que el
+     * truncado) en vez de quemar el pool completo con intentos condenados
+     * al mismo corte.
+     */
+    static class PieceGenerationTooSlowException extends RuntimeException {
+        PieceGenerationTooSlowException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Fallo TRANSITORIO de la llamada HTTP al modelo local de Ollama:
+     * 5xx/429 del servidor o caída/reset de la conexión a mitad de la
+     * generación (con decenas de chunks encolados y
+     * {@code OLLAMA_NUM_PARALLEL=1}, el servidor cancela tareas sanas y
+     * responde 500). REINTENTABLE por rotación: el modelo local es gratis
+     * y un reintento casi siempre completa la pieza. Los fallos
+     * PERMANENTES (404: modelo no descargado) NO usan este tipo —
+     * reintentarlos solo encolaría horas.
+     */
+    static class OllamaTransientException extends RuntimeException {
+        OllamaTransientException(String message) {
             super(message);
         }
     }

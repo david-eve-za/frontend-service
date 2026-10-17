@@ -27,7 +27,7 @@ interface NovelRow extends NovelSummary {
   imports: [CommonModule, FormsModule, ButtonModule, InputTextModule, TagModule, TooltipModule, ToastModule, TableModule],
   providers: [MessageService],
   template: `
-    <p-toast></p-toast>
+    <p-toast [life]="12000"></p-toast>
 
     <!-- Barandilla de sincronización de metadatos -->
     <div class="card mb-4">
@@ -320,7 +320,7 @@ export class NovelsManager implements OnInit, OnDestroy {
       this.expandedRowKeys = {};
     } catch {
       this.messageService.add({
-        severity: 'error',
+        sticky: true, severity: 'error',
         summary: 'Error',
         detail: 'No se pudo cargar el catálogo de novelas.'
       });
@@ -398,7 +398,7 @@ export class NovelsManager implements OnInit, OnDestroy {
       this.watchRunningVolumes(novelId);
     } catch {
       this.messageService.add({
-        severity: 'error',
+        sticky: true, severity: 'error',
         summary: 'Error',
         detail: 'No se pudieron cargar los volúmenes de la obra.'
       });
@@ -430,7 +430,7 @@ export class NovelsManager implements OnInit, OnDestroy {
           const failed = volumes.filter(v => v.bookStatus === 'FAILED');
           if (failed.length > 0) {
             this.messageService.add({
-              severity: 'warn',
+              sticky: true, severity: 'warn',
               summary: 'Proceso terminado con fallos',
               detail: `${failed.length} volumen(es) quedaron en estado FAILED.`
             });
@@ -471,7 +471,7 @@ export class NovelsManager implements OnInit, OnDestroy {
       });
     } catch (err: any) {
       const detail = err?.error?.error || 'No se pudo preparar el texto del volumen.';
-      this.messageService.add({ severity: 'error', summary: 'Error', detail });
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
     } finally {
       this.actionBusy[volume.id] = false;
       this.cdr.markForCheck();
@@ -502,7 +502,7 @@ export class NovelsManager implements OnInit, OnDestroy {
       this.watchRunningVolumes(novel.id);
     } catch (err: any) {
       const detail = err?.error?.error || 'No se pudo iniciar la etapa del pipeline.';
-      this.messageService.add({ severity: 'error', summary: 'Error', detail });
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
     } finally {
       this.actionBusy[volume.id] = false;
       this.cdr.markForCheck();
@@ -538,7 +538,7 @@ export class NovelsManager implements OnInit, OnDestroy {
       this.startCatalogAutoRefresh();
     } catch (err: any) {
       const detail = err?.error?.error || err?.message || 'No se pudo iniciar la sincronización.';
-      this.messageService.add({ severity: 'error', summary: 'Error', detail });
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
     } finally {
       this.syncStarting = false;
       this.cdr.markForCheck();

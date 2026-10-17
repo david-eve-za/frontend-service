@@ -48,7 +48,9 @@ class AudioGeneratorServiceIT {
         setField(edgeTtsClient, "pitch", "+0Hz");
         setField(edgeTtsClient, "connectTimeoutSeconds", 10);
         setField(edgeTtsClient, "receiveTimeoutSeconds", 60);
-        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient, 3);
+        // Replicates the injection performed by Spring from application.yml.
+        audioGeneratorService = new AudioGeneratorService(textSplitter, edgeTtsClient,
+                3, 10, 60, 600, 15);
     }
 
     @Test

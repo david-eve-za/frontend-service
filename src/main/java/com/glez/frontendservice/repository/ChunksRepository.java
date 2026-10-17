@@ -76,10 +76,35 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
     List<UUID> findIdsByBookIdAndStatusNot(@Param("bookId") UUID bookId,
                                            @Param("status") ChunkStatus status);
 
-    /** All block-bound chunks of a book (per-block audio step), reading order. */
-    @Query("select c from Chunks c where c.book.id = :bookId and c.block is not null "
-            + "order by c.position asc")
-    List<Chunks> findBlockChunksByBookId(@Param("bookId") UUID bookId);
+    /**
+     * Translated texts of a book's chunks in reading order (legacy AUDIO
+     * step): scalar projection — the original_text CLOB of every chunk
+     * is never read, nor are chunk entities materialized. Rows may be
+     * null (chunks whose translation never completed); callers filter.
+     */
+    @Query("select c.translatedText from Chunks c where c.book.id = :bookId order by c.position asc")
+    List<String> findTranslatedTextByBookId(@Param("bookId") UUID bookId);
+
+    /**
+     * Light block-bound chunk rows for the per-block AUDIO step, reading
+     * order: only the translated text travels (no original_text CLOB,
+     * no entity materialization).
+     */
+    @Query("select c.block.id as blockId, c.status as status, c.position as position, "
+            + "c.translatedText as translatedText from Chunks c "
+            + "where c.book.id = :bookId and c.block is not null order by c.position asc")
+    List<BlockChunkAudioView> findBlockAudioViewsByBookId(@Param("bookId") UUID bookId);
+
+    /** Block-bound chunk row for the per-block AUDIO step. */
+    interface BlockChunkAudioView {
+        UUID getBlockId();
+
+        ChunkStatus getStatus();
+
+        int getPosition();
+
+        String getTranslatedText();
+    }
 
     // ------------------------------------------------------------------
     // Paged UI views: chunk text plus its block metadata (id, type,
@@ -99,6 +124,9 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
 
         int getPosition();
 
+        /** Causa del último fallo (null si el chunk está sano) — popup en vivo del FE. */
+        String getErrorMessage();
+
         UUID getBlockId();
 
         Block.BlockType getBlockType();
@@ -108,8 +136,8 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
 
     /** Chunks of a book in reading order (blocks first, then legacy unbound chunks). */
     @Query(value = "select c.id as id, c.originalText as originalText, c.translatedText as translatedText, "
-            + "c.status as status, c.position as position, b.id as blockId, b.blockType as blockType, "
-            + "b.blockNumber as blockNumber "
+            + "c.status as status, c.position as position, c.errorMessage as errorMessage, "
+            + "b.id as blockId, b.blockType as blockType, b.blockNumber as blockNumber "
             + "from Chunks c left join c.block b where c.book.id = :bookId "
             + "order by coalesce(b.position, -1) asc, c.position asc",
             countQuery = "select count(c) from Chunks c where c.book.id = :bookId")
@@ -117,8 +145,8 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
 
     /** Chunks of the given blocks of a book in reading order (translation scope view). */
     @Query(value = "select c.id as id, c.originalText as originalText, c.translatedText as translatedText, "
-            + "c.status as status, c.position as position, b.id as blockId, b.blockType as blockType, "
-            + "b.blockNumber as blockNumber "
+            + "c.status as status, c.position as position, c.errorMessage as errorMessage, "
+            + "b.id as blockId, b.blockType as blockType, b.blockNumber as blockNumber "
             + "from Chunks c left join c.block b where c.book.id = :bookId and b.id in :blockIds "
             + "order by coalesce(b.position, -1) asc, c.position asc",
             countQuery = "select count(c) from Chunks c left join c.block b "

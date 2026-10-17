@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -73,6 +74,24 @@ public interface BookRepository extends JpaRepository<Book, UUID> {
     }
 
     /**
+     * Light (id, name, audioFilePath) view for the AUDIO step: the book
+     * row is read WITHOUT the multi-megabyte full_text CLOB that a full
+     * entity load (findById) materializes.
+     */
+    @Query("select b.id as id, b.name as name, b.audioFilePath as audioFilePath "
+            + "from Book b where b.id = :bookId")
+    Optional<BookAudioView> findAudioViewById(@Param("bookId") UUID bookId);
+
+    /** Light book row for the AUDIO step (name + generated audio path). */
+    interface BookAudioView {
+        UUID getId();
+
+        String getName();
+
+        String getAudioFilePath();
+    }
+
+    /**
      * Whether the book has non-blank extracted text, without reading the
      * CLOB. Native SQL because Hibernate's JPQL type checker rejects
      * trim()/length() on CLOB-mapped strings (H2 itself supports them).
@@ -99,6 +118,18 @@ public interface BookRepository extends JpaRepository<Book, UUID> {
                          @Param("expected") ProcessingStatus expected,
                          @Param("target") ProcessingStatus target);
 
+    /**
+     * Status transition for any book NOT in the excluded status (e.g. the
+     * manual stop of an idle book: anything except COMPLETED can be
+     * stopped); returns rows changed.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("update Book b set b.status = :target where b.id = :bookId and b.status <> :exclude")
+    int updateStatusIfNot(@Param("bookId") UUID bookId,
+                          @Param("exclude") ProcessingStatus exclude,
+                          @Param("target") ProcessingStatus target);
+
     /** Status + trace pointer update (failure marking) without loading the CLOB. */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Transactional
@@ -112,4 +143,14 @@ public interface BookRepository extends JpaRepository<Book, UUID> {
     @Transactional
     @Query("delete from Book b where b.id = :bookId")
     int deleteByIdInBulk(@Param("bookId") UUID bookId);
+
+    /**
+     * Audio path update without loading the book entity: neither the
+     * multi-megabyte full_text CLOB is read, nor is it rewritten by the
+     * dirty-check flush of a managed Book.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("update Book b set b.audioFilePath = :path where b.id = :bookId")
+    int updateAudioPathInBulk(@Param("bookId") UUID bookId, @Param("path") String path);
 }

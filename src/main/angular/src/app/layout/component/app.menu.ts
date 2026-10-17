@@ -91,6 +91,21 @@ export class AppMenu {
                 ],
             },
             {
+                label: 'Historias en Video',
+                icon: 'pi pi-fw pi-video-camera',
+                path: '/video-stories',
+                items: [
+                    {
+                        // Única herramienta de la sección: la timeline completa
+                        // encadenada por la IA (1 historia → 2 diseños →
+                        // 3 assets → 4 escenas → 5 video opcional).
+                        label: 'Asistente de Historias',
+                        icon: 'pi pi-fw pi-magic',
+                        routerLink: ['/video-stories/wizard'],
+                    },
+                ],
+            },
+            {
                 label: 'Primeros Pasos',
                 items: [
                     {

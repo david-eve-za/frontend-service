@@ -33,10 +33,25 @@ public record DashboardStatsDto(
             String currentStep) {
     }
 
+    /**
+     * Libro con ciclo de vida activo (todo estado salvo COMPLETED) para el
+     * panel de procesos: estado persistido + flag running (corrida real en
+     * memoria de esta instancia; un PROCESSING sin corrida es un huérfano
+     * de crash pendiente de curación).
+     */
+    public record BookProcessDto(
+            UUID bookId,
+            String name,
+            String status,
+            String currentStep,
+            boolean running) {
+    }
+
     /** Procesos activos: pipeline de libros + sincronización del catálogo. */
     public record ProcessStatusDto(
             List<RunningProcessDto> running,
-            NovelsCatalogSyncStatus catalogSync) {
+            NovelsCatalogSyncStatus catalogSync,
+            List<BookProcessDto> books) {
     }
 
     /**
@@ -60,8 +75,20 @@ public record DashboardStatsDto(
             long completed) {
     }
 
-    /** Tamaño del catálogo de novelas sincronizado. */
+    /** Tamaño del catálogo de novelas sincronizado + actividad reciente. */
     public record CatalogStatsDto(
+            long novels,
+            long volumes,
+            List<CatalogActivityPointDto> activity) {
+    }
+
+    /**
+     * Descubrimientos del catálogo de elscione en un día: obras y
+     * volúmenes creados (vistos por primera vez por el sync) en esa
+     * fecha. Alimenta el gráfico de monitoreo del panel.
+     */
+    public record CatalogActivityPointDto(
+            String day,
             long novels,
             long volumes) {
     }

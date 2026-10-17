@@ -659,6 +659,11 @@ class BookProcessingServiceTest {
         private final Block.BlockType blockType;
         private final Integer blockNumber;
 
+        @Override
+        public String getErrorMessage() {
+            return null;
+        }
+
         TestChunkView(UUID id, String originalText, String translatedText, ChunkStatus status, int position,
                       UUID blockId, Block.BlockType blockType, Integer blockNumber) {
             this.id = id;

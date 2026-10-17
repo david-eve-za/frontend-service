@@ -63,6 +63,21 @@ spring:
         # rotación de app.nvidia.models; esto solo aplicaría a una
         # llamada directa al ChatModel sin opciones.
         model: openai/gpt-oss-20b
+        # Timeout EXPLÍCITO por petición al ChatModel. Análisis 2026-10-17:
+        # - El default implícito de Spring AI (60 s, AbstractOpenAiProperties
+        #   /AbstractOpenAiOptions.DEFAULT_TIMEOUT) NO se aplica a las
+        #   llamadas chat en 2.0.1 (llamadas reales de 102-133 s lo
+        #   demuestran; OpenAiChatModel no construye RequestOptions con él),
+        #   así que el tope operativo es el del SDK OpenAI (10 min).
+        # - El techo REAL es del SERVIDOR de NVIDIA (~240 s: todos los
+        #   fallos cloud se agrupan en ~243 s con "Request failed"), que
+        #   ningún timeout de cliente puede levantar.
+        # - 5 min (>= techo del servidor) fija la intención, nunca es el
+        #   límite operativo hoy y blinda el pipeline ante una futura
+        #   versión de Spring AI que empiece a honrar los 60 s implícitos
+        #   (mataría llamadas legítimas de 102+ s de golpe).
+        options:
+          timeout: 5m
     model:
       embedding: none
     ollama:
@@ -84,6 +99,15 @@ app:
     # Fragmentos de TTS sintetizados en paralelo (virtual threads) por
     # bloque de audio, con este tope suave hacia el endpoint de Edge TTS.
     tts-concurrency: 3
+    # Presupuesto TOTAL de la síntesis de un bloque: escala con el número
+    # de fragmentos (olas de tts-concurrency × techo connect+receive de
+    # cada una) con este suelo mínimo. El cap fijo de 10 min mataba
+    # corridas legítimas de libros completos (cientos de fragmentos).
+    tts-min-total-timeout-seconds: 600
+    # Tope de la mezcla ffmpeg de un bloque: un ffmpeg atascado falla el
+    # paso AUDIO en vez de colgar el pipeline para siempre (el libro
+    # quedaría en PROCESSING con el guard de reentrancia ocupado).
+    merge-timeout-minutes: 15
   nvidia:
     # Pool de modelos con ROTACIÓN AUTOMÁTICA. PRIORIDAD: NVIDIA siempre
     # primero (z-ai/glm-5.3 como primario), y ollama:gpt-oss:20b como
@@ -91,7 +115,7 @@ app:
     # offline, la rotación cae al modelo local de Ollama para no dejar
     # al pipeline sin traducción. El prefijo "ollama:" enruta la llamada
     # al servidor local (http://localhost:11434), no a la API de NVIDIA.
-    models: "z-ai/glm-5.3,openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3,ollama:gpt-oss:20b"
+    models: "z-ai/glm-5.3,openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,meta/llama-3.2-90b-vision-instruct,ollama:gpt-oss:20b"
     max-retries: 3
     # Cuota de la API de NVIDIA en solicitudes por minuto. El pipeline
     # completo (traducción con reintentos/rotación y extracción del
@@ -116,6 +140,32 @@ app:
     # La traducción al español expande ~10-15% el texto origen; el
     # presupuesto se calcula con este factor para no quedarse corto.
     translation-expansion-factor: 1.15
+    # AUTO-SANADO POR TIEMPO: el servidor de NVIDIA corta las generaciones
+    # que superan ~240 s (llegan como "Request failed" a ~243 s). Un
+    # intento reintentable que dure al menos este umbral cuenta como
+    # "timeout lento"; tras slow-piece-max-failures de ellos, la pieza se
+    # re-divide a la mitad (recursivamente, en fronteras de párrafo, el
+    # mismo mecanismo que el truncado por finish_reason=length) en vez de
+    # quemar ~4 min y una unidad de cuota RPM por cada modelo del pool.
+    # Las mitades tardan proporcionalmente menos y convergen bajo el techo
+    # (coste: +1 llamada RPM por cada nivel de división).
+    slow-piece-threshold-seconds: 240
+    slow-piece-max-failures: 2
+  ollama:
+    # Pool 100% LOCAL para cuando el proveedor elegido (abajo, app.ai.*)
+    # sea "ollama" para un caso de uso. hy-mt2 (Tencent) es ESPECIALIZADO
+    # en traducción (33 idiomas, fast-thinking: sin razonamiento, todo el
+    # tope de salida es traducción visible); gemma4 y gpt-oss son los
+    # generalistas creativos. El prefijo "ollama:" enruta a localhost:11434.
+    models: "ollama:gemma4-40k,ollama:gpt-oss:20b"
+  ai:
+    # PROVEEDOR POR CASO DE USO (nvidia | ollama). Son los DEFAULTS al
+    # arrancar; la selección real se cambia EN CALIENTE desde la página de
+    # Configuración (se persiste en BD y sobrevive reinicios).
+    # - nvidia: usa el pool app.nvidia.models (cloud, con fallback local).
+    # - ollama: usa SOLO el pool local app.ollama.models.
+    translation-provider: nvidia
+    story-provider: nvidia
   ai-inspector:
     # Sondas de disponibilidad antes de usar un modelo: timeout de conexión
     # CORTO para que un DNS caído falle en segundos (no cuelgue la
@@ -131,7 +181,7 @@ app:
       en: opennlp-en-ud-ewt-sentence-1.3-2.5.4.bin
       es: opennlp-es-ud-gsd-sentence-1.3-2.5.4.bin
   processing:
-    chunk-size: 5000
+    chunk-size: 3000
     chunk-overlap: 100
     thread-pool:
       core-size: 4

@@ -1,6 +1,7 @@
 package com.glez.frontendservice.services;
 
 import com.openai.errors.OpenAIIoException;
+import com.openai.errors.OpenAIServiceException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,6 +26,9 @@ class NvidiaAiServiceTest {
     @Mock
     private ModelInspectorService inspector;
 
+    @Mock
+    private AiProviderSettingsService providerSettings;
+
     @BeforeEach
     void setUp() {
         // We don't need to mock the ChatModel for testing private methods.
@@ -32,8 +36,10 @@ class NvidiaAiServiceTest {
         // El inspector reporta NVIDIA online por defecto (los casos de offline
         // lo cambian con when(...)).
         org.mockito.Mockito.lenient().when(inspector.isNvidiaOnline()).thenReturn(true);
+        org.mockito.Mockito.lenient().when(providerSettings.translationProvider()).thenReturn("nvidia");
+        org.mockito.Mockito.lenient().when(providerSettings.storyProvider()).thenReturn("nvidia");
         nvidiaAiService = new NvidiaAiService(null, "model1,model2", 3, rateLimiter,
-                inspector, 8192, 1024, 3.5, 1.15);
+                inspector, 8192, 1024, 3.5, 1.15, providerSettings, "", 240, 2);
     }
 
     @Nested
@@ -119,6 +125,110 @@ class NvidiaAiServiceTest {
             boolean result = invokeIsRetryableError(exception);
             assertTrue(result, "Transient network failures must rotate the model and retry");
         }
+
+        @Test
+        @DisplayName("Should return true for the REAL JDK timeout message 'request timed out'")
+        void isRetryableError_withJdkTimedOutMessage_returnsTrue() {
+            // HttpTimeoutException.getMessage() es "request timed out" (con 'd'):
+            // NO contiene el substring "timeout" — con la keyword antigua, un
+            // timeout del JDK mataba el chunk como no-reintentable.
+            Exception exception = new RuntimeException("Error calling Ollama model gpt-oss:20b: request timed out");
+            boolean result = invokeIsRetryableError(exception);
+            assertTrue(result, "The JDK's real timeout wording must be retryable");
+        }
+
+        @Test
+        @DisplayName("Should return true for transient Ollama failures (5xx/429/connection reset) by type")
+        void isRetryableError_withOllamaTransientException_returnsTrue() {
+            // El 500 del servidor local (tareas canceladas bajo cola) debe
+            // rotar y reintentar: el modelo local es gratis y el reintento
+            // casi siempre completa la pieza.
+            Exception exception = new NvidiaAiService.OllamaTransientException(
+                    "Ollama HTTP 500 for model gpt-oss:20b");
+            boolean result = invokeIsRetryableError(exception);
+            assertTrue(result, "Ollama 5xx/429/connection failures must rotate the model and retry");
+        }
+
+        @Test
+        @DisplayName("Should return false for permanent Ollama failures (404: model not pulled)")
+        void isRetryableError_withOllamaPermanent404_returnsFalse() {
+            Exception exception = new RuntimeException(
+                    "Error calling Ollama model gpt-oss:20b: Ollama HTTP 404 for model gpt-oss:20b");
+            boolean result = invokeIsRetryableError(exception);
+            assertFalse(result, "A missing local model is permanent: retrying only enqueues hours");
+        }
+
+        @Test
+        @DisplayName("A model EOL (410) is NOT retryable-in-place: it is a gone-model, it must ROTATE")
+        void isRetryableError_withModelEol410_returnsFalse() {
+            Exception exception = new RuntimeException(
+                    "410: {\"status\":410,\"detail\":\"The model 'moonshotai/kimi-k3' has reached its end of life\"}");
+            boolean result = invokeIsRetryableError(exception);
+            assertFalse(result, "410 belongs to isModelGone (rotate, never retry the same dead model)");
+        }
+    }
+
+    @Nested
+    @DisplayName("isModelGone method tests")
+    class IsModelGoneTests {
+
+        @Test
+        @DisplayName("410 EOL — the REAL message of the kimi-k3 incident — must rotate instead of killing the piece")
+        void isModelGone_withKimiEol410_returnsTrue() {
+            Exception exception = new RuntimeException("410: {\"type\":\"about:blank\",\"title\":\"Gone\",\"status\":410,"
+                    + "\"detail\":\"The model 'moonshotai/kimi-k3' has reached its end of life on 2026-10-15T08:00:00Z "
+                    + "and is no longer available.\"}");
+            boolean result = invokeIsModelGone(exception);
+            assertTrue(result, "A model EOL must rotate to the next model, never kill the piece");
+        }
+
+        @Test
+        @DisplayName("SDK-precise detection: OpenAIServiceException statusCode 410/404 are gone, 500 is not")
+        void isModelGone_withSdkStatusCode_classifiesCorrectly() {
+            OpenAIServiceException exception = org.mockito.Mockito.mock(OpenAIServiceException.class);
+            org.mockito.Mockito.lenient().when(exception.statusCode()).thenReturn(410);
+            assertTrue(invokeIsModelGone(exception), "410 (EOL) is gone");
+
+            org.mockito.Mockito.lenient().when(exception.statusCode()).thenReturn(404);
+            assertTrue(invokeIsModelGone(exception), "404 (not deployed) is gone");
+
+            org.mockito.Mockito.lenient().when(exception.statusCode()).thenReturn(500);
+            assertFalse(invokeIsModelGone(exception), "5xx is transient/retryable, not gone");
+        }
+
+        @Test
+        @DisplayName("Wrapped SDK exception (cause chain) is detected through the generic wrap")
+        void isModelGone_withWrappedCause_returnsTrue() {
+            OpenAIServiceException gone = org.mockito.Mockito.mock(OpenAIServiceException.class);
+            org.mockito.Mockito.lenient().when(gone.statusCode()).thenReturn(410);
+            Exception wrapped = new RuntimeException("Error calling model: Gone", gone);
+            assertTrue(invokeIsModelGone(wrapped), "The classifier must walk the cause chain (Spring AI wraps SDK errors)");
+        }
+
+        @Test
+        @DisplayName("Ollama 404 (model not pulled) also rotates: a missing model must not kill the piece")
+        void isModelGone_withOllama404_returnsTrue() {
+            Exception exception = new RuntimeException(
+                    "Error calling Ollama model gpt-oss:20b: Ollama HTTP 404 for model gpt-oss:20b");
+            boolean result = invokeIsModelGone(exception);
+            assertTrue(result, "A missing local model rotates to the next slot instead of failing the piece");
+        }
+
+        @Test
+        @DisplayName("Plain request errors (400-style) are neither gone nor retryable")
+        void isModelGone_withBadRequest_returnsFalse() {
+            Exception exception = new RuntimeException("Invalid request format");
+            boolean result = invokeIsModelGone(exception);
+            assertFalse(result);
+        }
+
+        @Test
+        @DisplayName("Null message with no SDK cause is not gone")
+        void isModelGone_withNullMessage_returnsFalse() {
+            Exception exception = new RuntimeException((String) null);
+            boolean result = invokeIsModelGone(exception);
+            assertFalse(result);
+        }
     }
 
     @Nested
@@ -198,6 +308,73 @@ class NvidiaAiServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Piece time-ceiling self-healing tests")
+    class PieceTimeSelfHealingTests {
+
+        @Test
+        @DisplayName("countsAsSlowFailure: retryable + at/over the server ceiling; blips and fatals never count")
+        void countsAsSlowFailure_classifiesCorrectly() {
+            assertTrue(invokeCountsAsSlowFailure(new OpenAIIoException("Request failed"), 243),
+                    "The REAL incident signature: an SDK IO failure at the observed ~243s");
+            assertTrue(invokeCountsAsSlowFailure(new OpenAIIoException("Request failed"), 240),
+                    "Exactly at the ceiling counts");
+            assertTrue(invokeCountsAsSlowFailure(new RuntimeException("request timed out"), 250),
+                    "Any retryable failure (e.g. a JDK timeout) at the ceiling is slow");
+            assertFalse(invokeCountsAsSlowFailure(new OpenAIIoException("Request failed"), 100),
+                    "A network blip that fails fast is a normal retryable rotation, never a slow timeout");
+            assertFalse(invokeCountsAsSlowFailure(new RuntimeException("Invalid request format"), 300),
+                    "Non-retryable failures are never slow timeouts");
+        }
+
+        @Test
+        @DisplayName("A piece that exceeds the time ceiling is halved and both halves are reassembled")
+        void translateWithBudget_withSlowPiece_halvesAndReassembles() {
+            NvidiaAiService spy = org.mockito.Mockito.spy(nvidiaAiService);
+            String paragraph = "x".repeat(600);
+            String bigText = paragraph + "\n\n" + paragraph; // > MIN_SELF_HEAL_PIECE_CHARS (1000)
+            org.mockito.Mockito.doThrow(new NvidiaAiService.PieceGenerationTooSlowException("server ceiling"))
+                    .doReturn("traducción A")
+                    .doReturn("traducción B")
+                    .when(spy).callModelWithRotation(org.mockito.ArgumentMatchers.anyString());
+
+            String result = invokeTranslateWithBudget(spy, bigText);
+
+            assertEquals("traducción A\n\ntraducción B", result);
+            verify(spy, org.mockito.Mockito.times(3)).callModelWithRotation(
+                    org.mockito.ArgumentMatchers.anyString());
+        }
+
+        @Test
+        @DisplayName("A piece at the self-heal floor that is too slow propagates (no infinite halving)")
+        void translateWithBudget_withSlowFloorPiece_propagates() {
+            NvidiaAiService spy = org.mockito.Mockito.spy(nvidiaAiService);
+            org.mockito.Mockito.doThrow(new NvidiaAiService.PieceGenerationTooSlowException("server ceiling"))
+                    .when(spy).callModelWithRotation(org.mockito.ArgumentMatchers.anyString());
+
+            assertThrows(NvidiaAiService.PieceGenerationTooSlowException.class,
+                    () -> invokeTranslateWithBudget(spy, "texto corto"));
+        }
+
+        @Test
+        @DisplayName("Regression: the truncated path keeps halving and reassembling (shared translateHalves)")
+        void translateWithBudget_withTruncatedPiece_halvesAndReassembles() {
+            NvidiaAiService spy = org.mockito.Mockito.spy(nvidiaAiService);
+            String paragraph = "y".repeat(600);
+            String bigText = paragraph + "\n\n" + paragraph;
+            org.mockito.Mockito.doThrow(new NvidiaAiService.TranslationTruncatedException("finish_reason=length"))
+                    .doReturn("traducción A")
+                    .doReturn("traducción B")
+                    .when(spy).callModelWithRotation(org.mockito.ArgumentMatchers.anyString());
+
+            String result = invokeTranslateWithBudget(spy, bigText);
+
+            assertEquals("traducción A\n\ntraducción B", result);
+            verify(spy, org.mockito.Mockito.times(3)).callModelWithRotation(
+                    org.mockito.ArgumentMatchers.anyString());
+        }
+    }
+
     private boolean invokeIsRetryableError(Exception e) {
         try {
             java.lang.reflect.Method method = NvidiaAiService.class.getDeclaredMethod("isRetryableError", Exception.class);
@@ -205,6 +382,50 @@ class NvidiaAiServiceTest {
             return (boolean) method.invoke(nvidiaAiService, e);
         } catch (Exception ex) {
             throw new RuntimeException("Failed to invoke isRetryableError method", ex);
+        }
+    }
+
+    private boolean invokeIsModelGone(Exception e) {
+        try {
+            java.lang.reflect.Method method = NvidiaAiService.class.getDeclaredMethod("isModelGone", Exception.class);
+            method.setAccessible(true);
+            return (boolean) method.invoke(nvidiaAiService, e);
+        } catch (Exception ex) {
+            throw new RuntimeException("Failed to invoke isModelGone method", ex);
+        }
+    }
+
+    private boolean invokeCountsAsSlowFailure(Exception e, long elapsedSeconds) {
+        try {
+            java.lang.reflect.Method method = NvidiaAiService.class.getDeclaredMethod(
+                    "countsAsSlowFailure", Exception.class, long.class);
+            method.setAccessible(true);
+            return (boolean) method.invoke(nvidiaAiService, e, elapsedSeconds);
+        } catch (Exception ex) {
+            throw new RuntimeException("Failed to invoke countsAsSlowFailure method", ex);
+        }
+    }
+
+    /**
+     * Invoca el translateWithBudget privado SOBRE UN SPY: las llamadas
+     * internas al método público virtual callModelWithRotation pasan por
+     * el proxy de Mockito (stubbeables con doThrow/doReturn). El helper
+     * DESENVUELVE la InvocationTargetException para que assertThrows vea
+     * el tipo original.
+     */
+    private String invokeTranslateWithBudget(NvidiaAiService target, String text) {
+        try {
+            java.lang.reflect.Method method = NvidiaAiService.class.getDeclaredMethod(
+                    "translateWithBudget", String.class, String.class, String.class, java.util.List.class);
+            method.setAccessible(true);
+            return (String) method.invoke(target, text, "en", "es", java.util.List.of());
+        } catch (java.lang.reflect.InvocationTargetException ex) {
+            if (ex.getCause() instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new RuntimeException("Failed to invoke translateWithBudget", ex);
+        } catch (Exception ex) {
+            throw new RuntimeException("Failed to invoke translateWithBudget", ex);
         }
     }
 
@@ -271,7 +492,7 @@ class NvidiaAiServiceTest {
             String pool = "z-ai/glm-5.3,openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,"
                     + "z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,moonshotai/kimi-k3,ollama:gpt-oss:20b";
             NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
-                    inspector, 8192, 1024, 3.5, 1.15);
+                    inspector, 8192, 1024, 3.5, 1.15, providerSettings, "", 240, 2);
 
             java.lang.reflect.Field index = NvidiaAiService.class
                     .getDeclaredField("currentModelIndex");
@@ -279,23 +500,70 @@ class NvidiaAiServiceTest {
 
             // Siete rotaciones recorren el pool completo y la octava vuelve al primario.
             for (int i = 1; i <= 7; i++) {
-                invokeRotateModel(poolService);
+                invokeRotateModel(poolService, 7);
                 int current = ((java.util.concurrent.atomic.AtomicInteger) index.get(poolService)).get();
                 assertEquals(i % 7, current, "La rotación " + i + " debe aterrizar en " + (i % 7));
             }
         }
 
-        private void invokeRotateModel(NvidiaAiService service) throws Exception {
+        private void invokeRotateModel(NvidiaAiService service, int poolSize) throws Exception {
             java.lang.reflect.Method method = NvidiaAiService.class
-                    .getDeclaredMethod("rotateModel");
+                    .getDeclaredMethod("rotateModel", int.class);
             method.setAccessible(true);
-            method.invoke(service);
+            method.invoke(service, poolSize);
         }
     }
 
     @Nested
     @DisplayName("Provider availability pre-flight tests")
     class ProviderPreFlightTests {
+
+        @Test
+        @DisplayName("Provider=ollama (asistente): usa SOLO el pool local, nunca el de NVIDIA")
+        void callModelWithRotation_ollamaProvider_usesLocalPool() {
+            // Selección del asistente = ollama → la llamada (2 args, tope
+            // ampliado = asistente) debe enrutar al pool LOCAL.
+            when(providerSettings.storyProvider()).thenReturn("ollama");
+            org.mockito.Mockito.lenient().when(inspector.isOllamaOnline()).thenReturn(true);
+            // Con el pool local NUNCA se sondea a NVIDIA; lenient porque el
+            // estricto lo marcaría como stub no usado.
+            org.mockito.Mockito.lenient().when(inspector.isNvidiaOnline()).thenReturn(false);
+            String nvidiaPool = "z-ai/glm-5.3,m2,m3";
+            String localPool = "ollama:maternion/hy-mt2:30b,ollama:gemma4:26b";
+            NvidiaAiService service = new NvidiaAiService(null, nvidiaPool, 1, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15, providerSettings, localPool, 240, 2) {
+                @Override
+                String callOllamaModel(String modelName, String prompt, int numPredict) {
+                    return "local:" + modelName;
+                }
+            };
+
+            String result = service.callModelWithRotation("prompt", 8192);
+
+            // El PRIMER modelo del pool local (hy-mt2) atendió: NVIDIA ni se probó.
+            assertEquals("local:maternion/hy-mt2:30b", result);
+        }
+
+        @Test
+        @DisplayName("Provider=ollama con pool local VACÍO cae al pool de NVIDIA (guard)")
+        void callModelWithRotation_ollamaProvider_emptyLocalPool_fallsBackToNvidiaPool() {
+            when(providerSettings.translationProvider()).thenReturn("ollama");
+            org.mockito.Mockito.lenient().when(inspector.isOllamaOnline()).thenReturn(true);
+            org.mockito.Mockito.lenient().when(inspector.isNvidiaOnline()).thenReturn(true);
+            NvidiaAiService service = new NvidiaAiService(null, "z-ai/glm-5.3", 1, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15, providerSettings, "", 240, 2) {
+                @Override
+                String callOllamaModel(String modelName, String prompt, int numPredict) {
+                    return "no-deberia-llamarse";
+                }
+            };
+
+            // Sin pool local configurado, el proveedor ollama usa el de NVIDIA.
+            RuntimeException e = assertThrows(RuntimeException.class,
+                    () -> service.callModelWithRotation("prompt"));
+            assertTrue(e.getMessage().contains("Non-retryable") || e.getMessage().contains("chatModel"),
+                    "El pool NVIDIA (con chatModel null) es el que se intenta: " + e.getMessage());
+        }
 
         @Test
         @DisplayName("An offline NVIDIA provider falls through to the local Ollama model (last resort)")
@@ -306,9 +574,9 @@ class NvidiaAiServiceTest {
             when(inspector.isOllamaOnline()).thenReturn(true);
             String pool = "z-ai/glm-5.3,m2,m3,m4,m5,m6,ollama:gpt-oss:20b";
             NvidiaAiService service = new NvidiaAiService(null, pool, 3, rateLimiter,
-                    inspector, 8192, 1024, 3.5, 1.15) {
+                    inspector, 8192, 1024, 3.5, 1.15, providerSettings, "", 240, 2) {
                 @Override
-                String callOllamaModel(String modelName, String prompt) {
+                String callOllamaModel(String modelName, String prompt, int numPredict) {
                     return "Traducción local de Ollama";
                 }
             };
@@ -329,7 +597,7 @@ class NvidiaAiServiceTest {
             when(inspector.isOllamaOnline()).thenReturn(false);
             String pool = "m1,m2,m3,m4,m5,m6,ollama:gpt-oss:20b";
             NvidiaAiService offline = new NvidiaAiService(null, pool, 3, rateLimiter,
-                    inspector, 8192, 1024, 3.5, 1.15);
+                    inspector, 8192, 1024, 3.5, 1.15, providerSettings, "", 240, 2);
 
             RuntimeException failure = assertThrows(RuntimeException.class,
                     () -> offline.callModelWithRotation("prompt"));
@@ -343,7 +611,7 @@ class NvidiaAiServiceTest {
         void poolModelNames_exposesThePool() {
             String pool = "z-ai/glm-5.3,openai/gpt-oss-20b,moonshotai/kimi-k3,ollama:gpt-oss:20b";
             NvidiaAiService poolService = new NvidiaAiService(null, pool, 3, rateLimiter,
-                    inspector, 8192, 1024, 3.5, 1.15);
+                    inspector, 8192, 1024, 3.5, 1.15, providerSettings, "", 240, 2);
 
             java.util.List<String> names = poolService.poolModelNames();
             assertEquals("z-ai/glm-5.3", names.get(0), "glm-5.3 es el PRIMARIO");
@@ -367,7 +635,7 @@ class NvidiaAiServiceTest {
         @DisplayName("A tighter budget yields proportionally smaller pieces")
         void estimateMaxPieceChars_scalesWithTheBudget() {
             NvidiaAiService tiny = new NvidiaAiService(null, "m", 1, rateLimiter,
-                    inspector, 2_048, 1_024, 3.5, 1.15);
+                    inspector, 2_048, 1_024, 3.5, 1.15, providerSettings, "", 240, 2);
             assertEquals(3_116, tiny.estimateMaxPieceChars());
         }
 
@@ -448,7 +716,7 @@ class NvidiaAiServiceTest {
 
         private NvidiaAiService serviceWithCountingSeam(java.util.function.Function<String, String> responder) {
             servedPrompts = new java.util.ArrayList<>();
-            return new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
+            return new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0, providerSettings, "", 240, 2) {
                 @Override
                 public String callModelWithRotation(String prompt) {
                     servedPrompts.add(prompt);
@@ -490,7 +758,7 @@ class NvidiaAiServiceTest {
             // primera respuesta: se re-divide y reintenta.
             String text = "x".repeat(600) + ". " + "y".repeat(600) + ". " + "z".repeat(200);
             java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
-            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0, providerSettings, "", 240, 2) {
                 @Override
                 public String callModelWithRotation(String prompt) {
                     if (calls.incrementAndGet() == 1) {
@@ -510,7 +778,7 @@ class NvidiaAiServiceTest {
         @DisplayName("A truncation below the self-healing floor propagates visibly")
         void translate_truncatedTinyPiece_failsVisibly() {
             String text = "tiny text";
-            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0) {
+            NvidiaAiService service = new NvidiaAiService(null, "m", 1, rateLimiter, inspector, 200, 50, 10.0, 1.0, providerSettings, "", 240, 2) {
                 @Override
                 public String callModelWithRotation(String prompt) {
                     throw new NvidiaAiService.TranslationTruncatedException("length");

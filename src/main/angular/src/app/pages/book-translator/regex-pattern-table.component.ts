@@ -46,7 +46,7 @@ import { MessageService, ConfirmationService } from 'primeng/api';
   ],
   providers: [MessageService, ConfirmationService],
   template: `
-    <p-toast></p-toast>
+    <p-toast [life]="12000"></p-toast>
     <p-confirmDialog></p-confirmDialog>
 
     <div class="card">
@@ -356,7 +356,7 @@ import { MessageService, ConfirmationService } from 'primeng/api';
       </ng-template>
     </p-dialog>
 
-    <p-toast></p-toast>
+    <p-toast [life]="12000"></p-toast>
     <p-confirmDialog></p-confirmDialog>
   `,
   styles: [`
@@ -459,7 +459,7 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
       error: (err) => {
         this.loading = false;
         this.error = 'No se pudieron cargar los patrones. ' + (err.message || 'Error de conexión');
-        this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar los patrones' });
+        this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'No se pudieron cargar los patrones' });
         this.cdr.detectChanges();
       }
     });
@@ -560,7 +560,7 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
       Object.keys(this.form.controls).forEach(key => {
         this.form.get(key)?.markAsTouched();
       });
-      this.messageService.add({ severity: 'error', summary: 'Error', detail: 'Hay campos inválidos en el formulario' });
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'Hay campos inválidos en el formulario' });
       return;
     }
 
@@ -578,7 +578,7 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
         },
         error: () => {
           this.saving = false;
-          this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudo actualizar el patrón' });
+          this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'No se pudo actualizar el patrón' });
           this.cdr.markForCheck();
         }
       });
@@ -593,7 +593,7 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
         },
         error: () => {
           this.saving = false;
-          this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudo crear el patrón' });
+          this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'No se pudo crear el patrón' });
           this.cdr.markForCheck();
         }
       });
@@ -611,7 +611,7 @@ export class RegexPatternTableComponent implements OnInit, OnDestroy {
             this.messageService.add({ severity: 'success', summary: 'Éxito', detail: 'Patrón eliminado' });
             this.loadPatterns();
           },
-          error: () => this.messageService.add({ severity: 'error', summary: 'Error', detail: 'No se pudo eliminar' })
+          error: () => this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail: 'No se pudo eliminar' })
         });
       }
     });

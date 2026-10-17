@@ -153,6 +153,14 @@ public class FileProcessingController {
                 bookProcessingService.validateBlocksBelongToBook(bookId, blockIds);
             }
 
+            // Un libro STOPPED solo despierta por intención EXPLÍCITA del
+            // usuario (este endpoint): el flip previo lo deja en AWAITING
+            // y el guard del orquestador ya no lo ignora. El auto-resume
+            // del arranque sigue saltando los STOPPED (1-arg processBook).
+            bookRepository.updateStatusWhen(bookId,
+                    com.glez.frontendservice.model.ProcessingStatus.STOPPED,
+                    com.glez.frontendservice.model.ProcessingStatus.AWAITING);
+
             com.glez.frontendservice.model.ProcessStep effectiveTarget =
                     targetStep != null ? targetStep : com.glez.frontendservice.model.ProcessStep.FINALIZE;
             bookPipelineOrchestrator.processBook(bookId, effectiveTarget,
@@ -187,6 +195,63 @@ public class FileProcessingController {
                     }
                 })
                 .toList();
+    }
+
+    @Operation(summary = "Pause the running pipeline of a book",
+            description = "Cooperative pause: the step currently in flight (e.g. a translation pass) runs to "
+                    + "completion and the pipeline stops at the next checkpoint, leaving the book AWAITING. "
+                    + "Nothing is cancelled and no retry budget is consumed. "
+                    + "Returns 409 when the book has no active run in this instance.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Pause requested; it takes effect at the next checkpoint", content = @Content),
+            @ApiResponse(responseCode = "404", description = "Book not found", content = @Content),
+            @ApiResponse(responseCode = "409", description = "The book is not being processed right now", content = @Content)
+    })
+    @PostMapping("/{bookId}/pause")
+    public ResponseEntity<Map<String, Object>> pauseBook(
+            @Parameter(description = "ID of the book to pause", required = true)
+            @PathVariable UUID bookId) {
+        Map<String, Object> response = new HashMap<>();
+        if (!bookRepository.existsById(bookId)) {
+            response.put("error", "Book " + bookId + " not found.");
+            return ResponseEntity.notFound().build();
+        }
+        if (!bookPipelineOrchestrator.requestPause(bookId)) {
+            response.put("error", "Book " + bookId + " is not being processed right now.");
+            return ResponseEntity.status(409).body(response);
+        }
+        response.put("message", "Pause requested for book " + bookId
+                + ": the pipeline stops at the next checkpoint.");
+        response.put("bookId", bookId);
+        return ResponseEntity.accepted().body(response);
+    }
+
+    @Operation(summary = "Stop the pipeline of a book",
+            description = "Immediate stop: in-flight chunk translations are cancelled, the step closes as "
+                    + "CANCELLED in the trace (no retry budget consumed) and the book is left STOPPED. "
+                    + "Works on idle/failed books too (they are simply marked STOPPED, out of the auto-resume "
+                    + "rotation). A STOPPED book restarts via POST /{bookId}/process.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Book stopped", content = @Content),
+            @ApiResponse(responseCode = "404", description = "Book not found", content = @Content),
+            @ApiResponse(responseCode = "409", description = "The book is already COMPLETED (nothing to stop)", content = @Content)
+    })
+    @PostMapping("/{bookId}/stop")
+    public ResponseEntity<Map<String, Object>> stopBook(
+            @Parameter(description = "ID of the book to stop", required = true)
+            @PathVariable UUID bookId) {
+        Map<String, Object> response = new HashMap<>();
+        if (!bookRepository.existsById(bookId)) {
+            response.put("error", "Book " + bookId + " not found.");
+            return ResponseEntity.notFound().build();
+        }
+        if (!bookPipelineOrchestrator.requestStop(bookId)) {
+            response.put("error", "Book " + bookId + " is already completed; there is nothing to stop.");
+            return ResponseEntity.status(409).body(response);
+        }
+        response.put("message", "Book " + bookId + " stopped.");
+        response.put("bookId", bookId);
+        return ResponseEntity.accepted().body(response);
     }
 
     @Operation(summary = "Get processing timeline",

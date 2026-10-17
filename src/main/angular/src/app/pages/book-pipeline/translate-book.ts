@@ -14,6 +14,7 @@ import { CheckboxModule } from 'primeng/checkbox';
 import { ButtonModule } from 'primeng/button';
 import { TagModule } from 'primeng/tag';
 import { ToastModule } from 'primeng/toast';
+import { TooltipModule } from 'primeng/tooltip';
 import { PaginatorModule } from 'primeng/paginator';
 import { ProgressBarModule } from 'primeng/progressbar';
 import { MessageService } from 'primeng/api';
@@ -51,11 +52,12 @@ type TranslationScope = 'full' | 'blocks';
         ButtonModule,
         TagModule,
         ToastModule,
+        TooltipModule,
         PaginatorModule,
         ProgressBarModule,
     ],
     template: `
-        <p-toast></p-toast>
+        <p-toast [life]="12000"></p-toast>
 
         <div class="card mb-4">
             <div
@@ -373,6 +375,9 @@ type TranslationScope = 'full' | 'blocks';
                                 <p-tag
                                     [value]="chunkStatusLabel(chunk.status)"
                                     [severity]="chunkStatusSeverity(chunk.status)"
+                                    [pTooltip]="chunk.errorMessage ?? ''"
+                                    tooltipPosition="bottom"
+                                    [escape]="false"
                                 />
                                 <p-button
                                     label="Traducir chunk"
@@ -474,6 +479,10 @@ export class TranslateBook implements OnInit, OnDestroy {
         lastUpdate: '--:--:--',
     });
     private translationTimer: ReturnType<typeof setInterval> | null = null;
+    /** Chunks FALLIDOS ya conocidos: evita repetir el popup por fallos viejos. */
+    private knownFailedIds = new Set<string>();
+    /** false hasta el primer poll del libro: la primera foto no dispara popups. */
+    private failureBaselineDone = false;
 
     constructor(
         private uploadService: BookTranslatorUploadService,
@@ -493,7 +502,7 @@ export class TranslateBook implements OnInit, OnDestroy {
             },
             error: () => {
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Error',
                     detail: 'No se pudo cargar la lista de documentos.',
                 });
@@ -525,6 +534,9 @@ export class TranslateBook implements OnInit, OnDestroy {
         this.stopChunkPolling();
         this.stopTranslationPolling();
         this.translatingChunkId = null;
+        // Nuevo libro: reinicia la línea base de fallos conocidos.
+        this.knownFailedIds.clear();
+        this.failureBaselineDone = false;
         this.scope = 'full';
         this.blocks = [];
         this.selectedBlockIds = [];
@@ -599,6 +611,12 @@ export class TranslateBook implements OnInit, OnDestroy {
                         percent,
                         lastUpdate: time,
                     });
+                    // EN VIVO: los estados/traducciones frescos se funden en
+                    // la página visible sin recargar (tags que cambian y
+                    // traducciones que aparecen al completarse cada chunk).
+                    this.mergeIntoVisiblePage(fullPage.content);
+                    // EN VIVO: popup fijo por cada fallo NUEVO de la corrida.
+                    this.detectNewFailures(fullPage.content);
                     this.cdr.markForCheck();
 
                     // Si ya no hay trabajo en curso, la corrida terminó.
@@ -612,16 +630,26 @@ export class TranslateBook implements OnInit, OnDestroy {
                         this.loadChunks(0, PAGE_SIZE);
                         this.loadBooks();
                         this.cdr.markForCheck();
+                        const failedCount = fullPage.content.filter(
+                            (c) => c.status === 'FAILED',
+                        ).length;
                         this.messageService.add({
-                            severity: percent === 100 ? 'success' : 'warn',
+                            sticky: failedCount > 0,
+                            severity:
+                                percent === 100 && failedCount === 0
+                                    ? 'success'
+                                    : 'warn',
                             summary:
-                                percent === 100
+                                percent === 100 && failedCount === 0
                                     ? 'Traducción completada'
-                                    : 'Corrida detenida',
+                                    : 'Corrida terminada con fallos',
                             detail:
-                                percent === 100
+                                percent === 100 && failedCount === 0
                                     ? `Todos los ${total} chunks están traducidos.`
-                                    : `La corrida terminó con ${completed}/${total} chunks traducidos.`,
+                                    : `La corrida terminó: ${completed}/${total} traducidos` +
+                                      (failedCount > 0
+                                          ? `, ${failedCount} fallidos (revisa el estado de cada chunk y reintenta).`
+                                          : '.'),
                         });
                     }
                 },
@@ -637,6 +665,68 @@ export class TranslateBook implements OnInit, OnDestroy {
         this.translatingChunkId = null;
         this.page = null;
         this.loadChunks(0, PAGE_SIZE);
+    }
+
+    /**
+     * EN VIVO: funde los chunks frescos del poll en la página visible (por
+     * id) — los tags de estado cambian AWAITING→PROCESSING→COMPLETED y las
+     * traducciones aparecen al completarse, SIN recargar la página ni el
+     * paginador. Los fallos nuevos se detectan aparte (popup).
+     */
+    private mergeIntoVisiblePage(freshChunks: Chunk[]) {
+        if (!this.page?.content) return;
+        const byId = new Map(freshChunks.map((c) => [c.id, c]));
+        for (const row of this.page.content) {
+            const fresh = byId.get(row.id);
+            if (fresh) {
+                row.status = fresh.status;
+                row.translatedText = fresh.translatedText;
+                row.errorMessage = fresh.errorMessage;
+            }
+        }
+    }
+
+    /**
+     * EN VIVO: dispara un POPUP FIJO por cada chunk que pasa a FAILED
+     * durante la corrida (la primera foto del libro no dispara popups —
+     * son fallos ya conocidos). El popup muestra la CAUSA persistida en
+     * el chunk y la traza del Visor de Logs para investigar.
+     */
+    private detectNewFailures(freshChunks: Chunk[]) {
+        const failed = freshChunks.filter((c) => c.status === 'FAILED');
+        if (!this.failureBaselineDone) {
+            // Línea base: los FAILED que ya existían no regeneran popups.
+            for (const c of failed) {
+                this.knownFailedIds.add(c.id);
+            }
+            this.failureBaselineDone = true;
+            return;
+        }
+        const newFailures = failed.filter((c) => !this.knownFailedIds.has(c.id));
+        if (newFailures.length === 0) return;
+        for (const c of newFailures) {
+            this.knownFailedIds.add(c.id);
+        }
+        const first = newFailures[0];
+        const firstLabel = this.chunkBlockLabel(first)
+            ? `${this.chunkBlockLabel(first)} · posición ${first.position}`
+            : `posición ${first.position}`;
+        const cause = first.errorMessage
+            ? first.errorMessage.split('\n')[0].slice(0, 220)
+            : 'Sin causa registrada.';
+        this.messageService.add({
+            sticky: true,
+            severity: 'error',
+            summary:
+                newFailures.length === 1
+                    ? `Falló la traducción (${firstLabel})`
+                    : `Fallaron ${newFailures.length} chunks`,
+            detail:
+                (newFailures.length === 1
+                    ? `El chunk (${firstLabel}) no se pudo traducir.\n\nCausa: ${cause}`
+                    : `Los chunks (${firstLabel} y ${newFailures.length - 1} más) fallaron.\n\nPrimera causa: ${cause}`) +
+                `\n\nPuedes reintentarlos desde esta página o filtrar la traza ${first.id} en el Visor de Logs.`,
+        });
     }
 
     /**
@@ -766,13 +856,13 @@ export class TranslateBook implements OnInit, OnDestroy {
                     this.cdr.markForCheck();
                     if (err.status === 409) {
                         this.messageService.add({
-                            severity: 'warn',
+                            sticky: true, severity: 'warn',
                             summary: 'Ya en proceso',
                             detail: 'El documento ya se está procesando. Espera a que termine la corrida actual.',
                         });
                     } else {
                         this.messageService.add({
-                            severity: 'error',
+                            sticky: true, severity: 'error',
                             summary: 'Error',
                             detail:
                                 err.error?.error ||
@@ -813,7 +903,7 @@ export class TranslateBook implements OnInit, OnDestroy {
                     this.translatingChunkId = null;
                     if (err.status === 409) {
                         this.messageService.add({
-                            severity: 'warn',
+                            sticky: true, severity: 'warn',
                             summary: 'Pipeline en marcha',
                             detail:
                                 'El documento está en una corrida del ' +
@@ -822,7 +912,7 @@ export class TranslateBook implements OnInit, OnDestroy {
                         });
                     } else {
                         this.messageService.add({
-                            severity: 'error',
+                            sticky: true, severity: 'error',
                             summary: 'Error',
                             detail:
                                 err.error?.error ||
@@ -864,17 +954,22 @@ export class TranslateBook implements OnInit, OnDestroy {
                     this.stopChunkPolling();
                     this.translatingChunkId = null;
                     this.messageService.add({
-                        severity: ok ? 'success' : 'error',
+                        sticky: !ok, severity: ok ? 'success' : 'error',
                         summary: ok ? 'Chunk traducido' : 'Traducción fallida',
                         detail: ok
                             ? 'El chunk seleccionado se tradujo correctamente.'
-                            : 'La traducción del chunk falló. Revisa el estado del documento y reintenta.',
+                            : 'La traducción del chunk falló.' +
+                              (chunk?.errorMessage
+                                  ? '\n\nCausa: ' +
+                                    chunk.errorMessage.split('\n')[0].slice(0, 220)
+                                  : '') +
+                              '\n\nReinténtalo con el botón del chunk.',
                     });
                 } else if (target.attempts >= 24) {
                     this.stopChunkPolling();
                     this.translatingChunkId = null;
                     this.messageService.add({
-                        severity: 'warn',
+                        sticky: true, severity: 'warn',
                         summary: 'Traducción en curso',
                         detail:
                             'El chunk sigue traduciéndose en segundo plano. ' +
@@ -955,7 +1050,7 @@ export class TranslateBook implements OnInit, OnDestroy {
             () => {
                 this.loading = false;
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Error',
                     detail: 'No se pudieron cargar los chunks del documento.',
                 });

@@ -74,6 +74,8 @@ public class ChunkTranslationService {
         log.info("Traduciendo chunk {} ({} caracteres)", chunkId, originalLength);
 
         chunk.setStatus(ChunkStatus.PROCESSING);
+        // Un reintento limpia la causa del fallo anterior.
+        chunk.setErrorMessage(null);
         chunksRepository.save(chunk);
 
         try {
@@ -85,14 +87,42 @@ public class ChunkTranslationService {
                     translated != null ? translated.length() : 0,
                     System.currentTimeMillis() - start);
         } catch (Exception e) {
+            // La causa persiste en el chunk para que el popup en vivo del
+            // FE pueda mostrarla (Visor de Logs: traza = id del chunk).
+            chunk.setStatus(ChunkStatus.FAILED);
+            chunk.setErrorMessage(conciseCause(e, 2000));
             log.error("Error translating chunk {} tras {} ms: {}",
                     chunkId, System.currentTimeMillis() - start, e.getMessage());
-            chunk.setStatus(ChunkStatus.FAILED);
             throw new RuntimeException("Translation failed for chunk " + chunkId, e);
         } finally {
             chunksRepository.save(chunk);
             MDC.clear();
         }
         return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Causa concisa de un fallo: concatena la cadena de causas (la más
+     * profunda suele ser el error real de la IA) y la trunca para la
+     * columna error_message.
+     */
+    private static String conciseCause(Throwable e, int maxChars) {
+        StringBuilder sb = new StringBuilder();
+        Throwable current = e;
+        int hops = 0;
+        while (current != null && hops < 6) {
+            if (current.getMessage() != null && !current.getMessage().isBlank()) {
+                if (sb.length() > 0) {
+                    sb.append(" ← ");
+                }
+                sb.append(current.getMessage().trim());
+            }
+            current = current.getCause();
+            hops++;
+        }
+        if (sb.length() == 0) {
+            sb.append(e.getClass().getSimpleName());
+        }
+        return sb.length() <= maxChars ? sb.toString() : sb.substring(0, maxChars) + "…";
     }
 }

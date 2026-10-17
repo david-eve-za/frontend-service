@@ -36,7 +36,7 @@ const AUDIOBOOK_CONFIG_KEY = 'audiobook-config';
         ToastModule,
     ],
     template: `
-        <p-toast></p-toast>
+        <p-toast [life]="12000"></p-toast>
 
         <div class="card">
             <div class="font-semibold text-xl mb-4">Generar Audiolibro</div>
@@ -195,7 +195,7 @@ export class UploadStep2ConfigComponent implements OnInit {
             });
         } catch {
             this.messageService.add({
-                severity: 'error',
+                sticky: true, severity: 'error',
                 summary: 'Error',
                 detail: 'No se pudo guardar la configuración.',
             });

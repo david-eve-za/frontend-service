@@ -25,6 +25,8 @@ public class ChunkDto {
     private String translatedText;
     private ChunkStatus status;
     private int position;
+    /** Causa del último fallo de traducción (null si el chunk está sano). */
+    private String errorMessage;
     private UUID blockId;
     private String blockType;
     private Integer blockNumber;
@@ -36,6 +38,20 @@ public class ChunkDto {
         this.translatedText = translatedText;
         this.status = status;
         this.position = position;
+    }
+
+    /** Vista completa con bloque y causa del último fallo. */
+    public ChunkDto(UUID id, String originalText, String translatedText, ChunkStatus status, int position,
+            String errorMessage, UUID blockId, String blockType, Integer blockNumber) {
+        this.id = id;
+        this.originalText = originalText;
+        this.translatedText = translatedText;
+        this.status = status;
+        this.position = position;
+        this.errorMessage = errorMessage;
+        this.blockId = blockId;
+        this.blockType = blockType;
+        this.blockNumber = blockNumber;
     }
 
     /** Full shape with the owning block's metadata for the scope-aware view. */

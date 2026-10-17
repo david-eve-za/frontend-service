@@ -18,6 +18,16 @@ export interface RunningProcess {
     currentStep: string | null;
 }
 
+/** Libro con ciclo de vida activo (todo estado salvo COMPLETED). */
+export interface BookProcess {
+    bookId: string;
+    name: string | null;
+    status: string;
+    currentStep: string | null;
+    /** true si hay una corrida real de esta instancia ahora mismo. */
+    running: boolean;
+}
+
 export interface CatalogSyncStatus {
     state: 'IDLE' | 'RUNNING' | 'COMPLETED' | 'CANCELLED' | 'FAILED';
     currentPath: string | null;
@@ -36,6 +46,7 @@ export interface CatalogSyncStatus {
 export interface ProcessStatus {
     running: RunningProcess[];
     catalogSync: CatalogSyncStatus;
+    books: BookProcess[];
 }
 
 export interface BookStats {
@@ -52,9 +63,17 @@ export interface ChunkStats {
     completed: number;
 }
 
+/** Descubrimientos del catálogo de elscione en un día (del sync). */
+export interface CatalogActivityPoint {
+    day: string;
+    novels: number;
+    volumes: number;
+}
+
 export interface CatalogStats {
     novels: number;
     volumes: number;
+    activity: CatalogActivityPoint[];
 }
 
 /** Mirror of DashboardStatsDto (GET /api/dashboard/stats). */
@@ -69,10 +88,37 @@ export interface DashboardStats {
 @Injectable({ providedIn: 'root' })
 export class DashboardService {
     private readonly API_URL = '/api/dashboard';
+    private readonly FILES_URL = '/api/files';
+    private readonly NOVELS_URL = '/api/novels-manager';
 
     constructor(private http: HttpClient) {}
 
     getStats(): Observable<DashboardStats> {
         return this.http.get<DashboardStats>(`${this.API_URL}/stats`);
+    }
+
+    /** Arranca/reanuda el pipeline de un libro (despierta también STOPPED). */
+    startBook(bookId: string): Observable<object> {
+        return this.http.post(`${this.FILES_URL}/${bookId}/process`, {});
+    }
+
+    /** Pausa cooperativa: el paso en curso termina y se detiene en el checkpoint. */
+    pauseBook(bookId: string): Observable<object> {
+        return this.http.post(`${this.FILES_URL}/${bookId}/pause`, {});
+    }
+
+    /** Detención inmediata: cancela el trabajo en vuelo y deja el libro STOPPED. */
+    stopBook(bookId: string): Observable<object> {
+        return this.http.post(`${this.FILES_URL}/${bookId}/stop`, {});
+    }
+
+    /** Lanza la sincronización del catálogo de elscione. */
+    startCatalogSync(): Observable<object> {
+        return this.http.post(`${this.NOVELS_URL}/sync`, {});
+    }
+
+    /** Cancela la sincronización del catálogo en curso (retomable). */
+    cancelCatalogSync(): Observable<object> {
+        return this.http.post(`${this.NOVELS_URL}/sync/cancel`, {});
     }
 }

@@ -52,7 +52,7 @@ type GlossaryScope = 'global' | 'novel' | 'book';
     ],
     providers: [MessageService, ConfirmationService],
     template: `
-        <p-toast></p-toast>
+        <p-toast [life]="12000"></p-toast>
         <p-confirmDialog icon="pi pi-exclamation-triangle"></p-confirmDialog>
 
         <div class="card mb-4">
@@ -389,7 +389,7 @@ export class Glossary {
                 },
                 error: () =>
                     this.messageService.add({
-                        severity: 'error',
+                        sticky: true, severity: 'error',
                         summary: 'Error',
                         detail: 'No se pudo cargar la lista de documentos.',
                     }),
@@ -413,7 +413,7 @@ export class Glossary {
                 error: () => {
                     this.searchingNovels = false;
                     this.messageService.add({
-                        severity: 'error',
+                        sticky: true, severity: 'error',
                         summary: 'Error',
                         detail: 'No se pudo buscar la serie.',
                     });
@@ -461,7 +461,7 @@ export class Glossary {
             error: () => {
                 this.loading.set(false);
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Error',
                     detail: 'No se pudo cargar el glosario.',
                 });
@@ -520,7 +520,7 @@ export class Glossary {
             error: (err: HttpErrorResponse) => {
                 this.saving = false;
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Error',
                     detail:
                         err?.error?.error || 'No se pudo guardar el término.',
@@ -553,7 +553,7 @@ export class Glossary {
             },
             error: () =>
                 this.messageService.add({
-                    severity: 'error',
+                    sticky: true, severity: 'error',
                     summary: 'Error',
                     detail: 'No se pudo eliminar el término.',
                 }),

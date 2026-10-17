@@ -1,9 +1,6 @@
 package com.glez.frontendservice.services;
 
-import com.glez.frontendservice.model.Block;
-import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.ChunkStatus;
-import com.glez.frontendservice.model.Chunks;
 import com.glez.frontendservice.model.ProcessStep;
 import com.glez.frontendservice.model.ProcessTraceEvent;
 import com.glez.frontendservice.model.ProcessingStatus;
@@ -20,7 +17,6 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -58,6 +54,21 @@ public class BookPipelineOrchestrator {
      * instance, a new processBook call for the same book is rejected.
      */
     private final Set<UUID> runningBooks = ConcurrentHashMap.newKeySet();
+
+    /**
+     * PAUSAS solicitadas desde el panel: la corrida en marcha termina el
+     * paso actual por completo y se detiene en el siguiente checkpoint,
+     * dejando el libro en AWAITING. Peticiones huérfanas (carrera contra
+     * una corrida que ya terminó) se limpian en el finally de processBook.
+     */
+    private final Set<UUID> pauseRequests = ConcurrentHashMap.newKeySet();
+
+    /**
+     * STOPS solicitados desde el panel: la corrida en marcha se cancela
+     * (chunks en vuelo interrumpidos), el paso en curso queda CANCELLED en
+     * la traza y el libro queda STOPPED. Prevalece sobre una pausa.
+     */
+    private final Set<UUID> stopRequests = ConcurrentHashMap.newKeySet();
 
     public BookPipelineOrchestrator(BookRepository bookRepository,
                                     ChunksRepository chunksRepository,
@@ -162,11 +173,18 @@ public class BookPipelineOrchestrator {
             runPipeline(bookId, traceId, targetStep, blockIds, manual);
             markAwaitingIfStoppedEarly(bookId, targetStep);
             return CompletableFuture.completedFuture(null);
+        } catch (PipelineStoppedException e) {
+            // Stop explícito del usuario: el estado STOPPED ya lo persistió
+            // requestStop — ni FAILED ni AWAITING deben sobreescribirlo.
+            log.info("{}", e.getMessage());
+            return CompletableFuture.completedFuture(null);
         } catch (RuntimeException e) {
             log.error("Pipeline run aborted for book {}", bookId, e);
             throw e;
         } finally {
             runningBooks.remove(bookId);
+            pauseRequests.remove(bookId);
+            stopRequests.remove(bookId);
             ProcessingTraceService.clearMdc();
         }
     }
@@ -180,21 +198,125 @@ public class BookPipelineOrchestrator {
         return Set.copyOf(runningBooks);
     }
 
+    /**
+     * PAUSA (panel): la corrida en marcha termina el paso actual por
+     * completo — los chunks en vuelo siguen hasta el final — y se detiene
+     * en el siguiente checkpoint, dejando el libro en AWAITING. Solo tiene
+     * sentido con una corrida activa de esta instancia.
+     *
+     * @return true si la petición quedó registrada; false si el libro no
+     *         se está procesando ahora (el endpoint responde 409).
+     */
+    public boolean requestPause(UUID bookId) {
+        if (!runningBooks.contains(bookId)) {
+            return false;
+        }
+        pauseRequests.add(bookId);
+        log.info("Pausa solicitada para el libro {}: se detendrá al terminar el paso en curso", bookId);
+        return true;
+    }
+
+    /**
+     * STOP (panel): cancela el trabajo en vuelo del libro YA. Si hay una
+     * corrida activa: interrumpe las traducciones de chunks en marcha
+     * (cancelActiveTasks), marca el libro STOPPED con un update en bloque
+     * (feedback inmediato en la UI) y la corrida colapsa de forma limpia
+     * — el paso en curso queda CANCELLED en la traza, sin marcar el libro
+     * FAILED ni consumir intentos. Si NO hay corrida (AWAITING/UPLOADED/
+     * FAILED), simplemente lo deja en STOPPED para sacarlo de la rotación
+     * del auto-resume.
+     *
+     * @return true si el libro quedó (o ya estaba siendo) detenido; false
+     *         si ya estaba COMPLETED (no hay nada que detener).
+     */
+    public boolean requestStop(UUID bookId) {
+        if (runningBooks.contains(bookId)) {
+            stopRequests.add(bookId);
+            int cancelledTasks = bookProcessingService.cancelActiveTasks(bookId);
+            bookRepository.updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.STOPPED);
+            log.info("Stop solicitado para el libro {} en marcha: {} tarea(s) de traducción canceladas",
+                    bookId, cancelledTasks);
+            return true;
+        }
+        boolean stopped = bookRepository.updateStatusIfNot(bookId, ProcessingStatus.COMPLETED,
+                ProcessingStatus.STOPPED) > 0;
+        if (stopped) {
+            log.info("Libro {} (sin corrida activa) marcado como STOPPED desde el panel", bookId);
+        }
+        return stopped;
+    }
+
+    /**
+     * Control-flow: la corrida fue interrumpida por un stop explícito del
+     * usuario. NO es un fallo — processBook la reconoce y termina en
+     * silencio, conservando el estado STOPPED que el propio stop persistió.
+     */
+    private static final class PipelineStoppedException extends RuntimeException {
+        private PipelineStoppedException(UUID bookId) {
+            super("Pipeline run of book " + bookId + " stopped by user request");
+        }
+    }
+
     private void runPipeline(UUID bookId, String traceId, ProcessStep targetStep, List<UUID> blockIds, boolean manual) {
         runExtractStep(bookId, traceId);
+        if (userStopRequested(bookId)) {
+            throw new PipelineStoppedException(bookId);
+        }
+        if (userPauseRequested(bookId)) {
+            return;
+        }
         runSplitStep(bookId, traceId, blockIds, manual);
         if (targetStep == ProcessStep.SPLIT) {
+            return;
+        }
+        if (userStopRequested(bookId)) {
+            throw new PipelineStoppedException(bookId);
+        }
+        if (userPauseRequested(bookId)) {
             return;
         }
         runTranslateStep(bookId, traceId, manual);
         if (targetStep == ProcessStep.TRANSLATE) {
             return;
         }
+        if (userStopRequested(bookId)) {
+            throw new PipelineStoppedException(bookId);
+        }
+        if (userPauseRequested(bookId)) {
+            return;
+        }
         runAudioStep(bookId, traceId, manual);
         if (targetStep == ProcessStep.AUDIO) {
             return;
         }
+        if (userStopRequested(bookId)) {
+            throw new PipelineStoppedException(bookId);
+        }
         runFinalizeStep(bookId, traceId, manual);
+    }
+
+    /**
+     * Stop pendiente del usuario en un checkpoint: la corrida se corta
+     * aquí; el estado STOPPED ya lo persistió requestStop.
+     */
+    private boolean userStopRequested(UUID bookId) {
+        return stopRequests.contains(bookId);
+    }
+
+    /**
+     * PAUSA pendiente del usuario en un checkpoint: el paso en curso ya
+     * terminó por completo, así que el libro pasa a AWAITING (update
+     * guardado: si la corrida no estaba en PROCESSING es un no-op) y la
+     * corrida termina de forma limpia — sin FAILED, sin intentos gastados.
+     */
+    private boolean userPauseRequested(UUID bookId) {
+        if (!pauseRequests.contains(bookId)) {
+            return false;
+        }
+        pauseRequests.remove(bookId);
+        bookRepository.updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.AWAITING);
+        log.info("Corrida del libro {} pausada en el checkpoint: el libro queda AWAITING", bookId);
+        return true;
     }
 
     /**
@@ -325,6 +447,17 @@ public class BookPipelineOrchestrator {
         try {
             bookProcessingService.processBookChunksAsync(bookId).join();
         } catch (RuntimeException e) {
+            if (stopRequests.contains(bookId)) {
+                // Stop explícito del panel: los chunks en vuelo fueron
+                // interrumpidos por requestStop — NO son fallos genuinos,
+                // no consumen intentos y el libro ya quedó STOPPED. El
+                // paso cierra como CANCELLED en la traza y la corrida
+                // termina en silencio.
+                traceService.cancelStep(event,
+                        "Pipeline detenido desde el panel durante la traducción "
+                                + "(chunks en vuelo cancelados; se re-encolan en la próxima corrida)");
+                throw new PipelineStoppedException(bookId);
+            }
             // Chunks are translated OUTSIDE any transaction (each save is
             // its own short transaction), so every chunk that is not
             // COMPLETED genuinely failed in this run: record one attempt
@@ -369,14 +502,21 @@ public class BookPipelineOrchestrator {
      * Cuando todos los bloques tienen audio, el libro apunta al directorio.
      *
      * <p>Los libros sin bloques mantienen la ruta legada: un único mp3 con
-     * todo el texto traducido.
+     * todo el texto traducido.</p>
+     *
+     * <p>Rendimiento: el paso opera sobre vistas ligeras — el libro se lee
+     * SIN su full_text CLOB (multi-MB), los bloques SIN su content CLOB y
+     * los chunks SIN su original_text — y la ruta de audio se persiste con
+     * un update en bloque, sin re-flushear la entidad gestionada.</p>
      */
     private void runAudioStep(UUID bookId, String traceId, boolean manual) {
-        Book book = loadBook(bookId);
-        List<Block> blocks = blockRepository.findByBookIdOrderByPositionAsc(bookId);
+        BookRepository.BookAudioView book = bookRepository.findAudioViewById(bookId)
+                .orElseThrow(() -> new IllegalArgumentException("Book " + bookId + " not found"));
+
+        List<BlockRepository.BlockAudioView> blocks = blockRepository.findAudioViewsByBookId(bookId);
 
         if (!blocks.isEmpty()) {
-            runPerBlockAudioStep(book, blocks, traceId, manual);
+            runPerBlockAudioStep(bookId, book.getName(), blocks, traceId, manual);
             return;
         }
 
@@ -390,20 +530,17 @@ public class BookPipelineOrchestrator {
         checkStepAttempts(event, manual);
 
         try {
-            String fullTranslatedText = chunksRepository.findByBook(book).stream()
-                    .sorted(Comparator.comparingInt(Chunks::getPosition))
-                    .map(Chunks::getTranslatedText)
+            String fullTranslatedText = chunksRepository.findTranslatedTextByBookId(bookId).stream()
                     .filter(Objects::nonNull)
                     .collect(Collectors.joining("\n\n"));
 
-            Path outputPath = audioPathFor(book);
+            Path outputPath = audioPathFor(book.getName());
             boolean ok = audioGeneratorService.processTextToAudio(fullTranslatedText, outputPath);
             if (!ok) {
                 throw new IllegalStateException(
                         "Audio generation failed for book " + bookId);
             }
-            book.setAudioFilePath(outputPath.toString());
-            bookRepository.save(book);
+            bookRepository.updateAudioPathInBulk(bookId, outputPath.toString());
             traceService.completeStep(event, "Audio generated at " + outputPath);
         } catch (RuntimeException e) {
             failAndAbort(event, e);
@@ -414,13 +551,17 @@ public class BookPipelineOrchestrator {
      * Audio por bloque: un mp3 por cada bloque con chunks traducidos, en
      * orden de lectura. Los bloques con audio ya presente en disco se
      * saltan; el libro se considera con audio completo cuando todos sus
-     * bloques tienen archivo. Los chunks de TODOS los bloques se cargan
-     * en una sola consulta (antes: dos por bloque).
+     * bloques tienen archivo. Los chunks de TODOS los bloques se leen en
+     * una sola consulta proyectada (solo translated_text, sin entidades
+     * ni original_text), y las rutas de audio se persisten con updates
+     * en bloque (nunca re-flush de la entidad con su CLOB).
      */
-    private void runPerBlockAudioStep(Book book, List<Block> blocks, String traceId, boolean manual) {
-        UUID bookId = book.getId();
-        Map<UUID, List<Chunks>> chunksByBlock = chunksRepository.findBlockChunksByBookId(bookId).stream()
-                .collect(Collectors.groupingBy(chunk -> chunk.getBlock().getId()));
+    private void runPerBlockAudioStep(UUID bookId, String bookName,
+                                      List<BlockRepository.BlockAudioView> blocks,
+                                      String traceId, boolean manual) {
+        Map<UUID, List<ChunksRepository.BlockChunkAudioView>> chunksByBlock =
+                chunksRepository.findBlockAudioViewsByBookId(bookId).stream()
+                        .collect(Collectors.groupingBy(ChunksRepository.BlockChunkAudioView::getBlockId));
 
         long pending = blocks.stream()
                 .filter(block -> !blockHasAudioOnDisk(block))
@@ -438,16 +579,22 @@ public class BookPipelineOrchestrator {
         checkStepAttempts(event, manual);
 
         try {
-            Path audioDir = blockAudioDirectory(book);
+            Path audioDir = blockAudioDirectory(bookName);
             try {
                 Files.createDirectories(audioDir);
             } catch (java.io.IOException e) {
                 throw new java.io.UncheckedIOException(e);
             }
             int generated = 0;
+            // Bloques generados en ESTA corrida: las vistas proyectadas son
+            // inmutables (no reflejan los updates en bloque), así que el
+            // "todos con audio" del cierre se calcula con este conjunto.
+            Set<UUID> generatedIds = new java.util.HashSet<>();
             List<String> skipped = new ArrayList<>();
-            for (Block block : blocks) {
-                List<Chunks> blockChunks = chunksByBlock.getOrDefault(block.getId(), List.of());
+            for (int i = 0; i < blocks.size(); i++) {
+                BlockRepository.BlockAudioView block = blocks.get(i);
+                List<ChunksRepository.BlockChunkAudioView> blockChunks =
+                        chunksByBlock.getOrDefault(block.getId(), List.of());
                 if (blockChunks.isEmpty()) {
                     skipped.add(blockLabel(block) + " (sin chunks)");
                     continue;
@@ -456,7 +603,7 @@ public class BookPipelineOrchestrator {
                     skipped.add(blockLabel(block) + " (ya generado)");
                     continue;
                 }
-                List<Chunks> untranslated = blockChunks.stream()
+                List<ChunksRepository.BlockChunkAudioView> untranslated = blockChunks.stream()
                         .filter(chunk -> chunk.getStatus() != ChunkStatus.COMPLETED)
                         .toList();
                 if (!untranslated.isEmpty()) {
@@ -465,25 +612,24 @@ public class BookPipelineOrchestrator {
                 }
 
                 String translatedText = blockChunks.stream()
-                        .sorted(Comparator.comparingInt(Chunks::getPosition))
-                        .map(Chunks::getTranslatedText)
+                        .map(ChunksRepository.BlockChunkAudioView::getTranslatedText)
                         .filter(Objects::nonNull)
                         .collect(Collectors.joining("\n\n"));
 
-                Path outputPath = audioDir.resolve(blockAudioFileName(blocks, block));
+                Path outputPath = audioDir.resolve(blockAudioFileName(i + 1, block));
                 boolean ok = audioGeneratorService.processTextToAudio(translatedText, outputPath);
                 if (!ok) {
                     throw new IllegalStateException("Audio generation failed for block " + blockLabel(block));
                 }
-                block.setAudioFilePath(outputPath.toString());
-                blockRepository.save(block);
+                blockRepository.updateAudioPathInBulk(block.getId(), outputPath.toString());
+                generatedIds.add(block.getId());
                 generated++;
             }
 
-            boolean allDone = blocks.stream().allMatch(this::blockHasAudioOnDisk);
+            boolean allDone = blocks.stream()
+                    .allMatch(block -> blockHasAudioOnDisk(block) || generatedIds.contains(block.getId()));
             if (allDone) {
-                book.setAudioFilePath(audioDir.toString());
-                bookRepository.save(book);
+                bookRepository.updateAudioPathInBulk(bookId, audioDir.toString());
             }
             traceService.completeStep(event, generated + " block audio(s) generated in " + audioDir
                     + (skipped.isEmpty() ? "" : "; skipped: " + String.join(", ", skipped)));
@@ -492,12 +638,12 @@ public class BookPipelineOrchestrator {
         }
     }
 
-    private boolean blockHasAudioOnDisk(Block block) {
+    private boolean blockHasAudioOnDisk(BlockRepository.BlockAudioView block) {
         return block.getAudioFilePath() != null && Files.exists(Path.of(block.getAudioFilePath()));
     }
 
     /** Etiqueta legible en español del bloque para archivos de audio. */
-    private String blockLabel(Block block) {
+    private String blockLabel(BlockRepository.BlockAudioView block) {
         return switch (block.getBlockType()) {
             case PROLOGUE -> "Prologo";
             case CHAPTER -> "Capitulo " + String.format("%02d", block.getBlockNumber() != null
@@ -507,22 +653,21 @@ public class BookPipelineOrchestrator {
     }
 
     /** Directorio del audiolibro del libro: "<base> - audiolibro". */
-    static Path blockAudioDirectory(Book book) {
-        return Path.of(bookBaseName(book) + " - audiolibro");
+    static Path blockAudioDirectory(String bookName) {
+        return Path.of(bookBaseName(bookName) + " - audiolibro");
     }
 
     /** Archivo de audio de un bloque: "<orden> - <etiqueta>.mp3". */
-    private String blockAudioFileName(List<Block> blocks, Block block) {
-        int order = blocks.indexOf(block) + 1;
+    private String blockAudioFileName(int order, BlockRepository.BlockAudioView block) {
         return String.format("%02d - %s.mp3", order, blockLabel(block));
     }
 
     /** Nombre base del libro sin extensión. */
-    static String bookBaseName(Book book) {
-        String name = book.getName() != null ? book.getName() : "book";
-        int dot = name.lastIndexOf('.');
-        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
-        return (dot > slash) ? name.substring(0, dot) : name;
+    static String bookBaseName(String name) {
+        String resolved = name != null ? name : "book";
+        int dot = resolved.lastIndexOf('.');
+        int slash = Math.max(resolved.lastIndexOf('/'), resolved.lastIndexOf('\\'));
+        return (dot > slash) ? resolved.substring(0, dot) : resolved;
     }
 
     private void runFinalizeStep(UUID bookId, String traceId, boolean manual) {
@@ -588,12 +733,7 @@ public class BookPipelineOrchestrator {
      * Derives the audio output path from the book name, forcing a .mp3
      * extension so ffmpeg can pick the output muxer.
      */
-    static Path audioPathFor(Book book) {
-        return Path.of(bookBaseName(book) + ".mp3");
-    }
-
-    private Book loadBook(UUID bookId) {
-        return bookRepository.findById(bookId)
-                .orElseThrow(() -> new IllegalArgumentException("Book " + bookId + " not found"));
+    static Path audioPathFor(String bookName) {
+        return Path.of(bookBaseName(bookName) + ".mp3");
     }
 }

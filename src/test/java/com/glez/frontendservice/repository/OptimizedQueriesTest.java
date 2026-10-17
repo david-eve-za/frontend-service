@@ -4,6 +4,7 @@ import com.glez.frontendservice.model.Block;
 import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.ChunkStatus;
 import com.glez.frontendservice.model.Chunks;
+import com.glez.frontendservice.dtos.DashboardStatsDto;
 import com.glez.frontendservice.model.Novel;
 import com.glez.frontendservice.model.NovelVolume;
 import com.glez.frontendservice.model.NovelVolumeFile;
@@ -218,7 +219,7 @@ class OptimizedQueriesTest {
     }
 
     @Test
-    @DisplayName("Per-block audio chunks arrive in one query ordered by position")
+    @DisplayName("Per-block audio chunks arrive in one projected query ordered by position")
     void blockChunksByBookId() {
         Book book = book(ProcessingStatus.AWAITING, "x");
         Block block = new Block();
@@ -232,10 +233,60 @@ class OptimizedQueriesTest {
         chunk(book, block, ChunkStatus.COMPLETED, 0, 0);
         chunk(book, null, ChunkStatus.COMPLETED, 5, 0); // legacy chunk: excluded
 
-        List<Chunks> blockChunks = chunksRepository.findBlockChunksByBookId(book.getId());
+        List<ChunksRepository.BlockChunkAudioView> blockChunks =
+                chunksRepository.findBlockAudioViewsByBookId(book.getId());
         assertEquals(2, blockChunks.size(), "Only block-bound chunks are returned");
-        assertTrue(blockChunks.stream().allMatch(c -> c.getBlock() != null));
+        assertTrue(blockChunks.stream().allMatch(c -> c.getBlockId() != null));
+        assertEquals(block.getId(), blockChunks.get(0).getBlockId());
         assertEquals(0, blockChunks.get(0).getPosition(), "Reading order by position");
+    }
+
+    @Test
+    @DisplayName("Translated-text scalar projection feeds the legacy AUDIO step without loading entities")
+    void translatedTextProjectionByBookId() {
+        Book book = book(ProcessingStatus.AWAITING, "x");
+        Chunks first = chunk(book, null, ChunkStatus.COMPLETED, 0, 1);
+        first.setTranslatedText("primera");
+        chunksRepository.saveAndFlush(first);
+        Chunks second = chunk(book, null, ChunkStatus.COMPLETED, 1, 1);
+        second.setTranslatedText("segunda");
+        chunksRepository.saveAndFlush(second);
+        chunk(book, null, ChunkStatus.FAILED, 2, 1); // untranslated: null row
+
+        List<String> translated = chunksRepository.findTranslatedTextByBookId(book.getId());
+        assertEquals(3, translated.size(), "Every chunk row travels, nulls included");
+        assertEquals("primera", translated.get(0));
+        assertEquals("segunda", translated.get(1));
+        assertNull(translated.get(2), "Untranslated chunk arrives as null for the caller to filter");
+    }
+
+    @Test
+    @DisplayName("Audio-path bulk updates and light views avoid loading Book/Block entities")
+    void audioPathBulkUpdates() {
+        Book book = book(ProcessingStatus.AWAITING, "x");
+        Block block = new Block();
+        block.setBook(book);
+        block.setBlockType(Block.BlockType.CHAPTER);
+        block.setBlockNumber(1);
+        block.setPosition(0);
+        block.setContent("contenido");
+        blockRepository.saveAndFlush(block);
+
+        BookRepository.BookAudioView bookView = bookRepository.findAudioViewById(book.getId()).orElseThrow();
+        assertEquals(book.getId(), bookView.getId());
+        assertEquals("test-book.pdf", bookView.getName());
+        assertNull(bookView.getAudioFilePath(), "No audio generated yet");
+
+        assertEquals(1, bookRepository.updateAudioPathInBulk(book.getId(), "audio/libro.mp3"));
+        assertEquals(1, blockRepository.updateAudioPathInBulk(block.getId(), "audio/01 - Capitulo 01.mp3"));
+
+        assertEquals("audio/libro.mp3",
+                bookRepository.findAudioViewById(book.getId()).orElseThrow().getAudioFilePath());
+        BlockRepository.BlockAudioView blockView =
+                blockRepository.findAudioViewsByBookId(book.getId()).get(0);
+        assertEquals("audio/01 - Capitulo 01.mp3", blockView.getAudioFilePath());
+        assertEquals(Block.BlockType.CHAPTER, blockView.getBlockType());
+        assertEquals(1, blockView.getBlockNumber());
     }
 
     @Test
@@ -375,6 +426,84 @@ class OptimizedQueriesTest {
         List<NovelVolume> byNovel = volumeRepository.findByNovel(novel);
         // findByNovel still works (legacy path)
         assertEquals(2, byNovel.size());
+    }
+
+    @Test
+    @DisplayName("La serie de actividad del catálogo agrupa por día, rellena huecos y respeta la ventana")
+    void catalogActivitySeriesGroupsByDayAndFillsGaps() {
+        java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+        java.time.LocalDate today = java.time.LocalDate.now(zone);
+        // Mediodía local: los timestamps quedan lejos del borde de día,
+        // el test nunca flaquea por corridas cercanas a medianoche.
+        java.util.function.IntFunction<Instant> midday =
+                daysAgo -> today.minusDays(daysAgo).atTime(12, 0).atZone(zone).toInstant();
+
+        // Novela + volumen descubiertos HOY por el sync
+        Novel fresh = new Novel();
+        fresh.setRemotePath("/activity/today");
+        fresh.setTitle("Descubierta hoy");
+        fresh.setCreatedAt(midday.apply(0));
+        novelRepository.saveAndFlush(fresh);
+        NovelVolume todayVolume = new NovelVolume();
+        todayVolume.setNovel(fresh);
+        todayVolume.setSourceKey("vol:1");
+        todayVolume.setCreatedAt(midday.apply(0));
+        volumeRepository.saveAndFlush(todayVolume);
+
+        // Novela + volumen descubiertos hace 2 días
+        Novel older = new Novel();
+        older.setRemotePath("/activity/older");
+        older.setTitle("Descubierta antes");
+        older.setCreatedAt(midday.apply(2));
+        novelRepository.saveAndFlush(older);
+        NovelVolume olderVolume = new NovelVolume();
+        olderVolume.setNovel(older);
+        olderVolume.setSourceKey("vol:1");
+        olderVolume.setCreatedAt(midday.apply(2));
+        volumeRepository.saveAndFlush(olderVolume);
+
+        // Fuera de la ventana (20 días): cuenta en el total pero NO en la serie
+        Novel ancient = new Novel();
+        ancient.setRemotePath("/activity/ancient");
+        ancient.setTitle("Descubierta hace mucho");
+        ancient.setCreatedAt(midday.apply(20));
+        novelRepository.saveAndFlush(ancient);
+
+        com.glez.frontendservice.services.CatalogStatsService statsService =
+                new com.glez.frontendservice.services.CatalogStatsService(
+                        novelRepository, volumeRepository, jdbcTemplate);
+        DashboardStatsDto.CatalogStatsDto catalog = statsService.catalogStats();
+
+        // La serie SIEMPRE trae la ventana completa, ordenada y sin huecos
+        assertEquals(com.glez.frontendservice.services.CatalogStatsService.ACTIVITY_WINDOW_DAYS,
+                catalog.activity().size());
+
+        // Último punto = hoy, con los descubrimientos del día
+        DashboardStatsDto.CatalogActivityPointDto lastPoint =
+                catalog.activity().get(catalog.activity().size() - 1);
+        assertEquals(today.toString(), lastPoint.day());
+        assertEquals(1, lastPoint.novels());
+        assertEquals(1, lastPoint.volumes());
+
+        // Ayer: hueco rellenado a cero
+        DashboardStatsDto.CatalogActivityPointDto yesterday =
+                catalog.activity().get(catalog.activity().size() - 2);
+        assertEquals(today.minusDays(1).toString(), yesterday.day());
+        assertEquals(0, yesterday.novels());
+        assertEquals(0, yesterday.volumes());
+
+        // Hace 2 días: la novela y el volumen descubiertos entonces
+        DashboardStatsDto.CatalogActivityPointDto twoDaysAgo =
+                catalog.activity().get(catalog.activity().size() - 3);
+        assertEquals(today.minusDays(2).toString(), twoDaysAgo.day());
+        assertEquals(1, twoDaysAgo.novels());
+        assertEquals(1, twoDaysAgo.volumes());
+
+        // La novela de hace 20 días no aparece en ningún día de la serie
+        assertEquals(3, catalog.novels());
+        assertEquals(2, catalog.volumes());
+        assertTrue(catalog.activity().stream().noneMatch(point -> point.novels() > 1),
+                "Rows older than the window must not leak into the series");
     }
 
     // ------------------------------------------------------------------
