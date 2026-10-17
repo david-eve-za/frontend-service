@@ -230,3 +230,4 @@ src/main/resources/static/
 # Environment variables (secrets, loaded via envFile in .vscode/launch.json)
 .env
 mi-libro - audiolibro/
+*- audiolibro/
