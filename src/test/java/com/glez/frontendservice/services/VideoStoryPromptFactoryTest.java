@@ -9,17 +9,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests de las plantillas 3 (SCENE PROMPT GENERATOR) y 4 (VIDEO GENERATION
- * TEMPLATE) de la timeline — las del encadenado del Asistente.
+ * Tests de las plantillas del Asistente de Historias en Video: SCENE
+ * PROMPT GENERATOR (paso 4), VIDEO GENERATION MASTER PROMPT (paso 5, 15
+ * secciones) y el parser de escenas que alimenta la auto-selección.
  */
-@DisplayName("Video story factory: scene & video templates")
+@DisplayName("Video story factory: scene, master video templates & scene parser")
 class VideoStoryPromptFactoryTest {
 
     private static final String STORY = "TITLE — The Last Recipe\n\nEmiko hides a family secret in her Kyoto bakery…";
     private static final String DESIGNS =
             "Character 1:\nEMIKO, 28, shy pastry chef, round face, black bob haircut…\n\nCharacter 2:\nDANIEL, 32, food critic…";
-    private static final String SCENE_01 =
-            "SCENE 01\n1) SCENE TYPE: Feature-film quality 3D animated romantic drama. Bakery, evening…";
+    private static final String ASSETS = "PART 1 — ASSET INVENTORY\n\n| Asset ID | Asset Name | …\nENV-001 — Bakery interior…";
 
     // ═══════════════ PASO 3: SCENE PROMPT GENERATOR ═══════════════
 
@@ -71,35 +71,151 @@ class VideoStoryPromptFactoryTest {
         assertTrue(prompt.contains("7) DIALOGUE"));
     }
 
-    // ═══════════════ PASO 4: VIDEO GENERATION TEMPLATE ═══════════════
+    // ═════ PASO 5: VIDEO GENERATION MASTER PROMPT (15 secciones) ═════
 
     @Test
-    @DisplayName("Paso 4: escena antes de la plantilla + instrucción de rellenar; solo el estilo es nuestro")
-    void buildVideoGenerationPrompt_wrapsSceneAndTemplate() {
+    @DisplayName("Paso 5: plantilla MASTER verbatim — slots de la app sustituidos, slots de la IA intactos")
+    void buildVideoGenerationPrompt_fillsAppSlots_keepsAiSlotsVerbatim() {
         String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(
-                SCENE_01, "Premium polished 3D animation, Pixar and DreamWorks style");
+                "La pastelería de la esquina", STORY, DESIGNS, ASSETS,
+                "SCENE 01\nBakery, evening…\n\nSCENE 02\nRooftop, night…", "SCENE 02",
+                "Soft stylized 3D animation", "Spanish", "9:16", 12, null);
 
-        // La escena va ANTES de la instrucción de rellenar.
-        assertTrue(prompt.startsWith("Here is the scene from the animated story:\n\n"));
-        assertTrue(prompt.contains(SCENE_01));
-        assertTrue(prompt.indexOf(SCENE_01) < prompt.indexOf("Fill in the following video generation template"));
-        // La instrucción de rellenar precede a la plantilla.
+        // El esqueleto de la plantilla viaja COMPLETO y verbatim: las 15
+        // secciones, la EXECUTION INSTRUCTION y la instrucción de rellenado.
+        assertTrue(prompt.contains("Fill in the following MASTER PROMPT template using ONLY the materials"));
+        assertTrue(prompt.contains("# MASTER PROMPT — CINEMATIC 3D ANIMATED VIDEO GENERATION"));
+        for (int section = 1; section <= 15; section++) {
+            assertTrue(prompt.contains("## " + section + "."), "Falta la sección " + section);
+        }
+        assertTrue(prompt.contains("## 1. PROJECT INFORMATION"));
+        assertTrue(prompt.contains("## 7. TIMING BREAKDOWN"));
+        assertTrue(prompt.contains("## 11. NEGATIVE PROMPT"));
+        assertTrue(prompt.contains("## 15. FINAL VALIDATION"));
+        assertTrue(prompt.contains("## EXECUTION INSTRUCTION"));
+        // Slots que la APP posee: sustituidos con los valores del proyecto.
+        assertTrue(prompt.contains("- **Story Title:** `La pastelería de la esquina`"));
+        assertTrue(prompt.contains("- **Visual Style:** `Soft stylized 3D animation`"));
+        assertTrue(prompt.contains("- **Dialogue Language:** `Spanish`"));
+        assertTrue(prompt.contains("- **Aspect Ratio:** `9:16`"));
+        assertTrue(prompt.contains("- **Default Clip Duration:** `12 seconds`"));
+        assertTrue(prompt.contains("- **Audio Generation:** `Yes`"));
+        // Los CUATRO materiales aprobados caen IN-PLACE en la EXECUTION
+        // INSTRUCTION (patrón de la plantilla MASTER de assets).
+        assertTrue(prompt.contains("Using `" + STORY + "`"));
+        assertTrue(prompt.contains("`" + DESIGNS + "`"));
+        assertTrue(prompt.contains("`" + ASSETS + "`"));
+        assertTrue(prompt.contains("and `SCENE 01\nBakery, evening…\n\nSCENE 02\nRooftop, night…`"));
+        assertTrue(prompt.contains("generate the video-generation prompt for `SCENE 02`."));
+        // Slots que rellena la IA: permanecen verbatim para que el output
+        // replique la estructura EXACTA de la plantilla.
+        assertTrue(prompt.contains("`{{GENRE}}`"));
+        assertTrue(prompt.contains("`{{STORY_SUMMARY}}`"));
+        assertTrue(prompt.contains("`{{TARGET_AUDIENCE}}`"));
+        assertTrue(prompt.contains("`{{TARGET_VIDEO_PLATFORM}}`"));
+        assertTrue(prompt.contains("`{{GENERATION_MODE}}`"));
+        assertTrue(prompt.contains("`{{SCENE_VISUAL_STYLE}}`"));
+        assertTrue(prompt.contains("`{{SEGMENT_1_START}}`"));
+        assertTrue(prompt.contains("`{{DIALOGUE_ID}}`"));
+        assertTrue(prompt.contains("`{{CUSTOM_NEGATIVE_PROMPT}}`"));
+        assertTrue(prompt.contains("`{{DELIVERABLE_VIDEO_PROMPT}}`"));
+        assertTrue(prompt.contains("`{{VALIDATE_STORY_CONTENT}}`"));
+        assertTrue(prompt.contains("`{{CHARACTER_ID}}`"));
+        assertTrue(prompt.contains("`{{ASSET_ID}}`"));
+        // La meta-instrucción de repetición de bloques acompaña a la plantilla.
+        assertTrue(prompt.contains("Repeat the CHARACTER and ASSET reference blocks"));
+        assertTrue(prompt.contains("do NOT include the EXECUTION"));
+        // Sin referencia: el bloque de material de referencia NO aparece.
+        assertFalse(prompt.contains("REFERENCE MATERIAL"));
+    }
+
+    @Test
+    @DisplayName("Paso 5: la referencia opcional se antepone como inspiración, antes de la plantilla")
+    void buildVideoGenerationPrompt_withReference_prependsReferenceBlock() {
+        String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(
+                "T", STORY, DESIGNS, ASSETS, "SCENE 01\n…", "SCENE 01",
+                null, null, null, null, "Página web de referencia: panaderías tradicionales de Kioto…");
+
+        assertTrue(prompt.startsWith("Here is the optional REFERENCE MATERIAL provided by the user."));
+        assertTrue(prompt.contains("never contradict the approved story"));
+        assertTrue(prompt.contains("never copy copyrighted text verbatim"));
+        assertTrue(prompt.contains("Página web de referencia: panaderías tradicionales de Kioto…"));
+        assertTrue(prompt.indexOf("Página web de referencia")
+                < prompt.indexOf("# MASTER PROMPT — CINEMATIC 3D ANIMATED VIDEO GENERATION"));
+    }
+
+    @Test
+    @DisplayName("Paso 5: sin biblioteca de assets el slot recibe la nota que guía a la IA")
+    void buildVideoGenerationPrompt_withoutAssets_fallsBackToNote() {
+        String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(
+                "T", STORY, DESIGNS, null, "SCENE 01\n…", "SCENE 01",
+                null, null, null, null, null);
+
+        assertTrue(prompt.contains("No approved asset library was generated"));
+        assertFalse(prompt.contains("{{APPROVED_ASSET_LIBRARY}}"));
+    }
+
+    @Test
+    @DisplayName("Paso 5: campos vacíos caen a los defaults del wizard (16:9, español, 10 s, SCENE 01)")
+    void buildVideoGenerationPrompt_blankOptionals_useWizardDefaults() {
+        String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(
+                null, STORY, DESIGNS, ASSETS, "SCENE 01\n…", null,
+                null, null, null, null, null);
+
+        assertTrue(prompt.contains("- **Story Title:** `Untitled story`"));
         assertTrue(prompt.contains(
-                "Output ONLY the filled template:\n\nCreate a cinematic 3D animated video based on the following scene."));
-        // Solo [3D ANIMATION STYLE] lo sustituye la app.
-        assertTrue(prompt.contains("STYLE:\nPremium polished 3D animation, Pixar and DreamWorks style"));
-        assertFalse(prompt.contains("[3D ANIMATION STYLE]"));
-        // El resto de placeholders los rellena la IA: permanecen verbatim.
-        assertTrue(prompt.contains("[SCENE DESCRIPTION]"));
-        assertTrue(prompt.contains("[EXACT CHARACTER DESCRIPTIONS]"));
-        assertTrue(prompt.contains("[ACTION SEQUENCE]"));
-        assertTrue(prompt.contains("[EXACT DIALOGUE]"));
-        assertTrue(prompt.contains("[TIMING SPLIT]"));
-        assertTrue(prompt.contains("[CAMERA MOVEMENT]"));
-        assertTrue(prompt.contains("[LIGHTING]"));
-        assertTrue(prompt.contains("[SETTING]"));
-        assertTrue(prompt.contains("[AUDIO DESCRIPTION]"));
-        assertTrue(prompt.endsWith("no logos, no watermark."));
+                "- **Visual Style:** `Not specified — derive it from the approved character designs`"));
+        assertTrue(prompt.contains("- **Dialogue Language:** `Spanish`"));
+        assertTrue(prompt.contains("- **Aspect Ratio:** `16:9`"));
+        assertTrue(prompt.contains("- **Default Clip Duration:** `10 seconds`"));
+        assertTrue(prompt.contains("for `SCENE 01`."));
+        assertFalse(prompt.contains("{{STORY_TITLE}}"));
+        assertFalse(prompt.contains("{{VISUAL_STYLE}}"));
+        assertFalse(prompt.contains("{{DIALOGUE_LANGUAGE}}"));
+        assertFalse(prompt.contains("{{ASPECT_RATIO}}"));
+        assertFalse(prompt.contains("{{OUTPUT_ASPECT_RATIO}}"));
+        assertFalse(prompt.contains("{{DEFAULT_CLIP_DURATION}}"));
+        assertFalse(prompt.contains("{{TARGET_SCENE_ID}}"));
+        assertFalse(prompt.contains("{{APPROVED_STORY}}"));
+        assertFalse(prompt.contains("{{APPROVED_SCENE_BREAKDOWN}}"));
+    }
+
+    // ═══════════════ Parser de escenas (paso 4 → paso 5) ═══════════════
+
+    @Test
+    @DisplayName("parseScenes: trocea el output del paso 4 por cabeceras «SCENE NN»")
+    void parseScenes_splitsBySceneHeaders() {
+        String scenes = "SCENE 01\nBakery, evening. Emiko kneads dough.\n\nSCENE 02\nRooftop, night. "
+                + "Daniel arrives.\n\nSCENE 03\nCliffhanger on the rooftop.";
+
+        java.util.List<VideoStoryPromptFactory.SceneBlock> blocks =
+                VideoStoryPromptFactory.parseScenes(scenes);
+
+        assertEquals(3, blocks.size());
+        assertEquals("SCENE 01", blocks.get(0).id());
+        assertTrue(blocks.get(0).text().startsWith("SCENE 01\nBakery"));
+        assertTrue(blocks.get(0).text().contains("Emiko kneads"));
+        assertFalse(blocks.get(0).text().contains("SCENE 02"));
+        assertEquals("SCENE 02", blocks.get(1).id());
+        assertTrue(blocks.get(1).text().contains("Rooftop, night"));
+        assertFalse(blocks.get(1).text().contains("Cliffhanger"));
+        assertEquals("SCENE 03", blocks.get(2).id());
+        assertTrue(blocks.get(2).text().endsWith("Cliffhanger on the rooftop."));
+    }
+
+    @Test
+    @DisplayName("parseScenes: cabeceras con negritas caen al fallback; sin cabeceras, lista vacía")
+    void parseScenes_looseHeaders_andEmptyCases() {
+        // El fallback tolera «**SCENE 01**» (negritas del modelo).
+        java.util.List<VideoStoryPromptFactory.SceneBlock> loose =
+                VideoStoryPromptFactory.parseScenes("**SCENE 01**\nThe bakery at dawn.");
+        assertEquals(1, loose.size());
+        assertEquals("SCENE 01", loose.get(0).id());
+        assertTrue(loose.get(0).text().contains("The bakery at dawn."));
+
+        assertTrue(VideoStoryPromptFactory.parseScenes("Una escena sin cabeceras reconocibles…").isEmpty());
+        assertTrue(VideoStoryPromptFactory.parseScenes("   ").isEmpty());
+        assertTrue(VideoStoryPromptFactory.parseScenes(null).isEmpty());
     }
 
     // ═══════════════ Validación común del paso 1 ═══════════════

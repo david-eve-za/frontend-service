@@ -35,7 +35,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Tag(name = "Video Story Wizard", description = "Historias en video, ASISTENTE: la timeline completa encadenada "
         + "por la IA — paso 1 historia, paso 2 diseños de personajes, paso 3 biblioteca de assets, paso 4 escenas "
-        + "y paso 5 (opcional) plantilla de generación de video. La salida de cada paso alimenta al siguiente.")
+        + "y paso 5 plantilla MASTER de generación de video (15 secciones, escena auto-seleccionada y referencia "
+        + "opcional archivo|URL|búsqueda web). La salida de cada paso alimenta al siguiente.")
 public class VideoStoryWizardController {
 
     private static final Logger log = LoggerFactory.getLogger(VideoStoryWizardController.class);
@@ -136,13 +137,19 @@ public class VideoStoryWizardController {
         return runStep(() -> wizard.generateScenes(id, request));
     }
 
-    @Operation(summary = "PASO 4 (opcional) — transporta una escena a la PLANTILLA DE GENERACIÓN DE VIDEO",
-            description = "Pide a la IA rellenar la plantilla de video con la escena pegada (usa por defecto el "
-                    + "estilo del paso 2). Requiere el paso 3. Se puede repetir para otra escena: sobrescribe.")
+    @Operation(summary = "PASO 5 — transporta UNA escena a la PLANTILLA MASTER de generación de video (15 secciones)",
+            description = "Auto-selecciona la escena (índice 1-based; sin input, la PRIMERA) de las escenas del "
+                    + "proyecto y pide a la IA rellenar la plantilla MASTER de 15 secciones con TODA la cadena "
+                    + "embebida: historia, diseños, biblioteca de assets y desglose de escenas. Referencia "
+                    + "OPCIONAL (a lo sumo UNA): contenido de un archivo (texto leído en el navegador), una URL "
+                    + "http/https o un término que se busca en la web. Sin ningún campo obligatorio: cero "
+                    + "interacción humana. Requiere el paso 4. Se puede repetir: sobrescribe.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Plantilla de video generada y persistida"),
+            @ApiResponse(responseCode = "200", description = "Plantilla MASTER de video generada y persistida"),
+            @ApiResponse(responseCode = "400", description = "Escena inexistente/índice fuera de rango, escenas "
+                    + "sin cabeceras reconocibles, referencia no resoluble o más de una referencia"),
             @ApiResponse(responseCode = "404", description = "Proyecto desconocido"),
-            @ApiResponse(responseCode = "409", description = "El paso 3 (escenas) aún no se ha ejecutado"),
+            @ApiResponse(responseCode = "409", description = "El paso 4 (escenas) aún no se ha ejecutado"),
             @ApiResponse(responseCode = "502", description = "La IA falló")
     })
     @PostMapping("/{id}/video")

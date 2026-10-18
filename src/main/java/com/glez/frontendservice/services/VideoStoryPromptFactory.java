@@ -2,21 +2,25 @@ package com.glez.frontendservice.services;
 
 import com.glez.frontendservice.dtos.StoryPromptRequest;
 
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Fábrica central de los PROMPTS del flujo de Historias en Video: contiene
- * las cuatro plantillas de la timeline (1 STORY PROMPT, 2 CHARACTER DESIGN
- * PROMPT, 3 SCENE PROMPT GENERATOR y 4 VIDEO GENERATION TEMPLATE) — todas
- * VERBATIM del usuario — junto con sus ensambladores y la validación común
- * del formulario de historia.
+ * las plantillas de la timeline (1 STORY PROMPT, 2 CHARACTER DESIGN PROMPT,
+ * 3 ASSETS DESIGN MASTER, 4 SCENE PROMPT GENERATOR y 5 VIDEO GENERATION
+ * MASTER PROMPT) — todas VERBATIM del usuario — junto con sus ensambladores,
+ * el parser de escenas del paso 4 y la validación común del formulario de
+ * historia.
  *
  * <p>Las herramientas manuales (bibliotecas de prompts) y el Asistente
  * (generación encadenada con IA) comparten esta fábrica, de modo que la
  * plantilla vive en UN solo sitio: paso 1 produce la historia, el paso 2
  * incrusta esa historia y produce los diseños, el paso 3 incrusta historia +
- * diseños y produce las escenas, y el paso 4 (opcional) lleva una escena a
- * la plantilla final de generación de video.</p>
+ * diseños y produce la biblioteca de assets, el paso 4 produce las escenas,
+ * y el paso 5 (opcional) transporta UNA escena (auto-seleccionada) a la
+ * PLANTILLA MASTER de 15 secciones de generación de video con TODA la cadena
+ * embebida.</p>
  */
 public final class VideoStoryPromptFactory {
 
@@ -1416,72 +1420,433 @@ public final class VideoStoryPromptFactory {
         return prefix + base.stripTrailing();
     }
 
-    // ═══════════════ PASO 5 (OPCIONAL): VIDEO GENERATION ═══════════════
+    // ═══════ PASO 5 (OPCIONAL): VIDEO GENERATION MASTER PROMPT ═══════
 
     /**
-     * La PLANTILLA de generación de video, VERBATIM. Solo [3D ANIMATION
-     * STYLE] lo sustituye la app: el resto de placeholders ([SCENE
-     * DESCRIPTION], [EXACT CHARACTER DESCRIPTIONS], …) los RELLENA LA IA a
-     * partir de la escena del paso 3.
+     * La PLANTILLA MASTER de generación de video, VERBATIM del usuario: 15
+     * secciones (información del proyecto, ajustes globales, referencias de
+     * personajes/assets, información de la escena, prompt de video,
+     * desglose de tiempos, hoja de diálogo, cámara, audio, negativos,
+     * referencias, continuidad, salida y validación) más la EXECUTION
+     * INSTRUCTION que porta los materiales aprobados.
+     *
+     * <p><b>Reparto de slots</b>: la APP sustituye IN-PLACE solo los que
+     * posee de verdad — {@code {{STORY_TITLE}}}, {@code {{VISUAL_STYLE}}},
+     * {@code {{DIALOGUE_LANGUAGE}}}, {@code {{ASPECT_RATIO}}} y
+     * {@code {{OUTPUT_ASPECT_RATIO}}}, {@code {{DEFAULT_CLIP_DURATION}}},
+     * {@code {{AUDIO_ENABLED}}}, {@code {{TARGET_SCENE_ID}}} y los CUATRO
+     * materiales aprobados de la EXECUTION INSTRUCTION ({@code {{APPROVED_*}}}).
+     * El RESTO de {@code {{PLACEHOLDER}}} los RELLENA LA IA a partir de
+     * esos materiales — es el diseño de la propia plantilla («Return the
+     * completed video-generation prompt using the structure defined in this
+     * template»).</p>
      */
-    static final String VIDEO_TEMPLATE = """
-            Create a cinematic 3D animated video based on the following scene.
+    static final String MASTER_VIDEO_TEMPLATE = """
+            # MASTER PROMPT — CINEMATIC 3D ANIMATED VIDEO GENERATION
 
-            STYLE:
-            [3D ANIMATION STYLE]
+            ## 1. PROJECT INFORMATION
 
-            SCENE:
-            [SCENE DESCRIPTION]
+            - **Story Title:** `{{STORY_TITLE}}`
+            - **Genre:** `{{GENRE}}`
+            - **Target Audience:** `{{TARGET_AUDIENCE}}`
+            - **Story Summary:** `{{STORY_SUMMARY}}`
+            - **Visual Style:** `{{VISUAL_STYLE}}`
+            - **Emotional Tone:** `{{EMOTIONAL_TONE}}`
+            - **Target Video Platform:** `{{TARGET_VIDEO_PLATFORM}}`
+            - **Generation Mode:** `{{GENERATION_MODE}}`
 
-            CHARACTERS:
-            [EXACT CHARACTER DESCRIPTIONS]
+            ---
 
-            ACTION:
-            [ACTION SEQUENCE]
+            ## 2. GLOBAL VIDEO SETTINGS
 
-            DIALOGUE:
-            [EXACT DIALOGUE]
+            - **Aspect Ratio:** `{{ASPECT_RATIO}}`
+            - **Resolution:** `{{RESOLUTION}}`
+            - **Frame Rate:** `{{FRAME_RATE}}`
+            - **Default Clip Duration:** `{{DEFAULT_CLIP_DURATION}}`
+            - **Audio Generation:** `{{AUDIO_ENABLED}}`
+            - **Dialogue Language:** `{{DIALOGUE_LANGUAGE}}`
+            - **Rendering Style:** `{{RENDERING_STYLE}}`
+            - **Camera Style:** `{{CAMERA_STYLE}}`
+            - **Motion Style:** `{{MOTION_STYLE}}`
+            - **Lighting Style:** `{{LIGHTING_STYLE}}`
+            - **Color Palette:** `{{COLOR_PALETTE}}`
 
-            TIMING:
-            [TIMING SPLIT]
+            ---
 
-            CAMERA:
-            [CAMERA MOVEMENT]
+            ## 3. CHARACTER REFERENCES
 
-            LIGHTING:
-            [LIGHTING]
+            ### CHARACTER `{{CHARACTER_ID}}`
 
-            ENVIRONMENT:
-            [SETTING]
+            - **Name:** `{{CHARACTER_NAME}}`
+            - **Approved Design:** `{{CHARACTER_DESIGN}}`
+            - **Reference Image:** `{{CHARACTER_REFERENCE_IMAGE}}`
+            - **Physical Appearance:** `{{CHARACTER_APPEARANCE}}`
+            - **Clothing:** `{{CHARACTER_CLOTHING}}`
+            - **Accessories:** `{{CHARACTER_ACCESSORIES}}`
+            - **Personality:** `{{CHARACTER_PERSONALITY}}`
+            - **Voice Characteristics:** `{{CHARACTER_VOICE}}`
+            - **Emotional State:** `{{CHARACTER_EMOTIONAL_STATE}}`
+            - **Scene-Specific Actions:** `{{CHARACTER_ACTIONS}}`
 
-            AUDIO:
-            [AUDIO DESCRIPTION]
+            ---
 
-            CONTINUITY:
-            Maintain exact character identity, facial features, hairstyle, clothing, proportions, accessories, environment, lighting style, and visual language established in previous scenes.
+            ## 4. ASSET REFERENCES
 
-            The animation must feel like one continuous feature film rather than separate AI-generated clips.
+            ### ASSET `{{ASSET_ID}}`
 
-            NEGATIVE:
-            No live action, no photorealistic humans, no anime, no character redesign, no face changes, no hairstyle changes, no outfit changes, no anatomy errors, no duplicated characters, no extra limbs, no lip-sync errors, no dialogue overlap, no visual glitches, no subtitles, no text, no logos, no watermark.""";
+            - **Asset Name:** `{{ASSET_NAME}}`
+            - **Asset Category:** `{{ASSET_CATEGORY}}`
+            - **Approved Design:** `{{ASSET_DESIGN}}`
+            - **Reference Image:** `{{ASSET_REFERENCE_IMAGE}}`
+            - **Initial State:** `{{ASSET_INITIAL_STATE}}`
+            - **Current State:** `{{ASSET_CURRENT_STATE}}`
+            - **Position:** `{{ASSET_POSITION}}`
+            - **Interaction Requirements:** `{{ASSET_INTERACTIONS}}`
+            - **Continuity Requirements:** `{{ASSET_CONTINUITY}}`
+
+            ---
+
+            ## 5. SCENE INFORMATION
+
+            - **Scene ID:** `{{SCENE_ID}}`
+            - **Scene Name:** `{{SCENE_NAME}}`
+            - **Scene Type:** `{{SCENE_TYPE}}`
+            - **Narrative Purpose:** `{{SCENE_PURPOSE}}`
+            - **Emotional Objective:** `{{EMOTIONAL_OBJECTIVE}}`
+            - **Previous Scene ID:** `{{PREVIOUS_SCENE_ID}}`
+            - **Next Scene ID:** `{{NEXT_SCENE_ID}}`
+            - **Location Asset ID:** `{{LOCATION_ASSET_ID}}`
+            - **Time of Day:** `{{TIME_OF_DAY}}`
+            - **Weather:** `{{WEATHER}}`
+            - **Scene Duration:** `{{SCENE_DURATION}}`
+            - **Character IDs:** `{{SCENE_CHARACTER_IDS}}`
+            - **Asset IDs:** `{{SCENE_ASSET_IDS}}`
+
+            ---
+
+            ## 6. VIDEO GENERATION PROMPT
+
+            ### Visual Style
+
+            `{{SCENE_VISUAL_STYLE}}`
+
+            ### Subject and Characters
+
+            `{{SCENE_SUBJECTS_AND_CHARACTERS}}`
+
+            ### Environment and Assets
+
+            `{{SCENE_ENVIRONMENT_AND_ASSETS}}`
+
+            ### Initial Composition
+
+            `{{INITIAL_COMPOSITION}}`
+
+            ### Action Sequence
+
+            `{{ACTION_SEQUENCE}}`
+
+            ### Facial Expressions and Body Language
+
+            `{{FACIAL_EXPRESSIONS_AND_BODY_LANGUAGE}}`
+
+            ### Dialogue and Lip Synchronization
+
+            `{{DIALOGUE_AND_LIP_SYNC}}`
+
+            ### Camera and Cinematography
+
+            `{{CAMERA_AND_CINEMATOGRAPHY}}`
+
+            ### Lighting and Atmosphere
+
+            `{{LIGHTING_AND_ATMOSPHERE}}`
+
+            ### Motion and Animation
+
+            `{{MOTION_AND_ANIMATION}}`
+
+            ### Ending Composition
+
+            `{{ENDING_COMPOSITION}}`
+
+            ### Audio
+
+            `{{SCENE_AUDIO}}`
+
+            ### Visual Continuity
+
+            `{{VISUAL_CONTINUITY}}`
+
+            ---
+
+            ## 7. TIMING BREAKDOWN
+
+            | Start Time | End Time | Character ID | Action | Facial Expression / Body Language | Camera | Dialogue / Audio |
+            |---|---|---|---|---|---|---|
+            | `{{SEGMENT_1_START}}` | `{{SEGMENT_1_END}}` | `{{SEGMENT_1_CHARACTER_ID}}` | `{{SEGMENT_1_ACTION}}` | `{{SEGMENT_1_PERFORMANCE}}` | `{{SEGMENT_1_CAMERA}}` | `{{SEGMENT_1_AUDIO}}` |
+            | `{{SEGMENT_2_START}}` | `{{SEGMENT_2_END}}` | `{{SEGMENT_2_CHARACTER_ID}}` | `{{SEGMENT_2_ACTION}}` | `{{SEGMENT_2_PERFORMANCE}}` | `{{SEGMENT_2_CAMERA}}` | `{{SEGMENT_2_AUDIO}}` |
+            | `{{SEGMENT_3_START}}` | `{{SEGMENT_3_END}}` | `{{SEGMENT_3_CHARACTER_ID}}` | `{{SEGMENT_3_ACTION}}` | `{{SEGMENT_3_PERFORMANCE}}` | `{{SEGMENT_3_CAMERA}}` | `{{SEGMENT_3_AUDIO}}` |
+
+            ---
+
+            ## 8. DIALOGUE SHEET
+
+            | Dialogue ID | Speaker Character ID | Character Name | Exact Dialogue | Emotional Delivery | Start Time | End Time |
+            |---|---|---|---|---|---|---|
+            | `{{DIALOGUE_ID}}` | `{{SPEAKER_CHARACTER_ID}}` | `{{SPEAKER_NAME}}` | `{{EXACT_DIALOGUE}}` | `{{DIALOGUE_DELIVERY}}` | `{{DIALOGUE_START_TIME}}` | `{{DIALOGUE_END_TIME}}` |
+
+            - **Nonverbal Vocalizations:** `{{NONVERBAL_VOCALIZATIONS}}`
+            - **Dialogue Timing:** `{{DIALOGUE_TIMING}}`
+            - **Lip Synchronization:** `{{LIP_SYNC_REQUIREMENTS}}`
+            - **Silent Character Behavior:** `{{SILENT_CHARACTER_BEHAVIOR}}`
+
+            ---
+
+            ## 9. CAMERA SPECIFICATIONS
+
+            - **Shot Type:** `{{SHOT_TYPE}}`
+            - **Camera Angle:** `{{CAMERA_ANGLE}}`
+            - **Camera Position:** `{{CAMERA_POSITION}}`
+            - **Camera Movement:** `{{CAMERA_MOVEMENT}}`
+            - **Lens Characteristics:** `{{LENS_CHARACTERISTICS}}`
+            - **Composition:** `{{CAMERA_COMPOSITION}}`
+            - **Focus Subject:** `{{FOCUS_SUBJECT}}`
+            - **Depth of Field:** `{{DEPTH_OF_FIELD}}`
+            - **Screen Direction:** `{{SCREEN_DIRECTION}}`
+            - **Camera Transition:** `{{CAMERA_TRANSITION}}`
+
+            ---
+
+            ## 10. AUDIO SPECIFICATIONS
+
+            - **Audio Mode:** `{{AUDIO_MODE}}`
+            - **Dialogue:** `{{AUDIO_DIALOGUE}}`
+            - **Voice Consistency:** `{{VOICE_CONSISTENCY}}`
+            - **Ambient Sound:** `{{AMBIENT_SOUND}}`
+            - **Sound Effects:** `{{SOUND_EFFECTS}}`
+            - **Background Music:** `{{BACKGROUND_MUSIC}}`
+            - **Audio Timing:** `{{AUDIO_TIMING}}`
+            - **Audio Continuity:** `{{AUDIO_CONTINUITY}}`
+
+            ---
+
+            ## 11. NEGATIVE PROMPT
+
+            `{{CUSTOM_NEGATIVE_PROMPT}}`
+
+            ### Global Negative Constraints
+
+            - Character identity changes.
+            - Inconsistent facial features.
+            - Unapproved hairstyle or clothing changes.
+            - Inconsistent body proportions.
+            - Duplicate characters.
+            - Extra limbs or fingers.
+            - Distorted anatomy or faces.
+            - Unnatural facial expressions or movements.
+            - Unintended mouth movement.
+            - Incorrect dialogue assignment.
+            - Inconsistent environment design.
+            - Objects changing shape, color, or material.
+            - Unintended object duplication or disappearance.
+            - Flickering lighting.
+            - Unwanted camera movement.
+            - Visual artifacts or glitches.
+            - Inconsistent animation style.
+            - Unintended text or subtitles.
+            - Unapproved logos or watermarks.
+
+            ---
+
+            ## 12. REFERENCE INPUTS
+
+            - **Character Reference Images:** `{{CHARACTER_REFERENCE_IMAGES}}`
+            - **Environment Reference Images:** `{{ENVIRONMENT_REFERENCE_IMAGES}}`
+            - **Prop Reference Images:** `{{PROP_REFERENCE_IMAGES}}`
+            - **Opening Frame Reference:** `{{OPENING_FRAME_REFERENCE}}`
+            - **Previous Clip Reference:** `{{PREVIOUS_CLIP_REFERENCE}}`
+            - **Ending Frame Reference:** `{{ENDING_FRAME_REFERENCE}}`
+            - **Reference Priority:** `{{REFERENCE_PRIORITY}}`
+
+            ---
+
+            ## 13. CONTINUITY REQUIREMENTS
+
+            - **Character Appearance:** `{{CHARACTER_APPEARANCE_CONTINUITY}}`
+            - **Character Position:** `{{CHARACTER_POSITION_CONTINUITY}}`
+            - **Character Movement:** `{{CHARACTER_MOVEMENT_CONTINUITY}}`
+            - **Emotional State:** `{{EMOTIONAL_STATE_CONTINUITY}}`
+            - **Environment Layout:** `{{ENVIRONMENT_CONTINUITY}}`
+            - **Prop Position and State:** `{{PROP_CONTINUITY}}`
+            - **Lighting and Time of Day:** `{{LIGHTING_CONTINUITY}}`
+            - **Screen Direction:** `{{SCREEN_DIRECTION_CONTINUITY}}`
+            - **Previous Clip Connection:** `{{PREVIOUS_CLIP_CONNECTION}}`
+            - **Next Clip Connection:** `{{NEXT_CLIP_CONNECTION}}`
+            - **Final Frame Requirements:** `{{FINAL_FRAME_REQUIREMENTS}}`
+
+            ---
+
+            ## 14. OUTPUT REQUIREMENTS
+
+            - **Output Type:** `{{OUTPUT_TYPE}}`
+            - **Scene ID:** `{{OUTPUT_SCENE_ID}}`
+            - **Output Duration:** `{{OUTPUT_DURATION}}`
+            - **Aspect Ratio:** `{{OUTPUT_ASPECT_RATIO}}`
+            - **Resolution:** `{{OUTPUT_RESOLUTION}}`
+            - **Frame Rate:** `{{OUTPUT_FRAME_RATE}}`
+            - **Audio:** `{{OUTPUT_AUDIO}}`
+            - **Number of Variations:** `{{NUMBER_OF_VARIATIONS}}`
+
+            ### Required Deliverables
+
+            1. `{{DELIVERABLE_VIDEO_PROMPT}}`
+            2. `{{DELIVERABLE_TIMING_BREAKDOWN}}`
+            3. `{{DELIVERABLE_DIALOGUE_SHEET}}`
+            4. `{{DELIVERABLE_NEGATIVE_PROMPT}}`
+            5. `{{DELIVERABLE_REFERENCE_INPUTS}}`
+            6. `{{DELIVERABLE_CONTINUITY_REQUIREMENTS}}`
+            7. `{{DELIVERABLE_GENERATION_NOTES}}`
+
+            ---
+
+            ## 15. FINAL VALIDATION
+
+            - `{{VALIDATE_STORY_CONTENT}}`
+            - `{{VALIDATE_CHARACTER_DESIGNS}}`
+            - `{{VALIDATE_ASSET_DESIGNS}}`
+            - `{{VALIDATE_ENVIRONMENT_CONTINUITY}}`
+            - `{{VALIDATE_ACTION_SEQUENCE}}`
+            - `{{VALIDATE_DIALOGUE}}`
+            - `{{VALIDATE_SPEAKER_ASSIGNMENTS}}`
+            - `{{VALIDATE_TIMING}}`
+            - `{{VALIDATE_CAMERA_INSTRUCTIONS}}`
+            - `{{VALIDATE_LIGHTING}}`
+            - `{{VALIDATE_AUDIO}}`
+            - `{{VALIDATE_NEGATIVE_CONSTRAINTS}}`
+            - `{{VALIDATE_REFERENCE_INPUTS}}`
+            - `{{VALIDATE_CLIP_CONTINUITY}}`
+            - `{{VALIDATE_PLATFORM_REQUIREMENTS}}`
+            - `{{IDENTIFY_MISSING_INPUTS}}`
+
+            ---
+
+            ## EXECUTION INSTRUCTION
+
+            Using `{{APPROVED_STORY}}`, `{{APPROVED_CHARACTER_DESIGNS}}`, `{{APPROVED_ASSET_LIBRARY}}`, and `{{APPROVED_SCENE_BREAKDOWN}}`, generate the video-generation prompt for `{{TARGET_SCENE_ID}}`.
+
+            Preserve the approved narrative, character identities, asset designs, actions, dialogue, timing, visual style, and continuity.
+
+            Adapt the output to `{{VIDEO_PLATFORM}}` and `{{GENERATION_MODE}}`.
+
+            Return the completed video-generation prompt using the structure defined in this template.
+
+            Do not invent missing story details or claim that a video has been generated when only a prompt has been created.""";
+
+    /** Una escena parseada del output del paso 4: cabecera «SCENE NN» + su texto completo. */
+    public record SceneBlock(String id, String text) {
+    }
+
+    /** Cabecera de escena: una línea que SOLO contiene «SCENE NN» (formato del paso 4). */
+    private static final Pattern SCENE_HEADER_STRICT =
+            Pattern.compile("(?m)^\\s*SCENE\\s+(\\d+)\\s*$");
+
+    /** Fallback tolerante: cabeceras con negritas o texto adicional en la línea. */
+    private static final Pattern SCENE_HEADER_LOOSE =
+            Pattern.compile("(?m)^\\s*\\**\\s*SCENE\\s+(\\d+)");
 
     /**
-     * Ensambla el prompt del paso 4 (opcional): ANTEPONE la escena elegida
-     * y pide a la IA que RELLENE la plantilla de generación de video usando
-     * SOLO esa escena (todos los placeholders salvo el estilo los llena la
-     * IA, no la app). Devuelve el prompt para el LLM, no la plantilla final.
+     * Parsea el output del paso 4 (escenas) en bloques «SCENE NN»: cada
+     * bloque empieza en su cabecera y llega hasta la siguiente. Devuelve la
+     * lista VACÍA si el texto no contiene cabeceras reconocibles.
      */
-    public static String buildVideoGenerationPrompt(String scene, String animationStyle) {
-        String template = VIDEO_TEMPLATE
-                .replace("[3D ANIMATION STYLE]", animationStyle == null ? "" : animationStyle.trim());
+    public static java.util.List<SceneBlock> parseScenes(String scenes) {
+        if (scenes == null || scenes.isBlank()) {
+            return java.util.List.of();
+        }
+        java.util.List<SceneBlock> blocks = parseScenesWith(SCENE_HEADER_STRICT, scenes);
+        if (!blocks.isEmpty()) {
+            return blocks;
+        }
+        return parseScenesWith(SCENE_HEADER_LOOSE, scenes);
+    }
 
-        return "Here is the scene from the animated story:\n\n"
-                + (scene == null ? "" : scene.strip())
-                + "\n\n---\n\n"
-                + "Fill in the following video generation template using ONLY the information from the scene above. "
-                + "Replace every [PLACEHOLDER] with its exact content from the scene. "
-                + "Output ONLY the filled template:\n\n"
-                + template.stripTrailing();
+    private static java.util.List<SceneBlock> parseScenesWith(Pattern header, String scenes) {
+        java.util.List<int[]> spans = new java.util.ArrayList<>();
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        Matcher matcher = header.matcher(scenes);
+        while (matcher.find()) {
+            ids.add("SCENE " + matcher.group(1));
+            spans.add(new int[]{matcher.start(), -1});
+        }
+        java.util.List<SceneBlock> blocks = new java.util.ArrayList<>(spans.size());
+        for (int i = 0; i < spans.size(); i++) {
+            int end = i + 1 < spans.size() ? spans.get(i + 1)[0] : scenes.length();
+            blocks.add(new SceneBlock(ids.get(i), scenes.substring(spans.get(i)[0], end).strip()));
+        }
+        return blocks;
+    }
+
+    /**
+     * Ensambla el prompt del paso 5: sustituye IN-PLACE los slots de la APP
+     * (título, estilo, idioma, aspecto, duración por defecto, audio y la
+     * escena objetivo) y los CUATRO materiales aprobados en la EXECUTION
+     * INSTRUCTION — así «Using {{APPROVED_STORY}}…» es literal y el prompt
+     * es autocontenido. Antepone el bloque de REFERENCIA OPCIONAL cuando
+     * existe y la instrucción de rellenado: el RESTO de placeholders los
+     * llena la IA y permanecen verbatim en la plantilla. Devuelve el prompt
+     * para el LLM, no la plantilla final.
+     */
+    public static String buildVideoGenerationPrompt(String title, String story, String designs,
+            String assets, String scenes, String targetSceneId, String animationStyle,
+            String dialogueLanguage, String aspectRatio, Integer defaultClipSeconds,
+            String referenceMaterial) {
+        String template = MASTER_VIDEO_TEMPLATE
+                .replace("{{STORY_TITLE}}", valueOrDefault(title, "Untitled story"))
+                .replace("{{VISUAL_STYLE}}", valueOrDefault(animationStyle,
+                        "Not specified — derive it from the approved character designs"))
+                .replace("{{DIALOGUE_LANGUAGE}}", valueOrDefault(dialogueLanguage, "Spanish"))
+                .replace("{{ASPECT_RATIO}}", valueOrDefault(aspectRatio, "16:9"))
+                .replace("{{OUTPUT_ASPECT_RATIO}}", valueOrDefault(aspectRatio, "16:9"))
+                .replace("{{DEFAULT_CLIP_DURATION}}", defaultClipSeconds != null
+                        && defaultClipSeconds > 0 ? formatDuration(defaultClipSeconds) : "10 seconds")
+                .replace("{{AUDIO_ENABLED}}", "Yes")
+                .replace("{{TARGET_SCENE_ID}}", valueOrDefault(targetSceneId, "SCENE 01"))
+                .replace("{{APPROVED_STORY}}", materialsOrNote(story,
+                        "No approved story was provided"))
+                .replace("{{APPROVED_CHARACTER_DESIGNS}}", materialsOrNote(designs,
+                        "No approved character designs were provided"))
+                .replace("{{APPROVED_ASSET_LIBRARY}}", materialsOrNote(assets,
+                        "(No approved asset library was generated — derive environment and prop "
+                                + "references from the approved scene breakdown and story, and flag "
+                                + "any missing asset in the Final Validation)"))
+                .replace("{{APPROVED_SCENE_BREAKDOWN}}", materialsOrNote(scenes,
+                        "No approved scene breakdown was provided"));
+
+        StringBuilder prompt = new StringBuilder();
+        if (!isBlank(referenceMaterial)) {
+            prompt.append("Here is the optional REFERENCE MATERIAL provided by the user. ")
+                    .append("Use it as inspiration and context where it fits the approved materials; ")
+                    .append("never contradict the approved story, character designs, asset library ")
+                    .append("or scene breakdown, and never copy copyrighted text verbatim:\n\n")
+                    .append(referenceMaterial.strip())
+                    .append("\n\n---\n\n");
+        }
+        prompt.append("Fill in the following MASTER PROMPT template using ONLY the materials ")
+                .append("embedded in it. Replace every remaining {{PLACEHOLDER}} with its exact ")
+                .append("content derived from those materials. Repeat the CHARACTER and ASSET ")
+                .append("reference blocks once for each character and asset that appears in the ")
+                .append("target scene, and add as many TIMING BREAKDOWN and DIALOGUE SHEET rows ")
+                .append("as the scene needs. Output ONLY the completed template (sections 1 to 15 ")
+                .append("fully filled, exactly as structured); do NOT include the EXECUTION ")
+                .append("INSTRUCTION section in your output:\n\n")
+                .append(template.stripTrailing());
+        return prompt.toString();
+    }
+
+    /** Material embebido o, si falta, la nota que guía a la IA sin romper la plantilla. */
+    private static String materialsOrNote(String material, String note) {
+        return isBlank(material) ? note : material.strip();
     }
 
     // ═══════════════════════ Helpers comunes ═══════════════════════
