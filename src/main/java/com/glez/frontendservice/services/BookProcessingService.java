@@ -183,6 +183,13 @@ public class BookProcessingService {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new IllegalArgumentException("Book with ID " + bookId + " not found."));
 
+        // Los chunks enlazados a los bloques viejos se borran ANTES que los
+        // bloques: si queda un chunk apuntando a un bloque borrado, la FK
+        // chunks.block_id revienta el delete en bloque (23503) y el guardado
+        // de la división falla. Los chunks de la división que muere están
+        // obsoletos por definición — el split los regenera desde los bloques
+        // nuevos. Los legados sin bloque (texto completo) no se tocan.
+        chunksRepository.deleteBoundByBookIdInBulk(bookId);
         blockRepository.deleteByBookIdInBulk(bookId);
 
         int position = 0;
