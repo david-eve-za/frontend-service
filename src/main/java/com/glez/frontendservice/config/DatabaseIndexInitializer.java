@@ -80,6 +80,7 @@ public class DatabaseIndexInitializer {
             }
         }
         ensureTraceStatusEnum();
+        ensureLogEventColumnLengths();
         for (IndexDefinition index : INDEXES) {
             try {
                 // IF NOT EXISTS: a no-op when hbm2ddl already created it.
@@ -162,6 +163,32 @@ public class DatabaseIndexInitializer {
                     + "el enum se valida en Java/Hibernate", names.size());
         } catch (Exception e) {
             log.warn("Could not refresh the trace status enum: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Widens LOG_EVENT's legacy VARCHAR columns to the lengths the entity
+     * declares. hbm2ddl never alters an existing column: the table was born
+     * with every string at VARCHAR(255) (the entity declared no lengths), so
+     * a perfectly legitimate 470-char log message ("Serializing PageImpl
+     * instances as-is is not supported…") blew the whole flush batch — and
+     * the poisoned-retry loop made it fail FOREVER. Idempotent: re-declaring
+     * the same length is a no-op; H2 preserves the rows on a widening ALTER.
+     */
+    void ensureLogEventColumnLengths() {
+        List<String> alterations = List.of(
+                "ALTER TABLE LOG_EVENT ALTER COLUMN MESSAGE VARCHAR(8000)",
+                "ALTER TABLE LOG_EVENT ALTER COLUMN LOGGER VARCHAR(256)",
+                "ALTER TABLE LOG_EVENT ALTER COLUMN THREAD VARCHAR(128)",
+                "ALTER TABLE LOG_EVENT ALTER COLUMN BOOK_ID VARCHAR(64)",
+                "ALTER TABLE LOG_EVENT ALTER COLUMN TRACE_ID VARCHAR(64)",
+                "ALTER TABLE LOG_EVENT ALTER COLUMN STEP VARCHAR(32)");
+        for (String alteration : alterations) {
+            try {
+                jdbcTemplate.execute(alteration);
+            } catch (Exception e) {
+                log.warn("Could not widen log_event column [{}]: {}", alteration, e.getMessage());
+            }
         }
     }
 

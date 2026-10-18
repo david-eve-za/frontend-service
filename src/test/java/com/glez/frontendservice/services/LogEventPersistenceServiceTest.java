@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -162,6 +163,44 @@ class LogEventPersistenceServiceTest {
             doAnswer(inv -> inv.getArgument(0)).when(repository).saveAll(anyList());
             service.flush();
             verify(repository, times(2)).saveAll(anyList());
+            assertEquals(0, service.pendingCount());
+        }
+
+        @Test
+        @DisplayName("Re-enqueued events are DE-POISONED: the id assigned by the failed saveAll is cleared (regresión del bucle eterno)")
+        void flush_dbFailureAfterIdAssignment_clearsIdsForTheRetry() {
+            // Reproduce el bug real: Hibernate asigna el UUID al persistir
+            // (PRE-commit) y luego la transacción revienta — la fila jamás
+            // existió. Sin limpiar el id, el reintento sería un UPDATE de
+            // una fila inexistente y el lote rebotaría para siempre.
+            when(repository.saveAll(anyList())).thenAnswer(inv -> {
+                @SuppressWarnings("unchecked")
+                List<LogEvent> poisoned = (List<LogEvent>) inv.getArgument(0);
+                for (LogEvent event : poisoned) {
+                    event.setId(UUID.randomUUID());
+                }
+                throw new RuntimeException("transaction rolled back");
+            });
+            service.capture("INFO", "c.g.f.A", "t1", "uno", Map.of());
+            service.capture("WARN", "c.g.f.B", "t2", "dos", Map.of());
+
+            service.flush();
+            assertEquals(2, service.pendingCount(), "The batch must be re-enqueued after the failure");
+
+            // La BD vuelve: el reintento debe viajar con ids NULOS (INSERT limpio).
+            doAnswer(inv -> inv.getArgument(0)).when(repository).saveAll(anyList());
+            service.flush();
+
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            ArgumentCaptor<List<LogEvent>> captor =
+                    ArgumentCaptor.forClass((Class) List.class);
+            verify(repository, times(2)).saveAll(captor.capture());
+            List<LogEvent> retried = captor.getAllValues().get(1);
+            assertEquals(2, retried.size());
+            for (LogEvent event : retried) {
+                assertNull(event.getId(),
+                        "The retry must be a clean INSERT: the id assigned by the failed transaction is cleared");
+            }
             assertEquals(0, service.pendingCount());
         }
 

@@ -1,5 +1,6 @@
 package com.glez.frontendservice.model;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -52,19 +53,31 @@ public class LogEvent {
     /** Nivel Logback (ERROR/WARN/INFO/DEBUG/TRACE) como texto, para LIKE. */
     private String level;
 
+    /**
+     * Longitudes EXPLÍCITAS alineadas con los truncados de capture(): sin
+     * @Column(length), hbm2ddl crea todo como VARCHAR(255) y jamás ensancha
+     * una columna existente — un mensaje legítimo de 470 caracteres
+     * reventaba el INSERT (la BD real tenía 255 pese al javadoc).
+     */
+    @Column(length = 256)
     private String logger;
 
+    @Column(length = 128)
     private String thread;
 
     /** Mensaje formateado, truncado a {@code MAX_MESSAGE_LENGTH} caracteres. */
+    @Column(length = MAX_MESSAGE_LENGTH)
     private String message;
 
     /** bookId del MDC del pipeline, cuando el evento pertenece a una corrida. */
+    @Column(name = "book_id", length = 64)
     private String bookId;
 
     /** traceId del MDC (corrida del pipeline o chunk, en traducciones). */
+    @Column(name = "trace_id", length = 64)
     private String traceId;
 
     /** step del MDC (EXTRACT/SPLIT/TRANSLATE/AUDIO/FINALIZE). */
+    @Column(length = 32)
     private String step;
 }
