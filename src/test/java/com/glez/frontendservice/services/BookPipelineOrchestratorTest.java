@@ -850,4 +850,162 @@ class BookPipelineOrchestratorTest {
     void requestPause_withoutRun_isRejected() {
         assertFalse(orchestrator.requestPause(bookId));
     }
+
+    @Test
+    @DisplayName("Manual AUDIO stage on a COMPLETED book re-generates its audiobook and restores COMPLETED")
+    void processBook_manualAudioStage_onCompletedBook_regeneratesAndRestores() throws Exception {
+        stubTraceEvents();
+        stubExtractedText();
+        // Libro COMPLETED: solo la etapa AUDIO manual (Generar Audiolibro)
+        // pasa el guard; el auto-resume sigue sin tocarlo.
+        stubBookState(ProcessingStatus.COMPLETED);
+        stubAudioView(null);
+        book.setName(tempDir.resolve("mi-libro").toString());
+
+        UUID blockId = UUID.randomUUID();
+        when(blockRepository.findAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockAudioViewRow(blockId, Block.BlockType.CHAPTER, 1, 0, null)));
+        lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(1L); // SPLIT skip
+        stubChunkViews(List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido"))); // TRANSLATE skip
+        when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockChunkAudioViewRow(blockId, ChunkStatus.COMPLETED, 0, "capítulo traducido")));
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+            Path output = inv.getArgument(1);
+            Files.createDirectories(output.getParent());
+            Files.writeString(output, "fake mp3");
+            return true;
+        });
+
+        orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
+
+        // La etapa de audio corrió de verdad (antes: "nothing to do" silencioso)
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        verify(traceService).skipStep(eq(bookId), eq(ProcessStep.TRANSLATE), anyString(), anyString());
+        // El libro completado vuelve a quedar COMPLETED tras re-generar
+        verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.COMPLETED);
+        verify(bookRepository, never()).updateStatusAndTrace(eq(bookId), eq(ProcessingStatus.FAILED), anyString());
+        verify(traceService, never()).failStep(any(), any());
+    }
+
+    @Test
+    @DisplayName("Pause during the AUDIO stage takes effect BETWEEN blocks (mp3s kept, no FAILED)")
+    void processBook_audioStage_pauseTakesEffectBetweenBlocks() throws Exception {
+        stubTraceEvents();
+        stubExtractedText();
+        stubBookState(ProcessingStatus.AWAITING);
+        stubAudioView(null);
+        book.setName(tempDir.resolve("mi-libro").toString());
+
+        UUID block1 = UUID.randomUUID();
+        UUID block2 = UUID.randomUUID();
+        when(blockRepository.findAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockAudioViewRow(block1, Block.BlockType.CHAPTER, 1, 0, null),
+                new BlockAudioViewRow(block2, Block.BlockType.CHAPTER, 2, 1, null)));
+        lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(1L);
+        stubChunkViews(List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido")));
+        when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockChunkAudioViewRow(block1, ChunkStatus.COMPLETED, 0, "uno"),
+                new BlockChunkAudioViewRow(block2, ChunkStatus.COMPLETED, 0, "dos")));
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+            // La pausa llega a mitad: tras el bloque 1, antes del 2.
+            assertTrue(orchestrator.requestPause(bookId), "Pause must be accepted while running");
+            Path output = inv.getArgument(1);
+            Files.createDirectories(output.getParent());
+            Files.writeString(output, "fake mp3");
+            return true;
+        });
+
+        orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
+
+        // Solo el bloque en curso se sintetizó: el 2 queda para la reanudación
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        // El paso cierra como CANCELLED con la causa visible (no consume intentos)
+        verify(traceService).cancelStep(any(), org.mockito.ArgumentMatchers.contains("Pausado"));
+        verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.AWAITING);
+        verify(bookRepository, never()).updateStatusAndTrace(eq(bookId), eq(ProcessingStatus.FAILED), anyString());
+        verify(traceService, never()).failStep(any(), any());
+    }
+
+    @Test
+    @DisplayName("Stop during the AUDIO stage takes effect BETWEEN blocks (STOPPED, no FAILED)")
+    void processBook_audioStage_stopTakesEffectBetweenBlocks() throws Exception {
+        stubTraceEvents();
+        stubExtractedText();
+        stubBookState(ProcessingStatus.AWAITING);
+        stubAudioView(null);
+        book.setName(tempDir.resolve("mi-libro").toString());
+
+        UUID block1 = UUID.randomUUID();
+        UUID block2 = UUID.randomUUID();
+        when(blockRepository.findAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockAudioViewRow(block1, Block.BlockType.CHAPTER, 1, 0, null),
+                new BlockAudioViewRow(block2, Block.BlockType.CHAPTER, 2, 1, null)));
+        lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(1L);
+        stubChunkViews(List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido")));
+        when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockChunkAudioViewRow(block1, ChunkStatus.COMPLETED, 0, "uno"),
+                new BlockChunkAudioViewRow(block2, ChunkStatus.COMPLETED, 0, "dos")));
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+            assertTrue(orchestrator.requestStop(bookId), "Stop must be accepted while running");
+            Path output = inv.getArgument(1);
+            Files.createDirectories(output.getParent());
+            Files.writeString(output, "fake mp3");
+            return true;
+        });
+
+        // Graceful: la PipelineStoppedException no escapa del processBook
+        orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
+
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        // El stop persiste STOPPED de inmediato (feedback en el panel)
+        verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.STOPPED);
+        verify(traceService).cancelStep(any(), org.mockito.ArgumentMatchers.contains("detenido"));
+        verify(bookRepository, never()).updateStatusAndTrace(eq(bookId), eq(ProcessingStatus.FAILED), anyString());
+        verify(traceService, never()).failStep(any(), any());
+    }
+
+    @Test
+    @DisplayName("Full run paused between audio blocks NEVER reaches FINALIZE (regresión del checkpoint AUDIO)")
+    void processBook_fullRunPausedDuringAudio_doesNotFinalize() throws Exception {
+        stubTraceEvents();
+        stubExtractedText();
+        stubBookState(ProcessingStatus.AWAITING);
+        stubAudioView(null);
+        book.setName(tempDir.resolve("mi-libro").toString());
+
+        UUID block1 = UUID.randomUUID();
+        UUID block2 = UUID.randomUUID();
+        when(blockRepository.findAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockAudioViewRow(block1, Block.BlockType.CHAPTER, 1, 0, null),
+                new BlockAudioViewRow(block2, Block.BlockType.CHAPTER, 2, 1, null)));
+        lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(1L);
+        stubChunkViews(List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido")));
+        when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockChunkAudioViewRow(block1, ChunkStatus.COMPLETED, 0, "uno"),
+                new BlockChunkAudioViewRow(block2, ChunkStatus.COMPLETED, 0, "dos")));
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+            assertTrue(orchestrator.requestPause(bookId), "Pause must be accepted while running");
+            Path output = inv.getArgument(1);
+            Files.createDirectories(output.getParent());
+            Files.writeString(output, "fake mp3");
+            return true;
+        });
+
+        // Corrida COMPLETA (target FINALIZE): la pausa durante el audio debe
+        // detenerla en el checkpoint AUDIO→FINALIZE, no dejarla finalizar.
+        orchestrator.processBook(bookId, ProcessStep.FINALIZE).join();
+
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        // NUNCA se inicia el FINALIZE tras la pausa
+        verify(traceService, never()).startStep(eq(bookId), eq(ProcessStep.FINALIZE), anyString(), any());
+        verify(bookRepository, never()).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.COMPLETED);
+        // El checkpoint de runPipeline consume la pausa y deja el libro AWAITING
+        verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                ProcessingStatus.AWAITING);
+        verify(traceService, never()).failStep(any(), any());
+    }
 }

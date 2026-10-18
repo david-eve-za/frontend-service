@@ -79,6 +79,7 @@ public class DatabaseIndexInitializer {
                 log.warn("Could not ensure column for: {} ({})", migration.purpose(), e.getMessage());
             }
         }
+        ensureTraceStatusEnum();
         for (IndexDefinition index : INDEXES) {
             try {
                 // IF NOT EXISTS: a no-op when hbm2ddl already created it.
@@ -95,6 +96,73 @@ public class DatabaseIndexInitializer {
             log.debug("ANALYZE after index creation skipped: {}", e.getMessage());
         }
         log.info("Database indexes ensured ({} definitions)", INDEXES.size());
+    }
+
+    /**
+     * Ensures PROCESS_TRACE_EVENT.STATUS accepts the FULL enum. hbm2ddl
+     * maps {@code @Enumerated(STRING)} to H2's NATIVE ENUM type, so the
+     * column carries the value list TraceEventStatus had when the table
+     * was born — adding CANCELLED (pausas y stops del panel) did NOT
+     * update it, so every cancelStep exploded at persist time on the
+     * long-lived H2 file ("Valor no permitido para la columna
+     * ...'CANCELLED'") and the caller's catch degraded the pause into a
+     * FAILED run.
+     *
+     * <p>Two schema shapes are handled: (1) the real production shape, a
+     * native ENUM column — re-declared with the canonical 5-value list
+     * (H2 preserves the rows; multi-connection verified); (2) a legacy
+     * inline CHECK constraint — dropped, NOT replaced: H2 2.4.240 has a
+     * multi-session regression where a CHECK re-created after a drop is
+     * enforced with the STALE expression on other connections (works on
+     * 2.3.232 and in single sessions; verified with a standalone probe).
+     * The enum itself keeps being enforced by Java/Hibernate.</p>
+     */
+    void ensureTraceStatusEnum() {
+        try {
+            // (1) Columna ENUM nativa (la forma de hbm2ddl en H2): re-declarar
+            // con el enum canónico completo. Coste: reescritura de ~cientos
+            // de filas en el arranque; idempotente en efecto.
+            Integer enumColumns = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                            + "WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_NAME = 'PROCESS_TRACE_EVENT' "
+                            + "AND COLUMN_NAME = 'STATUS' AND DATA_TYPE = 'ENUM'",
+                    Integer.class);
+            if (enumColumns != null && enumColumns > 0) {
+                jdbcTemplate.execute("ALTER TABLE PROCESS_TRACE_EVENT ALTER COLUMN STATUS "
+                        + "ENUM('STARTED','COMPLETED','FAILED','SKIPPED','CANCELLED') NOT NULL");
+                log.info("ENUM de PROCESS_TRACE_EVENT.STATUS re-declarado con el enum completo "
+                        + "(CANCELLED incluido)");
+            }
+
+            // (2) CHECK legado de otra vintage de esquema: eliminarlo si no
+            // permite CANCELLED (H2 2.x: TABLE_CONSTRAINTS + CHECK_CONSTRAINTS).
+            List<String> definitions = jdbcTemplate.queryForList(
+                    "SELECT cc.CHECK_CLAUSE FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc "
+                            + "JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc "
+                            + "ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA "
+                            + "AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME "
+                            + "WHERE tc.CONSTRAINT_SCHEMA = 'PUBLIC' "
+                            + "AND tc.TABLE_NAME = 'PROCESS_TRACE_EVENT' "
+                            + "AND tc.CONSTRAINT_TYPE = 'CHECK'",
+                    String.class);
+            boolean allowsCancelled = definitions.stream()
+                    .allMatch(sql -> sql != null && sql.toUpperCase().contains("CANCELLED"));
+            if (definitions.isEmpty() || allowsCancelled) {
+                return; // sin CHECK legado (o ya con el enum completo)
+            }
+            List<String> names = jdbcTemplate.queryForList(
+                    "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
+                            + "WHERE CONSTRAINT_SCHEMA = 'PUBLIC' AND TABLE_NAME = 'PROCESS_TRACE_EVENT' "
+                            + "AND CONSTRAINT_TYPE = 'CHECK'",
+                    String.class);
+            for (String name : names) {
+                jdbcTemplate.execute("ALTER TABLE PROCESS_TRACE_EVENT DROP CONSTRAINT " + name);
+            }
+            log.info("CHECK obsoleto de PROCESS_TRACE_EVENT.STATUS eliminado ({} constraint(s)): "
+                    + "el enum se valida en Java/Hibernate", names.size());
+        } catch (Exception e) {
+            log.warn("Could not refresh the trace status enum: {}", e.getMessage());
+        }
     }
 
     private record IndexDefinition(String sql, String purpose) {

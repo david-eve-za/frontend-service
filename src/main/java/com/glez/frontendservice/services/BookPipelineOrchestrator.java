@@ -159,19 +159,44 @@ public class BookPipelineOrchestrator {
                     .orElseThrow(() -> new IllegalArgumentException("Book " + bookId + " not found"));
 
             if (state.getStatus() == ProcessingStatus.COMPLETED) {
-                log.info("Book {} is already completed; nothing to do", bookId);
-                return CompletableFuture.completedFuture(null);
+                // Excepción deliberada: la RE-GENERACIÓN manual del audiolibro
+                // de un libro completado es una acción legítima (nueva voz,
+                // audios borrados). Solo la etapa AUDIO explícita pasa; el
+                // auto-resume y cualquier otro objetivo siguen sin tocar el
+                // libro completado.
+                boolean audioRegeneration = manual && targetStep == ProcessStep.AUDIO;
+                if (!audioRegeneration) {
+                    log.info("Book {} is already completed; nothing to do", bookId);
+                    return CompletableFuture.completedFuture(null);
+                }
+                log.info("Book {} is completed: re-generating its audiobook (manual AUDIO stage)", bookId);
             }
             if (state.getStatus() == ProcessingStatus.STOPPED) {
                 log.info("Book {} is stopped; resume ignored", bookId);
                 return CompletableFuture.completedFuture(null);
             }
 
+            boolean wasCompleted = state.getStatus() == ProcessingStatus.COMPLETED;
             String traceId = UUID.randomUUID().toString().replace("-", "");
             bookRepository.updateStatusAndTrace(bookId, ProcessingStatus.PROCESSING, traceId);
 
             runPipeline(bookId, traceId, targetStep, blockIds, manual);
-            markAwaitingIfStoppedEarly(bookId, targetStep);
+            if (pauseRequests.contains(bookId)) {
+                // La corrida pausó a mitad del paso AUDIO (la petición no la
+                // consumió el paso): el libro queda AWAITING — visible en el
+                // panel con Arrancar para reanudar — incluso si antes estaba
+                // COMPLETED (re-generación de audiolibro pausada). Los mp3 ya
+                // generados se conservan y se saltan al reanudar.
+                pauseRequests.remove(bookId);
+                bookRepository.updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
+                        ProcessingStatus.AWAITING);
+            } else if (wasCompleted) {
+                // Un libro completado que re-generó su audio vuelve a quedar
+                // COMPLETED (update guardado: la corrida lo puso PROCESSING).
+                bookRepository.updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.COMPLETED);
+            } else {
+                markAwaitingIfStoppedEarly(bookId, targetStep);
+            }
             return CompletableFuture.completedFuture(null);
         } catch (PipelineStoppedException e) {
             // Stop explícito del usuario: el estado STOPPED ya lo persistió
@@ -291,6 +316,9 @@ public class BookPipelineOrchestrator {
         }
         if (userStopRequested(bookId)) {
             throw new PipelineStoppedException(bookId);
+        }
+        if (userPauseRequested(bookId)) {
+            return;
         }
         runFinalizeStep(bookId, traceId, manual);
     }
@@ -592,6 +620,27 @@ public class BookPipelineOrchestrator {
             Set<UUID> generatedIds = new java.util.HashSet<>();
             List<String> skipped = new ArrayList<>();
             for (int i = 0; i < blocks.size(); i++) {
+                // Granularidad de BLOQUE para los controles del panel: una
+                // pausa o un stop durante el audiolibro toman efecto al
+                // terminar el bloque en curso (no al terminar TODO el
+                // paso — un libro completo puede tardar la hora).
+                if (stopRequests.contains(bookId)) {
+                    traceService.cancelStep(event,
+                            "Pipeline detenido desde el panel durante el audio (bloques ya generados: "
+                                    + generatedIds.size() + "; los mp3 en disco se conservan)");
+                    throw new PipelineStoppedException(bookId);
+                }
+                if (pauseRequests.contains(bookId)) {
+                    // La petición NO se consume aquí: la consume el cierre de
+                    // processBook (marcando AWAITING — incluso si el libro
+                    // estaba COMPLETED por una re-generación pausada) o el
+                    // checkpoint de runPipeline en las corridas completas.
+                    // Reanudar salta los bloques que ya tienen su mp3.
+                    traceService.cancelStep(event,
+                            "Pausado desde el panel durante el audio (bloques ya generados: "
+                                    + generatedIds.size() + "; los mp3 en disco se conservan)");
+                    return;
+                }
                 BlockRepository.BlockAudioView block = blocks.get(i);
                 List<ChunksRepository.BlockChunkAudioView> blockChunks =
                         chunksByBlock.getOrDefault(block.getId(), List.of());
@@ -633,6 +682,11 @@ public class BookPipelineOrchestrator {
             }
             traceService.completeStep(event, generated + " block audio(s) generated in " + audioDir
                     + (skipped.isEmpty() ? "" : "; skipped: " + String.join(", ", skipped)));
+        } catch (PipelineStoppedException e) {
+            // Stop explícito del panel a mitad del audio: el estado STOPPED ya
+            // lo persistió requestStop — el catch de processBook termina la
+            // corrida en silencio; NUNCA debe caer en failAndAbort.
+            throw e;
         } catch (RuntimeException e) {
             failAndAbort(event, e);
         }
