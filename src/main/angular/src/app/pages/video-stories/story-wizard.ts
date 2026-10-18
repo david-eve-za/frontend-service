@@ -8,6 +8,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SelectModule } from 'primeng/select';
 import { ButtonModule } from 'primeng/button';
+import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
 import { TextareaModule } from 'primeng/textarea';
 import { TableModule } from 'primeng/table';
@@ -35,10 +36,18 @@ interface SelectOption {
  * produce los diseños de personajes; paso 3 historia+diseños producen la
  * biblioteca de ASSETS (entornos, props, tecnología, documentos, vehículos,
  * motifs con IDs estables); paso 4 historia+diseños producen las escenas;
- * paso 5 (opcional) una escena se transporta a la plantilla de generación
- * de video. Cada paso es UNA llamada a la rotación NVIDIA con fallback a
- * Ollama y puede tardar varios minutos; la salida de cada paso alimenta al
- * siguiente y todo queda persistido en el proyecto.
+ * paso 5 (opcional) la escena AUTO-SELECCIONADA (default: la primera) se
+ * transporta a la PLANTILLA MASTER de 15 secciones de generación de video,
+ * con una referencia opcional (archivo | URL | término de búsqueda web).
+ * Cada paso es UNA llamada a la rotación NVIDIA con fallback a Ollama y
+ * puede tardar varios minutos; la salida de cada paso alimenta al siguiente
+ * y todo queda persistido en el proyecto.
+ *
+ * <p><b>Modo automático</b> (por defecto): tras generar la historia, los
+ * pasos 2→5 se encadenan solos con los defaults — de un formulario a la
+ * plantilla MASTER completa con interacción humana nula; el botón
+ * «Completar automáticamente» reanuda los pasos pendientes de cualquier
+ * proyecto.</p>
  */
 @Component({
     selector: 'app-story-wizard',
@@ -56,6 +65,7 @@ interface SelectOption {
         ToastModule,
         TagModule,
         TooltipModule,
+        CheckboxModule,
     ],
     providers: [MessageService, ConfirmationService],
     template: `
@@ -89,10 +99,13 @@ interface SelectOption {
                 La timeline completa encadenada: la IA genera cada paso usando la
                 salida del anterior — historia, diseños de personajes,
                 biblioteca de assets (utensilios, objetos, mobiliario…),
-                escenas y la plantilla final de video (opcional). Cada paso
-                puede tardar <b>varios minutos</b> (rotación NVIDIA con fallback
-                al modelo local). Si un paso falla, puedes reintentarlo sin
-                perder el trabajo anterior.
+                escenas y la plantilla MASTER de video (15 secciones,
+                opcional). El <b>modo automático</b> encadena los pasos 2→5
+                tras la historia; el paso 5 usa la primera escena por defecto
+                y acepta una referencia opcional (archivo, URL o búsqueda
+                web). Cada paso puede tardar <b>varios minutos</b> (rotación
+                NVIDIA con fallback al modelo local). Si un paso falla,
+                puedes reintentarlo sin perder el trabajo anterior.
             </p>
 
             <!-- Indicador de la timeline -->
@@ -118,6 +131,27 @@ interface SelectOption {
                     [severity]="stepDone('video') ? 'success' : 'secondary'"
                 />
             </div>
+
+            <!-- ═══════ Cadena automática: botón de arranque + progreso ═══════ -->
+            @if (project(); as p) {
+                @if (autoRunning) {
+                    <div class="flex items-center gap-2 mb-4">
+                        <p-tag [value]="autoStep || 'Ejecutando…'" severity="info"></p-tag>
+                        <i class="pi pi-spin pi-spinner text-muted-color"></i>
+                    </div>
+                } @else if (pendingAutoSteps(p) > 0) {
+                    <div class="mb-4">
+                        <p-button
+                            [label]="'Completar automáticamente (' + pendingAutoSteps(p) + ' paso(s) pendiente(s))'"
+                            icon="pi pi-bolt"
+                            severity="success"
+                            [outlined]="true"
+                            size="small"
+                            (onClick)="runAllPendingSteps()"
+                        />
+                    </div>
+                }
+            }
 
             <!-- ═════════ PASO 1: HISTORIA ═════════ -->
             @if (!project()) {
@@ -404,6 +438,13 @@ interface SelectOption {
                         (onClick)="generateStory()"
                     />
                 </div>
+                <div class="flex items-center gap-2 mt-3">
+                    <p-checkbox [(ngModel)]="autoMode" [binary]="true" inputId="autoMode"></p-checkbox>
+                    <label for="autoMode" class="text-sm text-muted-color cursor-pointer">
+                        Modo automático: al generar la historia, encadenar los pasos 2→5
+                        (diseños, assets, escenas y plantilla MASTER de video) sin intervención
+                    </label>
+                </div>
             }
 
             @if (project(); as p) {
@@ -650,27 +691,41 @@ interface SelectOption {
                     <textarea pInputTextarea rows="8" class="w-full" readonly [value]="p.scenes"></textarea>
                 }
 
-                <!-- ═════════ PASO 4 (OPCIONAL): VIDEO ═════════ -->
+                <!-- ═══════ PASO 5 (OPCIONAL): PLANTILLA MASTER DE VIDEO ═══════ -->
                 @if (p.scenes) {
-                    <div class="font-semibold text-lg mt-6 mb-3">Paso 5 — Plantilla de Video (opcional)</div>
+                    <div class="font-semibold text-lg mt-6 mb-3">Paso 5 — Plantilla MASTER de Video</div>
                     <p class="text-muted-color text-sm mb-3">
-                        Pega UNA de las escenas generadas y la IA la transportará
-                        a la plantilla final lista para tu herramienta de video
-                        (Sora, Veo, Runway, Kling…). Puedes repetirlo con otra
-                        escena: se sobrescribe.
+                        La IA transporta UNA escena a la plantilla MASTER de 15 secciones
+                        (información del proyecto, ajustes globales, referencias de personajes y
+                        assets, timing, hoja de diálogo, cámara, audio, negativas, continuidad y
+                        validación) usando TODA la cadena aprobada. Sin tocar nada: un clic y se
+                        usa la primera escena. Opcionalmente aporta UNA referencia (archivo, URL
+                        o término de búsqueda web) como inspiración.
                     </p>
                     <div class="grid grid-cols-12 gap-4">
-                        <div class="col-span-12">
-                            <label class="block text-sm font-medium mb-2">Escena a convertir *</label>
-                            <textarea
-                                pInputTextarea
-                                rows="5"
-                                class="w-full"
-                                placeholder="Pega aquí una escena completa del paso 3 (SCENE 01, SCENE 02…)"
-                                [(ngModel)]="videoScene"
-                            ></textarea>
+                        <div class="col-span-6 md:col-span-3">
+                            <label class="block text-sm font-medium mb-2">Escena objetivo</label>
+                            @if (parsedSceneOptions.length > 0) {
+                                <p-select
+                                    [options]="parsedSceneOptions"
+                                    [(ngModel)]="videoSceneIndex"
+                                    optionLabel="label"
+                                    optionValue="value"
+                                    styleClass="w-full"
+                                    [showClear]="false"
+                                />
+                            } @else {
+                                <input
+                                    pInputText
+                                    type="number"
+                                    min="1"
+                                    class="w-full"
+                                    placeholder="Nº de escena (1, 2, 3…)"
+                                    [(ngModel)]="videoSceneIndex"
+                                />
+                            }
                         </div>
-                        <div class="col-span-12 md:col-span-6">
+                        <div class="col-span-6 md:col-span-3">
                             <label class="block text-sm font-medium mb-2">Estilo de animación 3D</label>
                             <p-select
                                 [options]="animationStyleOptions"
@@ -682,12 +737,63 @@ interface SelectOption {
                                 [showClear]="true"
                             />
                         </div>
+                        <div class="col-span-6 md:col-span-3">
+                            <label class="block text-sm font-medium mb-2">Referencia (opcional)</label>
+                            <p-select
+                                [options]="referenceModeOptions"
+                                [(ngModel)]="referenceMode"
+                                optionLabel="label"
+                                optionValue="value"
+                                styleClass="w-full"
+                                [showClear]="false"
+                            />
+                        </div>
+                        @switch (referenceMode) {
+                            @case ('file') {
+                                <div class="col-span-6 md:col-span-3">
+                                    <label class="block text-sm font-medium mb-2">Archivo de referencia</label>
+                                    <input
+                                        type="file"
+                                        class="text-sm w-full"
+                                        accept=".txt,.md,.markdown,.json,.csv,.xml,.yml,.yaml,.html,.htm,.log,text/plain,text/markdown"
+                                        (change)="onReferenceFile($event)"
+                                    />
+                                    @if (referenceFileName) {
+                                        <small class="text-muted-color">{{ referenceFileName }}</small>
+                                    }
+                                </div>
+                            }
+                            @case ('url') {
+                                <div class="col-span-6 md:col-span-3">
+                                    <label class="block text-sm font-medium mb-2">URL de referencia</label>
+                                    <input
+                                        pInputText
+                                        type="url"
+                                        class="w-full"
+                                        placeholder="https://…"
+                                        [(ngModel)]="referenceUrl"
+                                    />
+                                </div>
+                            }
+                            @case ('search') {
+                                <div class="col-span-6 md:col-span-3">
+                                    <label class="block text-sm font-medium mb-2">Buscar en la web</label>
+                                    <input
+                                        pInputText
+                                        type="text"
+                                        class="w-full"
+                                        placeholder="Término a buscar (p. ej. «panaderías de Kioto»)…"
+                                        [(ngModel)]="referenceSearch"
+                                    />
+                                </div>
+                            }
+                        }
                     </div>
                     <div class="mt-4">
                         <p-button
-                            label="Generar Plantilla de Video"
+                            label="Generar Plantilla MASTER de Video"
                             icon="pi pi-magic"
-                            [disabled]="!videoFormValid() || generatingVideo"
+                            [disabled]="generatingVideo"
                             [loading]="generatingVideo"
                             severity="secondary"
                             (onClick)="generateVideo()"
@@ -697,7 +803,7 @@ interface SelectOption {
 
                 @if (p.videoPrompt) {
                     <div class="flex items-center justify-between mt-4 mb-2">
-                        <div class="font-semibold text-lg">Plantilla de video</div>
+                        <div class="font-semibold text-lg">Plantilla MASTER de video</div>
                         <p-button
                             icon="pi pi-copy"
                             severity="secondary"
@@ -891,9 +997,24 @@ export class StoryWizard {
     speakerSecond = '';
     sceneLanguage = 'Spanish';
 
-    // ── Paso 4: video (opcional). ──
-    videoScene = '';
+    // ── Paso 5: plantilla MASTER de video (cero interacción obligatoria). ──
+    /** Índice 1-based de la escena objetivo (default: la primera). */
+    videoSceneIndex = 1;
     videoStyle: string | null = null;
+    /** Escenas del paso 4 parseadas para el selector (mismo formato que el backend). */
+    parsedSceneOptions: { label: string; value: number }[] = [];
+    /** Modo de la referencia opcional: ninguna | archivo | url | búsqueda. */
+    referenceMode: 'none' | 'file' | 'url' | 'search' = 'none';
+    referenceUrl = '';
+    referenceSearch = '';
+    /** Contenido de texto del archivo de referencia (leído en el navegador). */
+    referenceFileContent: string | null = null;
+    referenceFileName: string | null = null;
+
+    // ── Modo automático: encadena 2→5 tras la historia o a demanda. ──
+    autoMode = true;
+    autoRunning = false;
+    autoStep = '';
 
     // ── Selectores (etiqueta ES, valor EN). ──
     readonly genreOptions: SelectOption[] = [
@@ -1014,6 +1135,14 @@ export class StoryWizard {
         { label: '6 personajes', value: 6 },
     ];
 
+    /** Modos de la referencia opcional del paso 5. */
+    readonly referenceModeOptions: SelectOption[] = [
+        { label: 'Ninguna', value: 'none' },
+        { label: 'Archivo', value: 'file' },
+        { label: 'URL', value: 'url' },
+        { label: 'Búsqueda web', value: 'search' },
+    ];
+
     readonly sceneAvgOptions: { label: string; value: number }[] = [
         { label: '5 s/escena', value: 5 },
         { label: '8 s/escena', value: 8 },
@@ -1126,6 +1255,11 @@ export class StoryWizard {
                     });
                     this.loadProjects();
                     this.cdr.markForCheck();
+                    // Modo automático: la cadena 2→5 arranca sola (nula
+                    // interacción tras el formulario de historia).
+                    if (this.autoMode) {
+                        this.runAllPendingSteps();
+                    }
                 },
                 error: (message: string) => {
                     this.generatingStory = false;
@@ -1145,7 +1279,7 @@ export class StoryWizard {
         return !!this.designStyle;
     }
 
-    generateDesigns() {
+    generateDesigns(onDone?: () => void) {
         const p = this.project();
         if (!p || !this.designsFormValid() || this.generatingDesigns) return;
         this.generatingDesigns = true;
@@ -1168,9 +1302,11 @@ export class StoryWizard {
                     });
                     this.loadProjects();
                     this.cdr.markForCheck();
+                    onDone?.();
                 },
                 error: (message: string) => {
                     this.generatingDesigns = false;
+                    if (this.autoRunning) this.finishAutoChain(false);
                     this.messageService.add({
                         sticky: true, severity: 'error',
                         summary: 'Fallo el paso 2',
@@ -1183,7 +1319,7 @@ export class StoryWizard {
 
     // ═══════════════ PASO 3: assets ═══════════════
 
-    generateAssets() {
+    generateAssets(onDone?: () => void) {
         const p = this.project();
         if (!p || this.generatingAssets) return;
         this.generatingAssets = true;
@@ -1206,9 +1342,11 @@ export class StoryWizard {
                     });
                     this.loadProjects();
                     this.cdr.markForCheck();
+                    onDone?.();
                 },
                 error: (message: string) => {
                     this.generatingAssets = false;
+                    if (this.autoRunning) this.finishAutoChain(false);
                     this.messageService.add({
                         sticky: true, severity: 'error',
                         summary: 'Fallo el paso 3',
@@ -1221,7 +1359,7 @@ export class StoryWizard {
 
     // ═══════════════ PASO 4: escenas ═══════════════
 
-    generateScenes() {
+    generateScenes(onDone?: () => void) {
         const p = this.project();
         if (!p || this.generatingScenes) return;
         this.generatingScenes = true;
@@ -1237,58 +1375,21 @@ export class StoryWizard {
                 next: (project) => {
                     this.generatingScenes = false;
                     this.project.set(project);
-                    // El estilo del paso 4 por defecto es el del paso 2.
+                    // El estilo del paso 5 por defecto es el del paso 2.
                     this.videoStyle = project.designStyle ?? this.videoStyle;
+                    this.refreshSceneOptions(project.scenes);
                     this.messageService.add({
                         severity: 'success',
                         summary: 'Escenas generadas',
-                        detail: 'El paso 4 (opcional) ya está disponible.',
+                        detail: 'El paso 5 (plantilla MASTER de video) ya está disponible.',
                     });
                     this.loadProjects();
                     this.cdr.markForCheck();
+                    onDone?.();
                 },
                 error: (message: string) => {
                     this.generatingScenes = false;
-                    this.messageService.add({
-                        sticky: true, severity: 'error',
-                        summary: 'Fallo el paso 3',
-                        detail: message,
-                    });
-                    this.cdr.markForCheck();
-                },
-            });
-    }
-
-    // ═══════════════ PASO 5 (opcional): video ═══════════════
-
-    videoFormValid(): boolean {
-        return this.videoScene.trim().length > 0;
-    }
-
-    generateVideo() {
-        const p = this.project();
-        if (!p || !this.videoFormValid() || this.generatingVideo) return;
-        this.generatingVideo = true;
-
-        this.client
-            .generateVideo(p.id, {
-                scene: this.videoScene.trim(),
-                animationStyle: this.videoStyle,
-            })
-            .subscribe({
-                next: (project) => {
-                    this.generatingVideo = false;
-                    this.project.set(project);
-                    this.messageService.add({
-                        severity: 'success',
-                        summary: 'Plantilla de video lista',
-                        detail: 'Cópiala a tu herramienta de video.',
-                    });
-                    this.loadProjects();
-                    this.cdr.markForCheck();
-                },
-                error: (message: string) => {
-                    this.generatingVideo = false;
+                    if (this.autoRunning) this.finishAutoChain(false);
                     this.messageService.add({
                         sticky: true, severity: 'error',
                         summary: 'Fallo el paso 4',
@@ -1297,6 +1398,200 @@ export class StoryWizard {
                     this.cdr.markForCheck();
                 },
             });
+    }
+
+    // ═══════════════ PASO 5 (opcional): plantilla MASTER de video ═══════════════
+
+    generateVideo(onDone?: () => void) {
+        const p = this.project();
+        if (!p || this.generatingVideo) return;
+        this.generatingVideo = true;
+
+        // Cero interacción: sin escena elegida el backend usa la PRIMERA; la
+        // referencia solo se envía en el modo activo (el backend admite UNA).
+        this.client
+            .generateVideo(p.id, {
+                sceneIndex: this.videoSceneIndex,
+                animationStyle: this.videoStyle,
+                referenceFileContent:
+                    this.referenceMode === 'file' ? this.referenceFileContent : null,
+                referenceUrl:
+                    this.referenceMode === 'url' ? this.referenceUrl.trim() || null : null,
+                referenceSearch:
+                    this.referenceMode === 'search' ? this.referenceSearch.trim() || null : null,
+            })
+            .subscribe({
+                next: (project) => {
+                    this.generatingVideo = false;
+                    this.project.set(project);
+                    this.messageService.add({
+                        severity: 'success',
+                        summary: 'Plantilla MASTER de video lista',
+                        detail: 'Cópiala a tu herramienta de video (Sora, Veo, Runway, Kling…).',
+                    });
+                    this.loadProjects();
+                    this.cdr.markForCheck();
+                    onDone?.();
+                },
+                error: (message: string) => {
+                    this.generatingVideo = false;
+                    if (this.autoRunning) this.finishAutoChain(false);
+                    this.messageService.add({
+                        sticky: true, severity: 'error',
+                        summary: 'Fallo el paso 5',
+                        detail: message,
+                    });
+                    this.cdr.markForCheck();
+                },
+            });
+    }
+
+    /**
+     * Lee el archivo de referencia en el navegador: solo texto plano
+     * (txt/md/json/csv/xml/html…), máximo 500 KB — no hay persistencia de
+     * archivos, el contenido viaja en la petición del paso 5.
+     */
+    onReferenceFile(event: Event): void {
+        const input = event.target as HTMLInputElement;
+        const file = input.files?.[0];
+        if (!file) {
+            this.referenceFileContent = null;
+            this.referenceFileName = null;
+            return;
+        }
+        if (file.size > 500 * 1024) {
+            this.referenceFileContent = null;
+            this.referenceFileName = null;
+            input.value = '';
+            this.messageService.add({
+                sticky: true, severity: 'error',
+                summary: 'Archivo demasiado grande',
+                detail: 'La referencia de texto admite un máximo de 500 KB.',
+            });
+            this.cdr.markForCheck();
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+            this.referenceFileContent = String(reader.result ?? '');
+            this.referenceFileName = `${file.name} (${file.size} B)`;
+            this.cdr.markForCheck();
+        };
+        reader.onerror = () => {
+            this.referenceFileContent = null;
+            this.referenceFileName = null;
+            this.messageService.add({
+                sticky: true, severity: 'error',
+                summary: 'Error',
+                detail: 'No se pudo leer el archivo de referencia.',
+            });
+            this.cdr.markForCheck();
+        };
+        reader.readAsText(file);
+    }
+
+    /**
+     * Escenas del paso 4 parseadas para el selector (la MISMA regla del
+     * backend): una línea que solo contiene «SCENE NN» abre cada bloque.
+     */
+    private refreshSceneOptions(scenes: string | null | undefined): void {
+        this.videoSceneIndex = 1;
+        if (!scenes) {
+            this.parsedSceneOptions = [];
+            return;
+        }
+        const headers = [...scenes.matchAll(/^\s*SCENE\s+(\d+)\s*$/gm)];
+        if (headers.length === 0) {
+            this.parsedSceneOptions = [];
+            return;
+        }
+        this.parsedSceneOptions = headers.map((match, i) => ({
+            label: `Escena ${Number(match[1])} (SCENE ${match[1]})`,
+            value: i + 1,
+        }));
+    }
+
+    // ═══════════════ Cadena automática (mínima/nula interacción) ═══════════════
+
+    /** Pasos pendientes de la cadena 2→5 del proyecto. */
+    pendingAutoSteps(p: VideoStoryProject): number {
+        let pending = 0;
+        if (!p.designs) pending++;
+        if (!p.assets) pending++;
+        if (!p.scenes) pending++;
+        if (!p.videoPrompt) pending++;
+        return pending;
+    }
+
+    /**
+     * Encadena automáticamente los pasos pendientes 2→5 con los valores
+     * actuales de los formularios y sus defaults (estilo Pixar si no se
+     * eligió otro, 16:9, 10 s/escena, español, primera escena, sin
+     * referencia) — reutilizando los endpoints existentes paso a paso.
+     */
+    runAllPendingSteps(): void {
+        const p = this.project();
+        if (!p || this.autoRunning) return;
+        this.autoRunning = true;
+        this.autoStep = 'Preparando la cadena automática…';
+        this.cdr.markForCheck();
+        this.runNextPendingStep();
+    }
+
+    /** Lanza el siguiente paso pendiente; al completarse continúa la cadena. */
+    private runNextPendingStep(): void {
+        const p = this.project();
+        if (!p) {
+            this.finishAutoChain(false);
+            return;
+        }
+        if (!p.designs) {
+            this.autoStep = 'Ejecutando paso 2 de 5 (diseños)…';
+            // Default del estilo: el elegido o el primero de la lista.
+            this.designStyle = this.designStyle ?? this.animationStyleOptions[0].value;
+            this.cdr.markForCheck();
+            this.generateDesigns(() => this.runNextPendingStep());
+            return;
+        }
+        if (!p.assets) {
+            this.autoStep = 'Ejecutando paso 3 de 5 (assets)…';
+            this.cdr.markForCheck();
+            this.generateAssets(() => this.runNextPendingStep());
+            return;
+        }
+        if (!p.scenes) {
+            this.autoStep = 'Ejecutando paso 4 de 5 (escenas)…';
+            this.cdr.markForCheck();
+            this.generateScenes(() => this.runNextPendingStep());
+            return;
+        }
+        if (!p.videoPrompt) {
+            this.autoStep = 'Ejecutando paso 5 de 5 (plantilla MASTER de video)…';
+            this.cdr.markForCheck();
+            this.generateVideo(() => this.runNextPendingStep());
+            return;
+        }
+        this.finishAutoChain(true);
+    }
+
+    /**
+     * Cierra la cadena automática: toast de cadena completa SOLO si llegó
+     * al final; un fallo del paso ya mostró su propio toast sticky y solo
+     * se restaura el estado.
+     */
+    private finishAutoChain(succeeded: boolean): void {
+        const wasRunning = this.autoRunning;
+        this.autoRunning = false;
+        this.autoStep = '';
+        if (wasRunning && succeeded) {
+            this.messageService.add({
+                severity: 'success',
+                summary: 'Cadena automática completa',
+                detail: 'Historia → diseños → assets → escenas → plantilla MASTER de video.',
+            });
+        }
+        this.loadProjects();
+        this.cdr.markForCheck();
     }
 
     // ═══════════════ Biblioteca ═══════════════
@@ -1337,8 +1632,16 @@ export class StoryWizard {
         this.speakerFirst = '';
         this.speakerSecond = '';
         this.sceneLanguage = 'Spanish';
-        this.videoScene = '';
+        this.videoSceneIndex = 1;
+        this.parsedSceneOptions = [];
         this.videoStyle = null;
+        this.referenceMode = 'none';
+        this.referenceUrl = '';
+        this.referenceSearch = '';
+        this.referenceFileContent = null;
+        this.referenceFileName = null;
+        this.autoRunning = false;
+        this.autoStep = '';
     }
 
     openProject(summary: VideoStoryProjectSummary) {
@@ -1445,6 +1748,12 @@ export class StoryWizard {
                 this.speakerSecond = project.sceneSpeaker2 ?? '';
                 this.sceneAvgSeconds = project.sceneAvgSeconds ?? 10;
                 this.videoStyle = project.designStyle ?? null;
+                this.refreshSceneOptions(project.scenes);
+                this.referenceMode = 'none';
+                this.referenceUrl = '';
+                this.referenceSearch = '';
+                this.referenceFileContent = null;
+                this.referenceFileName = null;
                 this.messageService.add({
                     severity: 'success',
                     summary: 'Proyecto cargado',
