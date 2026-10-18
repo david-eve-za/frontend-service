@@ -272,6 +272,44 @@ public class FileProcessingController {
         return ResponseEntity.accepted().body(response);
     }
 
+    @Operation(summary = "Set the book's Edge TTS voice",
+            description = "Persists the Edge TTS voice selected for THIS book's audiobook (short name like "
+                    + "'es-MX-JorgeNeural'; empty/null clears back to the default app.audio.voice). "
+                    + "The voice applies to every audio run of the book — both the Generar Audiolibro page "
+                    + "and the novels manager. Bulk update: the book entity (and its full_text CLOB) is "
+                    + "never loaded.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Voice saved", content = @Content),
+            @ApiResponse(responseCode = "400", description = "Invalid voice format", content = @Content),
+            @ApiResponse(responseCode = "404", description = "Book not found", content = @Content)
+    })
+    @PutMapping("/{bookId}/tts-voice")
+    public ResponseEntity<Map<String, Object>> setBookTtsVoice(
+            @Parameter(description = "ID of the book", required = true)
+            @PathVariable UUID bookId,
+            @Parameter(description = "Edge TTS short voice name; empty clears to the default")
+            @RequestBody(required = false) Map<String, String> body) {
+        Map<String, Object> response = new HashMap<>();
+        if (!bookRepository.existsById(bookId)) {
+            response.put("error", "Book " + bookId + " not found.");
+            return ResponseEntity.notFound().build();
+        }
+        String voice = body != null ? body.get("voice") : null;
+        String normalized = (voice == null || voice.isBlank()) ? null : voice.trim();
+        if (normalized != null && !com.glez.frontendservice.tts.EdgeTtsClient.isValidShortVoice(normalized)) {
+            response.put("error", "Invalid Edge TTS voice '" + normalized
+                    + "': expected a short name like es-MX-JorgeNeural.");
+            return ResponseEntity.badRequest().body(response);
+        }
+        bookRepository.updateTtsVoiceInBulk(bookId, normalized);
+        response.put("message", normalized != null
+                ? "Voz del audiolibro fijada a " + normalized
+                : "Voz del audiolibro devuelta a la de por defecto");
+        response.put("bookId", bookId);
+        response.put("voice", normalized);
+        return ResponseEntity.ok(response);
+    }
+
     @Operation(summary = "Get processing timeline",
             description = "Full trace of every pipeline step attempt of a book: step, status, attempts, durations and errors.")
     @GetMapping("/{bookId}/trace")

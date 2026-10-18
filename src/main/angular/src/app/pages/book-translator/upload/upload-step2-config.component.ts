@@ -13,7 +13,12 @@ import {
 
 export interface ProcessingConfig {
     targetLanguage: string;
-    ttsVoice: string;
+}
+
+/** Opción del combo de voces REALES de Edge TTS (short names del servicio). */
+export interface EdgeVoiceOption {
+    label: string;
+    value: string;
 }
 
 /** Clave de persistencia local de la configuración de generación de audio. */
@@ -97,21 +102,24 @@ export interface TranslatedBookOption {
                 }
             </div>
 
-            <!-- TTS Voice -->
+            <!-- Voz Edge TTS del audiolibro (se persiste por libro en la BD) -->
             <div class="mb-6">
-                <label class="block text-sm font-medium mb-2">Voz TTS *</label>
+                <label class="block text-sm font-medium mb-2"
+                    >Voz del audiolibro *</label
+                >
                 <p-select
-                    [options]="ttsVoices"
-                    [(ngModel)]="config.ttsVoice"
+                    [options]="edgeVoiceOptions"
+                    [(ngModel)]="selectedVoice"
                     optionLabel="label"
                     optionValue="value"
-                    placeholder="Seleccionar voz"
                     styleClass="w-full"
                     [showClear]="false"
                 >
                 </p-select>
                 <small class="text-gray-500"
-                    >Voz para generar el audiolibro</small
+                    >Voces REALES de Edge TTS (Microsoft) — se guarda en el libro
+                    seleccionado y se aplica a todas sus corridas de audio,
+                    incluido el botón «Crear Audio» del gestor de novelas.</small
                 >
             </div>
 
@@ -184,7 +192,6 @@ export interface TranslatedBookOption {
 export class UploadStep2ConfigComponent implements OnInit {
     config: ProcessingConfig = {
         targetLanguage: 'es',
-        ttsVoice: 'Paulina',
     };
 
     /** Libros ya traducidos (todos los chunks COMPLETED), para el combo. */
@@ -205,23 +212,27 @@ export class UploadStep2ConfigComponent implements OnInit {
         { label: 'Coreano (ko)', value: 'ko' },
     ];
 
-    ttsVoices = [
-        { label: 'Paulina (Español - macOS)', value: 'Paulina' },
-        { label: 'Monica (Español - macOS)', value: 'Monica' },
-        { label: 'Jorge (Español - macOS)', value: 'Jorge' },
-        { label: 'Samantha (Inglés - macOS)', value: 'Samantha' },
-        { label: 'Alex (Inglés - macOS)', value: 'Alex' },
-        { label: 'Victoria (Inglés - macOS)', value: 'Victoria' },
-        { label: 'Amelie (Francés - macOS)', value: 'Amelie' },
-        { label: 'Yannick (Francés - macOS)', value: 'Yannick' },
-        { label: 'Anna (Alemán - macOS)', value: 'Anna' },
-        { label: 'Markus (Alemán - macOS)', value: 'Markus' },
-        { label: 'Luca (Italiano - macOS)', value: 'Luca' },
-        { label: 'Joana (Portugués - macOS)', value: 'Joana' },
-        { label: 'Tingting (Chino - macOS)', value: 'Tingting' },
-        { label: 'Kyoko (Japonés - macOS)', value: 'Kyoko' },
-        { label: 'Yuna (Coreano - macOS)', value: 'Yuna' },
+    // Voces REALES de Edge TTS (nombres cortos del servicio — la síntesis
+    // nunca usó las voces de macOS 'say' que ofrecía esta página antes).
+    // Por defecto: es-MX-DaliaNeural (app.audio.voice del backend).
+    edgeVoices: EdgeVoiceOption[] = [
+        { label: 'Dalia — español México (por defecto)', value: 'es-MX-DaliaNeural' },
+        { label: 'Jorge — español México', value: 'es-MX-JorgeNeural' },
+        { label: 'Beatriz — español México', value: 'es-MX-BeatrizNeural' },
+        { label: 'Catalina — español México', value: 'es-MX-CatalinaNeural' },
+        { label: 'Emilio — español México', value: 'es-MX-EmilioNeural' },
+        { label: 'Elvira — español España', value: 'es-ES-ElviraNeural' },
+        { label: 'Álvaro — español España', value: 'es-ES-AlvaroNeural' },
+        { label: 'Laia — español España', value: 'es-ES-LaiaNeural' },
+        { label: 'Pablo — español España', value: 'es-ES-PabloNeural' },
+        { label: 'Abrela — español España', value: 'es-ES-AbrelaNeural' },
+        { label: 'Emma — inglés, multilingüe (habla español)', value: 'en-US-EmmaMultilingualNeural' },
+        { label: 'Aria — inglés EE. UU.', value: 'en-US-AriaNeural' },
+        { label: 'Guy — inglés EE. UU.', value: 'en-US-GuyNeural' },
     ];
+
+    /** Voz elegida para el libro seleccionado; 'default' = la del backend. */
+    selectedVoice = 'default';
 
     constructor(
         private messageService: MessageService,
@@ -308,11 +319,16 @@ export class UploadStep2ConfigComponent implements OnInit {
     }
 
     isValid(): boolean {
-        return !!this.config.targetLanguage && !!this.config.ttsVoice;
+        return !!this.config.targetLanguage;
     }
 
     get canGenerate(): boolean {
         return !!this.selectedBookId && !this.generating && !this.loadingBooks;
+    }
+
+    /** Opciones del combo: la de por defecto + las voces reales de Edge. */
+    get edgeVoiceOptions(): EdgeVoiceOption[] {
+        return this.edgeVoices;
     }
 
     saveConfig() {
@@ -340,31 +356,55 @@ export class UploadStep2ConfigComponent implements OnInit {
      * Lanza la etapa de AUDIO del libro seleccionado (to=AUDIO): etapa
      * manual e independiente, reanudable — los bloques que ya tienen su
      * mp3 en disco se saltan y solo se generan los pendientes.
+     *
+     * Primero PERSISTE la voz elegida en el libro (PUT tts-voice — update
+     * en bloque, sin cargar el CLOB) y luego dispara: la voz queda en la
+     * BD y TODAS las corridas futuras del libro la usan (incluido el
+     * botón Crear Audio del gestor de novelas, que comparte el Book).
      */
     generateAudioBook() {
         if (!this.canGenerate || !this.selectedBookId) return;
         this.generating = true;
-        this.uploadService.generateAudioBook(this.selectedBookId).subscribe({
+        const bookId = this.selectedBookId;
+        const voice = this.selectedVoice === 'default' ? null : this.selectedVoice;
+        this.uploadService.setBookTtsVoice(bookId, voice).subscribe({
             next: () => {
-                this.generating = false;
-                const name = this.translatedOptions.find(
-                    (o) => o.value === this.selectedBookId,
-                )?.label;
-                this.messageService.add({
-                    severity: 'success',
-                    summary: 'Audiolibro en marcha',
-                    detail:
-                        `Generación iniciada para ${name ?? 'el libro'}. ` +
-                        'Sigue el avance en el Panel de estado → Procesos (o desde su botón «Ver logs»).',
+                this.uploadService.generateAudioBook(bookId).subscribe({
+                    next: () => {
+                        this.generating = false;
+                        const name = this.translatedOptions.find(
+                            (o) => o.value === bookId,
+                        )?.label;
+                        const voiceLabel = voice
+                            ? ` con la voz ${voice}`
+                            : ' con la voz por defecto';
+                        this.messageService.add({
+                            severity: 'success',
+                            summary: 'Audiolibro en marcha',
+                            detail:
+                                `Generación iniciada para ${name ?? 'el libro'}${voiceLabel}. ` +
+                                'Sigue el avance en el Panel de estado → Procesos (o desde su botón «Ver logs»).',
+                        });
+                        this.cdr.markForCheck();
+                    },
+                    error: (err) => {
+                        this.generating = false;
+                        this.messageService.add({
+                            sticky: true,
+                            severity: 'error',
+                            summary: 'No se pudo iniciar la generación',
+                            detail: err?.error?.error ?? err?.message ?? 'error',
+                        });
+                        this.cdr.markForCheck();
+                    },
                 });
-                this.cdr.markForCheck();
             },
             error: (err) => {
                 this.generating = false;
                 this.messageService.add({
                     sticky: true,
                     severity: 'error',
-                    summary: 'No se pudo iniciar la generación',
+                    summary: 'No se pudo fijar la voz del audiolibro',
                     detail: err?.error?.error ?? err?.message ?? 'error',
                 });
                 this.cdr.markForCheck();

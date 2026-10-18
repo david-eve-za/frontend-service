@@ -79,17 +79,31 @@ public class EdgeTtsClient {
 
     /**
      * Synthesizes the given text to an MP3 audio file using Microsoft Edge's
-     * online text-to-speech service.
+     * online text-to-speech service with the DEFAULT voice (app.audio.voice).
      *
      * @param text        the text to synthesize
      * @param outputPath  the file where the MP3 audio will be written
      * @throws EdgeTtsException if the synthesis fails for any reason
      */
     public void synthesizeToFile(String text, Path outputPath) {
+        synthesizeToFile(text, outputPath, null);
+    }
+
+    /**
+     * Synthesizes with a PER-REQUEST voice override (short name like
+     * {@code es-MX-JorgeNeural}): la voz de cada audiolibro vive en su
+     * Book y llega aquí como parámetro — el cliente es un singleton
+     * compartido entre libros concurrentes, así que la voz JAMÁS se
+     * muta en un campo. null/blank = la voz por defecto de la config.
+     * El formato se valida con {@link #resolveVoice(String)} (invalida
+     * ANTES de abrir el WebSocket).
+     */
+    public void synthesizeToFile(String text, Path outputPath, String voiceOverride) {
         if (text == null || text.isBlank()) {
             throw new EdgeTtsException("Text must not be null or blank.");
         }
-        validateSettings();
+        String effectiveVoice = (voiceOverride == null || voiceOverride.isBlank()) ? voice : voiceOverride;
+        validateSettings(effectiveVoice);
 
         String processed = EdgeTtsTextUtils.escapeXml(
                 EdgeTtsTextUtils.removeIncompatibleCharacters(text));
@@ -99,7 +113,7 @@ public class EdgeTtsClient {
         long totalAudioBytes = 0;
         try (OutputStream out = Files.newOutputStream(outputPath)) {
             for (String chunk : chunks) {
-                totalAudioBytes += synthesizeChunk(chunk, out);
+                totalAudioBytes += synthesizeChunk(chunk, out, effectiveVoice);
             }
         } catch (IOException e) {
             throw new EdgeTtsException("Failed to write audio to " + outputPath, e);
@@ -120,14 +134,14 @@ public class EdgeTtsClient {
      * skew correction when the service answers 403 (mirrors the Python DRM
      * error handling).
      */
-    private long synthesizeChunk(String escapedChunk, OutputStream out) {
+    private long synthesizeChunk(String escapedChunk, OutputStream out, String effectiveVoice) {
         try {
-            return streamChunkAudio(escapedChunk, out);
+            return streamChunkAudio(escapedChunk, out, effectiveVoice);
         } catch (WebSocketHandshakeException e) {
             handleHandshakeError(e);
             log.debug("Retrying Edge TTS request after clock skew adjustment");
             try {
-                return streamChunkAudio(escapedChunk, out);
+                return streamChunkAudio(escapedChunk, out, effectiveVoice);
             } catch (WebSocketHandshakeException retry) {
                 throw new EdgeTtsException.WebSocketError(
                         "Handshake failed after skew retry: " + retry.getMessage(), retry);
@@ -139,7 +153,7 @@ public class EdgeTtsClient {
         }
     }
 
-    private long streamChunkAudio(String escapedChunk, OutputStream out) throws IOException {
+    private long streamChunkAudio(String escapedChunk, OutputStream out, String effectiveVoice) throws IOException {
         URI uri = URI.create(EdgeTtsProtocol.WSS_URL
                 + "&ConnectionId=" + connectId()
                 + "&Sec-MS-GEC=" + EdgeTtsDrm.generateSecMsGec()
@@ -162,7 +176,7 @@ public class EdgeTtsClient {
             holder.webSocket = webSocket;
 
             webSocket.sendText(speechConfigMessage(), true).join();
-            webSocket.sendText(ssmlRequestMessage(escapedChunk), true).join();
+            webSocket.sendText(ssmlRequestMessage(escapedChunk, effectiveVoice), true).join();
 
             return pumpEvents(listener, out);
         } catch (CompletionException e) {
@@ -235,7 +249,12 @@ public class EdgeTtsClient {
     }
 
     void validateSettings() {
-        resolveVoice(voice);
+        validateSettings(voice);
+    }
+
+    /** Validación con la voz EFECTIVA de la petición (override incluido). */
+    void validateSettings(String effectiveVoice) {
+        resolveVoice(effectiveVoice);
         if (!RATE_VOLUME_PATTERN.matcher(rate).matches()) {
             throw new IllegalArgumentException("Invalid rate '" + rate + "'.");
         }
@@ -278,6 +297,15 @@ public class EdgeTtsClient {
         return voice;
     }
 
+    /**
+     * Valida el formato de una voz en forma corta de Edge TTS (la misma
+     * expresión que usa el SSML): la usa el endpoint que fija la voz de un
+     * libro ANTES de tocar la BD.
+     */
+    public static boolean isValidShortVoice(String voice) {
+        return voice != null && VOICE_SHORT_NAME.matcher(voice).matches();
+    }
+
     private String speechConfigMessage() {
         return "X-Timestamp:" + dateToString() + "\r\n"
                 + "Content-Type:application/json; charset=utf-8\r\n"
@@ -285,9 +313,9 @@ public class EdgeTtsClient {
                 + EdgeTtsProtocol.SPEECH_CONFIG_MESSAGE;
     }
 
-    private String ssmlRequestMessage(String escapedChunk) {
+    private String ssmlRequestMessage(String escapedChunk, String effectiveVoice) {
         String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>"
-                + "<voice name='" + resolveVoice(voice) + "'>"
+                + "<voice name='" + resolveVoice(effectiveVoice) + "'>"
                 + "<prosody pitch='" + pitch + "' rate='" + rate + "' volume='" + volume + "'>"
                 + escapedChunk
                 + "</prosody>"

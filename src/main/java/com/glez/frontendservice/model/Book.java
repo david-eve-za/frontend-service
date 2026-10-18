@@ -42,6 +42,16 @@ public class Book {
     @Column(name = "audio_file_path")
     private String audioFilePath;
 
+    /**
+     * Voz de Edge TTS elegida para ESTE audiolibro (p. ej.
+     * "es-MX-JorgeNeural"); null = la voz por defecto de
+     * app.audio.voice. La selección por libro vive en la BD y la aplican
+     * TODAS las corridas de audio del libro (página Generar Audiolibro y
+     * gestor de novelas por igual).
+     */
+    @Column(name = "tts_voice", length = 64)
+    private String ttsVoice;
+
     @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Chunks> chunks;
 }

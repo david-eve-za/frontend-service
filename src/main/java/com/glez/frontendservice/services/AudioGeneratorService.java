@@ -75,6 +75,16 @@ public class AudioGeneratorService {
      * única (el splitter lo descartaría en silencio).</p>
      */
     public boolean processTextToAudio(String textContent, Path outputFilename) {
+        return processTextToAudio(textContent, outputFilename, null);
+    }
+
+    /**
+     * Sintetiza con la voz Edge TTS del LIBRO (null = voz por defecto de
+     * app.audio.voice): la voz viaja como PARÁMETRO — el servicio es un
+     * singleton y varios audiolibros se generan en paralelo, mutar un
+     * campo sería una carrera.
+     */
+    public boolean processTextToAudio(String textContent, Path outputFilename, String ttsVoice) {
         if (textContent == null || textContent.isBlank()) {
             log.warn("El texto de entrada está vacío. Saltando generación de audio.");
             return false;
@@ -108,7 +118,7 @@ public class AudioGeneratorService {
                         ttsConcurrency.acquireUninterruptibly();
                         try {
                             Path chunkPath = tempDir.resolve(String.format("chunk_%04d.mp3", index));
-                            return textToAudio(normalized, chunkPath) ? chunkPath : null;
+                            return textToAudio(normalized, chunkPath, ttsVoice) ? chunkPath : null;
                         } finally {
                             ttsConcurrency.release();
                         }
@@ -166,9 +176,9 @@ public class AudioGeneratorService {
         return Math.max(minTtsTotalTimeoutSeconds, waves * perFragmentCeiling);
     }
 
-    private boolean textToAudio(String text, Path outputPath) {
+    private boolean textToAudio(String text, Path outputPath, String ttsVoice) {
         try {
-            edgeTtsClient.synthesizeToFile(text, outputPath);
+            edgeTtsClient.synthesizeToFile(text, outputPath, ttsVoice);
             return true;
         } catch (EdgeTtsException e) {
             log.error("Falló la síntesis de audio con Edge TTS para el fragmento", e);

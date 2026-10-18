@@ -544,7 +544,7 @@ public class BookPipelineOrchestrator {
         List<BlockRepository.BlockAudioView> blocks = blockRepository.findAudioViewsByBookId(bookId);
 
         if (!blocks.isEmpty()) {
-            runPerBlockAudioStep(bookId, book.getName(), blocks, traceId, manual);
+            runPerBlockAudioStep(bookId, book.getName(), blocks, traceId, manual, book.getTtsVoice());
             return;
         }
 
@@ -563,7 +563,7 @@ public class BookPipelineOrchestrator {
                     .collect(Collectors.joining("\n\n"));
 
             Path outputPath = audioPathFor(book.getName());
-            boolean ok = audioGeneratorService.processTextToAudio(fullTranslatedText, outputPath);
+            boolean ok = audioGeneratorService.processTextToAudio(fullTranslatedText, outputPath, book.getTtsVoice());
             if (!ok) {
                 throw new IllegalStateException(
                         "Audio generation failed for book " + bookId);
@@ -586,7 +586,7 @@ public class BookPipelineOrchestrator {
      */
     private void runPerBlockAudioStep(UUID bookId, String bookName,
                                       List<BlockRepository.BlockAudioView> blocks,
-                                      String traceId, boolean manual) {
+                                      String traceId, boolean manual, String ttsVoice) {
         Map<UUID, List<ChunksRepository.BlockChunkAudioView>> chunksByBlock =
                 chunksRepository.findBlockAudioViewsByBookId(bookId).stream()
                         .collect(Collectors.groupingBy(ChunksRepository.BlockChunkAudioView::getBlockId));
@@ -666,7 +666,7 @@ public class BookPipelineOrchestrator {
                         .collect(Collectors.joining("\n\n"));
 
                 Path outputPath = audioDir.resolve(blockAudioFileName(i + 1, block));
-                boolean ok = audioGeneratorService.processTextToAudio(translatedText, outputPath);
+                boolean ok = audioGeneratorService.processTextToAudio(translatedText, outputPath, ttsVoice);
                 if (!ok) {
                     throw new IllegalStateException("Audio generation failed for block " + blockLabel(block));
                 }

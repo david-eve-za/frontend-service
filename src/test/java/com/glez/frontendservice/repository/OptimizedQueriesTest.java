@@ -429,6 +429,23 @@ class OptimizedQueriesTest {
     }
 
     @Test
+    @DisplayName("La voz TTS del libro se persiste en bloque y viaja en la proyección del AUDIO step")
+    void bookTtsVoice_bulkUpdateAndProjection() {
+        Book book = book(ProcessingStatus.AWAITING, "x");
+        assertNull(bookRepository.findAudioViewById(book.getId()).orElseThrow().getTtsVoice(),
+                "Sin voz elegida: null = voz por defecto");
+
+        assertEquals(1, bookRepository.updateTtsVoiceInBulk(book.getId(), "es-MX-JorgeNeural"));
+        assertEquals("es-MX-JorgeNeural",
+                bookRepository.findAudioViewById(book.getId()).orElseThrow().getTtsVoice(),
+                "La voz persistida viaja en la MISMA proyección ligera del AUDIO step (sin CLOB)");
+
+        // Volver al default: null en bloque.
+        assertEquals(1, bookRepository.updateTtsVoiceInBulk(book.getId(), null));
+        assertNull(bookRepository.findAudioViewById(book.getId()).orElseThrow().getTtsVoice());
+    }
+
+    @Test
     @DisplayName("La serie de actividad del catálogo agrupa por día, rellena huecos y respeta la ventana")
     void catalogActivitySeriesGroupsByDayAndFillsGaps() {
         java.time.ZoneId zone = java.time.ZoneId.systemDefault();

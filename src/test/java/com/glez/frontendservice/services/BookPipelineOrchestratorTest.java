@@ -190,8 +190,8 @@ class BookPipelineOrchestratorTest {
         }
     }
 
-    /** Light (id, name, audioFilePath) projection row used by the AUDIO step. */
-    private record BookAudioViewRow(UUID id, String name, String audioFilePath)
+    /** Light (id, name, audioFilePath, ttsVoice) projection row used by the AUDIO step. */
+    private record BookAudioViewRow(UUID id, String name, String audioFilePath, String ttsVoice)
             implements BookRepository.BookAudioView {
         @Override
         public UUID getId() {
@@ -206,6 +206,11 @@ class BookPipelineOrchestratorTest {
         @Override
         public String getAudioFilePath() {
             return audioFilePath;
+        }
+
+        @Override
+        public String getTtsVoice() {
+            return ttsVoice;
         }
     }
 
@@ -267,7 +272,7 @@ class BookPipelineOrchestratorTest {
     /** AUDIO step stub: light book view (name + audio path), no entity load. */
     private void stubAudioView(String audioFilePath) {
         lenient().when(bookRepository.findAudioViewById(bookId))
-                .thenReturn(Optional.of(new BookAudioViewRow(bookId, book.getName(), audioFilePath)));
+                .thenReturn(Optional.of(new BookAudioViewRow(bookId, book.getName(), audioFilePath, null)));
     }
 
     /** Entry guard stub: the pipeline reads the book status as a light projection. */
@@ -307,7 +312,7 @@ class BookPipelineOrchestratorTest {
 
         orchestrator.processBook(bookId, ProcessStep.TRANSLATE).join();
 
-        verify(audioGeneratorService, never()).processTextToAudio(any(), any());
+        verify(audioGeneratorService, never()).processTextToAudio(any(), any(), any());
         // The AWAITING transition is a guarded bulk update (PROCESSING -> AWAITING)
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.AWAITING);
         assertNull(book.getAudioFilePath());
@@ -324,11 +329,11 @@ class BookPipelineOrchestratorTest {
         lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(1L);
         stubChunkViews(List.of(done));
         when(chunksRepository.findTranslatedTextByBookId(bookId)).thenReturn(List.of("texto traducido"));
-        when(audioGeneratorService.processTextToAudio(any(), any())).thenReturn(true);
+        when(audioGeneratorService.processTextToAudio(any(), any(), any())).thenReturn(true);
 
         orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
 
-        verify(audioGeneratorService, times(1)).processTextToAudio(any(), any());
+        verify(audioGeneratorService, times(1)).processTextToAudio(any(), any(), any());
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING, ProcessingStatus.AWAITING);
         // The audio path is persisted with the bulk update (no CLOB rewrite)
         verify(bookRepository).updateAudioPathInBulk(bookId, Path.of("mi-libro.mp3").toString());
@@ -357,7 +362,7 @@ class BookPipelineOrchestratorTest {
 
         when(bookProcessingService.processBookChunksAsync(bookId))
                 .thenReturn(CompletableFuture.completedFuture(null));
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class)))
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any()))
                 .thenReturn(true);
 
         orchestrator.processBook(bookId).join();
@@ -378,7 +383,7 @@ class BookPipelineOrchestratorTest {
 
         // AUDIO generated with .mp3 path derived from the book name
         ArgumentCaptor<Path> audioPath = ArgumentCaptor.forClass(Path.class);
-        verify(audioGeneratorService).processTextToAudio(eq("traducido 0\n\ntraducido 1"), audioPath.capture());
+        verify(audioGeneratorService).processTextToAudio(eq("traducido 0\n\ntraducido 1"), audioPath.capture(), any());
         assertEquals(Path.of("mi-libro.mp3"), audioPath.getValue());
         verify(bookRepository).updateAudioPathInBulk(bookId, "mi-libro.mp3");
 
@@ -409,7 +414,7 @@ class BookPipelineOrchestratorTest {
 
         when(bookProcessingService.processBookChunksAsync(bookId))
                 .thenReturn(CompletableFuture.completedFuture(null));
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class)))
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any()))
                 .thenReturn(true);
 
         orchestrator.processBook(bookId).join();
@@ -453,7 +458,7 @@ class BookPipelineOrchestratorTest {
         // The genuinely failed chunk consumed exactly one attempt (bulk update)
         verify(chunksRepository).incrementFailedAttempts(bookId, ChunkStatus.COMPLETED);
         // No audio attempted after a failed translation
-        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any());
+        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any(), any());
         verify(bookProcessingService, never()).splitBookIntoChunks(bookId);
     }
 
@@ -604,7 +609,7 @@ class BookPipelineOrchestratorTest {
                 new BlockChunkAudioViewRow(prologueId, ChunkStatus.COMPLETED, 0, "prólogo traducido"),
                 new BlockChunkAudioViewRow(chapterId, ChunkStatus.COMPLETED, 0, "capítulo traducido")));
 
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any())).thenAnswer(inv -> {
             Path output = inv.getArgument(1);
             if (output.getParent() != null) {
                 Files.createDirectories(output.getParent());
@@ -617,7 +622,7 @@ class BookPipelineOrchestratorTest {
 
         // One audio call per block, with per-block files inside the audiolibro directory
         org.mockito.ArgumentCaptor<Path> paths = org.mockito.ArgumentCaptor.forClass(Path.class);
-        verify(audioGeneratorService, times(2)).processTextToAudio(anyString(), paths.capture());
+        verify(audioGeneratorService, times(2)).processTextToAudio(anyString(), paths.capture(), any());
         List<Path> captured = paths.getAllValues();
         org.junit.jupiter.api.Assertions.assertTrue(captured.get(0).toString()
                 .endsWith("01 - Prologo.mp3"), captured.get(0).toString());
@@ -658,7 +663,7 @@ class BookPipelineOrchestratorTest {
 
         when(bookProcessingService.processBookChunksAsync(bookId))
                 .thenReturn(CompletableFuture.completedFuture(null));
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class)))
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any()))
                 .thenReturn(true);
 
         orchestrator.processBook(bookId).join();
@@ -690,7 +695,7 @@ class BookPipelineOrchestratorTest {
         orchestrator.processBook(bookId).join();
 
         verify(traceService).skipStep(eq(bookId), eq(ProcessStep.AUDIO), anyString(), anyString());
-        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any());
+        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any(), any());
         // FINALIZE completes the book via the guarded bulk status update
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
                 ProcessingStatus.COMPLETED);
@@ -737,7 +742,7 @@ class BookPipelineOrchestratorTest {
 
         CompletableFuture<Void> blocked = new CompletableFuture<>();
         when(bookProcessingService.processBookChunksAsync(bookId)).thenReturn(blocked);
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenReturn(true);
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any())).thenReturn(true);
 
         // Direct calls are synchronous in unit tests, so run the first one
         // in a background thread.
@@ -788,7 +793,7 @@ class BookPipelineOrchestratorTest {
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
                 ProcessingStatus.AWAITING);
         // No audio, no finalize, no failure marking, no retry budget spent
-        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any());
+        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any(), any());
         verify(bookRepository, never()).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
                 ProcessingStatus.COMPLETED);
         verify(bookRepository, never()).updateStatusAndTrace(eq(bookId), eq(ProcessingStatus.FAILED), anyString());
@@ -825,7 +830,7 @@ class BookPipelineOrchestratorTest {
         verify(chunksRepository, never()).incrementFailedAttempts(any(), any());
         verify(bookRepository, never()).updateStatusAndTrace(eq(bookId), eq(ProcessingStatus.FAILED), anyString());
         verify(traceService, never()).failStep(any(), any());
-        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any());
+        verify(audioGeneratorService, never()).processTextToAudio(anyString(), any(), any());
         // The run guard was released: a new run can start
         assertFalse(orchestrator.isRunning(bookId));
     }
@@ -852,6 +857,36 @@ class BookPipelineOrchestratorTest {
     }
 
     @Test
+    @DisplayName("La voz TTS del libro viaja hasta la síntesis de cada bloque")
+    void processBook_audioStage_passesBookTtsVoice() throws Exception {
+        stubTraceEvents();
+        stubExtractedText();
+        stubBookState(ProcessingStatus.AWAITING);
+        // El libro tiene voz elegida: es-MX-JorgeNeural.
+        when(bookRepository.findAudioViewById(bookId)).thenReturn(Optional.of(
+                new BookAudioViewRow(bookId, tempDir.resolve("mi-libro").toString(), null, "es-MX-JorgeNeural")));
+        lenient().when(chunksRepository.countByBookId(bookId)).thenReturn(1L);
+        stubChunkViews(List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido")));
+
+        UUID blockId = UUID.randomUUID();
+        when(blockRepository.findAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockAudioViewRow(blockId, Block.BlockType.CHAPTER, 1, 0, null)));
+        when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
+                new BlockChunkAudioViewRow(blockId, ChunkStatus.COMPLETED, 0, "capítulo traducido")));
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any()))
+                .thenAnswer(inv -> {
+                    assertEquals("es-MX-JorgeNeural", inv.getArgument(2),
+                            "La voz del Book (no la del default) llega a la síntesis");
+                    return true;
+                });
+
+        orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
+
+        verify(audioGeneratorService, times(1))
+                .processTextToAudio(anyString(), any(Path.class), eq("es-MX-JorgeNeural"));
+    }
+
+    @Test
     @DisplayName("Manual AUDIO stage on a COMPLETED book re-generates its audiobook and restores COMPLETED")
     void processBook_manualAudioStage_onCompletedBook_regeneratesAndRestores() throws Exception {
         stubTraceEvents();
@@ -869,7 +904,7 @@ class BookPipelineOrchestratorTest {
         stubChunkViews(List.of(chunk(ChunkStatus.COMPLETED, 0, 1, "traducido"))); // TRANSLATE skip
         when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
                 new BlockChunkAudioViewRow(blockId, ChunkStatus.COMPLETED, 0, "capítulo traducido")));
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any())).thenAnswer(inv -> {
             Path output = inv.getArgument(1);
             Files.createDirectories(output.getParent());
             Files.writeString(output, "fake mp3");
@@ -879,7 +914,7 @@ class BookPipelineOrchestratorTest {
         orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
 
         // La etapa de audio corrió de verdad (antes: "nothing to do" silencioso)
-        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class), any());
         verify(traceService).skipStep(eq(bookId), eq(ProcessStep.TRANSLATE), anyString(), anyString());
         // El libro completado vuelve a quedar COMPLETED tras re-generar
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
@@ -907,7 +942,7 @@ class BookPipelineOrchestratorTest {
         when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
                 new BlockChunkAudioViewRow(block1, ChunkStatus.COMPLETED, 0, "uno"),
                 new BlockChunkAudioViewRow(block2, ChunkStatus.COMPLETED, 0, "dos")));
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any())).thenAnswer(inv -> {
             // La pausa llega a mitad: tras el bloque 1, antes del 2.
             assertTrue(orchestrator.requestPause(bookId), "Pause must be accepted while running");
             Path output = inv.getArgument(1);
@@ -919,7 +954,7 @@ class BookPipelineOrchestratorTest {
         orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
 
         // Solo el bloque en curso se sintetizó: el 2 queda para la reanudación
-        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class), any());
         // El paso cierra como CANCELLED con la causa visible (no consume intentos)
         verify(traceService).cancelStep(any(), org.mockito.ArgumentMatchers.contains("Pausado"));
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
@@ -947,7 +982,7 @@ class BookPipelineOrchestratorTest {
         when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
                 new BlockChunkAudioViewRow(block1, ChunkStatus.COMPLETED, 0, "uno"),
                 new BlockChunkAudioViewRow(block2, ChunkStatus.COMPLETED, 0, "dos")));
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any())).thenAnswer(inv -> {
             assertTrue(orchestrator.requestStop(bookId), "Stop must be accepted while running");
             Path output = inv.getArgument(1);
             Files.createDirectories(output.getParent());
@@ -958,7 +993,7 @@ class BookPipelineOrchestratorTest {
         // Graceful: la PipelineStoppedException no escapa del processBook
         orchestrator.processBook(bookId, ProcessStep.AUDIO).join();
 
-        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class), any());
         // El stop persiste STOPPED de inmediato (feedback en el panel)
         verify(bookRepository).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,
                 ProcessingStatus.STOPPED);
@@ -986,7 +1021,7 @@ class BookPipelineOrchestratorTest {
         when(chunksRepository.findBlockAudioViewsByBookId(bookId)).thenReturn(List.of(
                 new BlockChunkAudioViewRow(block1, ChunkStatus.COMPLETED, 0, "uno"),
                 new BlockChunkAudioViewRow(block2, ChunkStatus.COMPLETED, 0, "dos")));
-        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class))).thenAnswer(inv -> {
+        when(audioGeneratorService.processTextToAudio(anyString(), any(Path.class), any())).thenAnswer(inv -> {
             assertTrue(orchestrator.requestPause(bookId), "Pause must be accepted while running");
             Path output = inv.getArgument(1);
             Files.createDirectories(output.getParent());
@@ -998,7 +1033,7 @@ class BookPipelineOrchestratorTest {
         // detenerla en el checkpoint AUDIO→FINALIZE, no dejarla finalizar.
         orchestrator.processBook(bookId, ProcessStep.FINALIZE).join();
 
-        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class));
+        verify(audioGeneratorService, times(1)).processTextToAudio(anyString(), any(Path.class), any());
         // NUNCA se inicia el FINALIZE tras la pausa
         verify(traceService, never()).startStep(eq(bookId), eq(ProcessStep.FINALIZE), anyString(), any());
         verify(bookRepository, never()).updateStatusWhen(bookId, ProcessingStatus.PROCESSING,

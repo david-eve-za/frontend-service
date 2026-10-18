@@ -240,6 +240,18 @@ export class BookTranslatorUploadService {
         );
     }
 
+    /**
+     * Fija la voz Edge TTS del audiolibro de UN libro (selección por libro,
+     * persistida en BD): null = volver a la voz por defecto. Se aplica a
+     * todas las corridas de audio del libro.
+     */
+    setBookTtsVoice(bookId: string, voice: string | null): Observable<{ message: string }> {
+        return this.http.put<{ message: string }>(
+            `${this.API_URL}/${bookId}/tts-voice`,
+            { voice },
+        );
+    }
+
     getBookTrace(bookId: string): Observable<TraceEvent[]> {
         return this.http.get<TraceEvent[]>(`${this.API_URL}/${bookId}/trace`);
     }

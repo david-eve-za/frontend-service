@@ -74,21 +74,25 @@ public interface BookRepository extends JpaRepository<Book, UUID> {
     }
 
     /**
-     * Light (id, name, audioFilePath) view for the AUDIO step: the book
-     * row is read WITHOUT the multi-megabyte full_text CLOB that a full
-     * entity load (findById) materializes.
+     * Light (id, name, audioFilePath, ttsVoice) view for the AUDIO step: the
+     * book row is read WITHOUT the multi-megabyte full_text CLOB that a full
+     * entity load (findById) materializes. La voz TTS del libro viaja en la
+     * misma proyección: el paso AUDIO la necesita para cada bloque.
      */
-    @Query("select b.id as id, b.name as name, b.audioFilePath as audioFilePath "
-            + "from Book b where b.id = :bookId")
+    @Query("select b.id as id, b.name as name, b.audioFilePath as audioFilePath, "
+            + "b.ttsVoice as ttsVoice from Book b where b.id = :bookId")
     Optional<BookAudioView> findAudioViewById(@Param("bookId") UUID bookId);
 
-    /** Light book row for the AUDIO step (name + generated audio path). */
+    /** Light book row for the AUDIO step (name + generated audio path + voice). */
     interface BookAudioView {
         UUID getId();
 
         String getName();
 
         String getAudioFilePath();
+
+        /** Voz Edge TTS del libro; null = voz por defecto de la config. */
+        String getTtsVoice();
     }
 
     /**
@@ -143,6 +147,16 @@ public interface BookRepository extends JpaRepository<Book, UUID> {
     @Transactional
     @Query("delete from Book b where b.id = :bookId")
     int deleteByIdInBulk(@Param("bookId") UUID bookId);
+
+    /**
+     * Voz Edge TTS del libro (selección por libro desde la página Generar
+     * Audiolibro) sin cargar la entidad ni su CLOB: null = volver a la voz
+     * por defecto. Formato validado en el endpoint (resolveVoice).
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("update Book b set b.ttsVoice = :voice where b.id = :bookId")
+    int updateTtsVoiceInBulk(@Param("bookId") UUID bookId, @Param("voice") String voice);
 
     /**
      * Audio path update without loading the book entity: neither the
