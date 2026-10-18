@@ -102,7 +102,7 @@ class EdgeTtsClientTest {
         setField("volume", "+20%");
         setField("pitch", "-15Hz");
 
-        assertDoesNotThrow(client::validateSettings);
+        assertDoesNotThrow(() -> client.validateSettings());
     }
 
     private void setField(String name, Object value) {

@@ -45,7 +45,10 @@ public class DatabaseIndexInitializer {
                     "flag de carpeta completada en la pasada de sync (saltos en pasadas incrementales)"),
             new ColumnMigration(
                     "ALTER TABLE NOVEL ADD COLUMN IF NOT EXISTS LAST_LISTED_AT TIMESTAMP WITH TIME ZONE",
-                    "momento del último listado completo de la carpeta de la obra"));
+                    "momento del último listado completo de la carpeta de la obra"),
+            new ColumnMigration(
+                    "ALTER TABLE BOOK ADD COLUMN IF NOT EXISTS TTS_VOICE VARCHAR(64)",
+                    "voz de Edge TTS elegida por audiolibro (selección por libro en Generar Audiolibro)"));
 
     /** (sql, purpose) pairs executed in order on startup. */
     private static final List<IndexDefinition> INDEXES = List.of(

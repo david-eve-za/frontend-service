@@ -101,7 +101,7 @@ class AudioGeneratorServiceTest {
 
             audioGeneratorService.processTextToAudio(text, outputPath);
 
-            verify(edgeTtsClient, times(2)).synthesizeToFile(anyString(), any(Path.class));
+            verify(edgeTtsClient, times(2)).synthesizeToFile(anyString(), any(Path.class), any());
         }
 
         @Test
@@ -112,7 +112,7 @@ class AudioGeneratorServiceTest {
             List<String> chunks = List.of("Chunk 1");
             when(textSplitter.split(text, "es", 1000)).thenReturn(chunks);
             doThrow(new com.glez.frontendservice.tts.EdgeTtsException("synthesis failed"))
-                    .when(edgeTtsClient).synthesizeToFile(anyString(), any(Path.class));
+                    .when(edgeTtsClient).synthesizeToFile(anyString(), any(Path.class), any());
 
             boolean result = audioGeneratorService.processTextToAudio(text, outputPath);
 

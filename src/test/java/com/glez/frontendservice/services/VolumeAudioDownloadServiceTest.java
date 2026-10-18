@@ -65,7 +65,7 @@ class VolumeAudioDownloadServiceTest {
         when(bookRepository.findAudioViewById(bookId)).thenReturn(Optional.of(audioView(audioPath)));
     }
 
-    private record AudioViewRow(UUID id, String name, String audioFilePath)
+    private record AudioViewRow(UUID id, String name, String audioFilePath, String ttsVoice)
             implements BookRepository.BookAudioView {
         @Override
         public UUID getId() {
@@ -81,10 +81,15 @@ class VolumeAudioDownloadServiceTest {
         public String getAudioFilePath() {
             return audioFilePath;
         }
+
+        @Override
+        public String getTtsVoice() {
+            return ttsVoice;
+        }
     }
 
     private BookRepository.BookAudioView audioView(String audioFilePath) {
-        return new AudioViewRow(bookId, "una novela - Volume 01", audioFilePath);
+        return new AudioViewRow(bookId, "una novela - Volume 01", audioFilePath, null);
     }
 
     @Test
@@ -102,6 +107,17 @@ class VolumeAudioDownloadServiceTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         service.writeTo(download, out);
         assertEquals("fake mp3 bytes", out.toString());
+    }
+
+    @Test
+    @DisplayName("El formato de voz corta se valida antes de tocar la BD (isValidShortVoice)")
+    void isValidShortVoice_validatesEdgeVoiceNames() {
+        assertTrue(com.glez.frontendservice.tts.EdgeTtsClient.isValidShortVoice("es-MX-JorgeNeural"));
+        assertTrue(com.glez.frontendservice.tts.EdgeTtsClient.isValidShortVoice("en-US-EmmaMultilingualNeural"));
+        assertFalse(com.glez.frontendservice.tts.EdgeTtsClient.isValidShortVoice("Paulina"),
+                "Las voces de macOS 'say' ya no son válidas: Edge espera short names");
+        assertFalse(com.glez.frontendservice.tts.EdgeTtsClient.isValidShortVoice("no soy una voz"));
+        assertFalse(com.glez.frontendservice.tts.EdgeTtsClient.isValidShortVoice(null));
     }
 
     @Test

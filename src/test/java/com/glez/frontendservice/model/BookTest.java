@@ -41,7 +41,7 @@ class BookTest {
             String lastTraceId = "abc123";
             String audioFilePath = "test.mp3";
 
-            Book book = new Book(id, name, status, fullText, currentStep, lastTraceId, audioFilePath, null);
+            Book book = new Book(id, name, status, fullText, currentStep, lastTraceId, audioFilePath, null, null);
 
             assertEquals(id, book.getId());
             assertEquals(name, book.getName());
