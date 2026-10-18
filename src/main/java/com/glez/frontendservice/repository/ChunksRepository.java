@@ -209,4 +209,17 @@ public interface ChunksRepository extends JpaRepository<Chunks, UUID> {
     @Transactional
     @Query("delete from Chunks c where c.block.id = :blockId")
     int deleteByBlockIdInBulk(@Param("blockId") UUID blockId);
+
+    /**
+     * Bulk delete of the BLOCK-BOUND chunks of a book (regeneración de la
+     * división semántica): los chunks enlazados a los bloques que van a
+     * morir deben irse ANTES del delete de blocks — si queda un huérfano
+     * apuntando a un bloque borrado, la FK chunks.block_id revienta el
+     * delete en bloque con 23503. Los chunks LEGADOS sin bloque (ruta de
+     * texto completo) NO se tocan.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("delete from Chunks c where c.book.id = :bookId and c.block is not null")
+    int deleteBoundByBookIdInBulk(@Param("bookId") UUID bookId);
 }

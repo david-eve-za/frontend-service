@@ -446,6 +446,38 @@ class OptimizedQueriesTest {
     }
 
     @Test
+    @DisplayName("saveBlocks-стyle regeneración: los chunks enlazados se borran antes que los bloques (FK 23503)")
+    void boundChunksDelete_beforeBlocksDelete_fkSafe() {
+        Book book = book(ProcessingStatus.AWAITING, "x");
+        Block block = new Block();
+        block.setBook(book);
+        block.setBlockType(Block.BlockType.CHAPTER);
+        block.setBlockNumber(1);
+        block.setPosition(0);
+        block.setContent("contenido");
+        blockRepository.saveAndFlush(block);
+
+        // El escenario del bug: un split previo dejó chunks ENLAZADOS al
+        // bloque (además de un chunk legado sin bloque).
+        chunk(book, block, ChunkStatus.COMPLETED, 0, 0);
+        chunk(book, null, ChunkStatus.COMPLETED, 5, 0);
+        assertEquals(2, chunksRepository.countByBookId(book.getId()));
+
+        // El delete de chunks ENLAZADOS deja vivos los legados sin bloque...
+        int deleted = chunksRepository.deleteBoundByBookIdInBulk(book.getId());
+        assertEquals(1, deleted, "Solo el chunk enlazado al bloque muere");
+        List<Chunks> remaining = chunksRepository.findByBook(book);
+        assertEquals(1, remaining.size());
+        assertNull(remaining.get(0).getBlock(), "El chunk legado (sin bloque) sobrevive");
+
+        // ...y AHORA el delete de bloques ya no revienta con FK 23503.
+        assertEquals(1, blockRepository.deleteByBookIdInBulk(book.getId()),
+                "El delete de bloques es FK-safe tras limpiar los chunks enlazados");
+        // (Sin la limpieza previa, este delete lanza Violación de Integridad
+        // Referencial 23503 — la FK chunks.block_id existe en el esquema real.)
+    }
+
+    @Test
     @DisplayName("La serie de actividad del catálogo agrupa por día, rellena huecos y respeta la ventana")
     void catalogActivitySeriesGroupsByDayAndFillsGaps() {
         java.time.ZoneId zone = java.time.ZoneId.systemDefault();

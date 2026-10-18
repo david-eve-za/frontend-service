@@ -106,6 +106,24 @@ class BookProcessingServiceTest {
     class StoreBookTests {
 
         @Test
+        @DisplayName("saveBlocks deletes the BLOCK-BOUND chunks BEFORE the blocks (FK 23503 regression)")
+        void saveBlocks_deletesBoundChunksBeforeBlocks() {
+            when(bookRepository.findById(book.getId())).thenReturn(Optional.of(book));
+
+            bookProcessingService.saveBlocks(book.getId(), "raw",
+                    List.of(new com.glez.frontendservice.model.BlockSaveRequest.BlockItem(
+                            "chapter", 1, "Capítulo uno")));
+
+            // ORDEN crítico: si el delete de blocks va antes que el de los
+            // chunks enlazados, la FK chunks.block_id revienta con 23503.
+            org.mockito.InOrder order = inOrder(chunksRepository, blockRepository);
+            order.verify(chunksRepository).deleteBoundByBookIdInBulk(book.getId());
+            order.verify(blockRepository).deleteByBookIdInBulk(book.getId());
+            verify(blockRepository).saveAll(anyList());
+            verify(bookRepository).save(any(Book.class));
+        }
+
+        @Test
         @DisplayName("Should store book successfully with extracted text")
         void storeBook_withValidInput_storesBook() throws IOException {
             String extractedText = "Extracted text from PDF";
