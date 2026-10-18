@@ -226,6 +226,16 @@ interface NovelRow extends NovelSummary {
                           [disabled]="!volume.canCreateAudio"
                           (click)="createAudio(volume, novel)">
                         </p-button>
+                        <!-- 4. Descargar Audio (habilitado cuando ya existe) -->
+                        <p-button
+                          label="Descargar Audio"
+                          icon="pi pi-download"
+                          styleClass="p-button-sm p-button-outlined p-button-success"
+                          [disabled]="!volume.audioCreated"
+                          (click)="downloadAudio(volume)"
+                          title="Descarga el mp3 (audio legado) o un ZIP con los mp3 de todos los bloques"
+                        >
+                        </p-button>
                       </div>
                     </td>
                   </tr>
@@ -486,6 +496,25 @@ export class NovelsManager implements OnInit, OnDestroy {
   /** Paso 3: genera el audio (requiere traducción completa; canCreateAudio). */
   async createAudio(volume: CatalogVolume, novel: NovelRow): Promise<void> {
     await this.runVolumeStage(volume, novel, 'AUDIO', 'Generación de audio iniciada');
+  }
+
+  /**
+   * Paso 4: descarga el audiolibro generado (mp3 directo o ZIP al vuelo con
+   * los mp3 de los bloques). Ancla con target=_blank: una descarga con
+   * Content-Disposition attachment no abandona la página, y un error 404/409
+   * del servidor queda visible en la pestaña nueva en lugar de romper la
+   * tabla — el streaming viaja directo a disco, sin blob en memoria (un
+   * volumen completo puede ocupar cientos de MB).
+   */
+  downloadAudio(volume: CatalogVolume): void {
+    const url = `/api/novels-manager/volumes/${volume.id}/audio/download`;
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
   }
 
   private async runVolumeStage(volume: CatalogVolume, novel: NovelRow,

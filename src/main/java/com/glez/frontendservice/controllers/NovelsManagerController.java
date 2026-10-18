@@ -7,6 +7,7 @@ import com.glez.frontendservice.dtos.VolumePreparedDto;
 import com.glez.frontendservice.services.NovelsCatalogQueryService;
 import com.glez.frontendservice.services.NovelsCatalogSyncService;
 import com.glez.frontendservice.services.NovelsVolumeTextService;
+import com.glez.frontendservice.services.VolumeAudioDownloadService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -14,9 +15,14 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -31,6 +37,7 @@ public class NovelsManagerController {
     private final NovelsCatalogQueryService catalogQueryService;
     private final NovelsCatalogSyncService catalogSyncService;
     private final NovelsVolumeTextService volumeTextService;
+    private final VolumeAudioDownloadService audioDownloadService;
 
     @Operation(summary = "Página de obras del catálogo (nivel 1 de la tabla anidada)")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Página de obras con número de volúmenes"))
@@ -95,6 +102,40 @@ public class NovelsManagerController {
             return ResponseEntity.status(409).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "Descarga el audiolibro generado del volumen",
+            description = "Un volumen con audio de bloques semánticos descarga un ZIP construido "
+                    + "AL VUELO con los mp3 de sus bloques en orden de lectura (un volumen completo "
+                    + "puede ocupar cientos de MB: se strema, nunca se materializa en memoria). "
+                    + "El audio legado (texto completo) descarga el mp3 directo. El path NUNCA viene "
+                    + "de la petición: se resuelve por el volumen → Book enlazado → puntero de la BD.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "El audiolibro (mp3 o ZIP) en streaming"),
+            @ApiResponse(responseCode = "404", description = "Volumen/Book inexistentes o sin audio generado"),
+            @ApiResponse(responseCode = "409", description = "El audio apuntado por la BD ya no existe en disco")
+    })
+    @GetMapping("/volumes/{volumeId}/audio/download")
+    public ResponseEntity<StreamingResponseBody> downloadVolumeAudio(@PathVariable UUID volumeId) {
+        try {
+            VolumeAudioDownloadService.AudioDownload download = audioDownloadService.resolve(volumeId);
+            MediaType contentType = download.zip() ? MediaType.parseMediaType("application/zip")
+                    : MediaType.parseMediaType("audio/mpeg");
+            // filename* con UTF-8: los nombres de libros llevan espacios y
+            // corchetes que rompen el header plano.
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentDisposition(ContentDisposition.attachment()
+                    .filename(download.filename(), StandardCharsets.UTF_8)
+                    .build());
+            return ResponseEntity.ok().headers(headers).contentType(contentType)
+                    .body(out -> audioDownloadService.writeTo(download, out));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).header(HttpHeaders.CONTENT_TYPE, "application/json")
+                    .body(out -> out.write(("{\"error\":\"" + e.getMessage() + "\"}").getBytes(StandardCharsets.UTF_8)));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(409).header(HttpHeaders.CONTENT_TYPE, "application/json")
+                    .body(out -> out.write(("{\"error\":\"" + e.getMessage() + "\"}").getBytes(StandardCharsets.UTF_8)));
         }
     }
 }
