@@ -172,6 +172,16 @@ public class LogEventPersistenceService {
         } catch (Exception e) {
             long returned = 0;
             for (LogEvent event : batch) {
+                // DESINTOXICAR EL REINTENTO: saveAll ya asignó el UUID al
+                // persistir (pre-commit), y como la transacción hizo
+                // rollback la fila jamás existió. Sin limpiar el id, el
+                // próximo saveAll trataría el evento como EXISTENTE →
+                // UPDATE de una fila inexistente → "Row was already
+                // updated or deleted by another transaction" → el lote
+                // rebotaría PARA SIEMPRE (bug real: 403 avisos en 2 h con
+                // el mismo lote de 18). Con el id a null, el reintento es
+                // un INSERT limpio con un UUID fresco.
+                event.setId(null);
                 if (pending.offer(event)) {
                     returned++;
                 } else {

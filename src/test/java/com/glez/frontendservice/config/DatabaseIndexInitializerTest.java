@@ -152,4 +152,43 @@ class DatabaseIndexInitializerTest {
         assertEquals(afterFirst, afterSecond, "La segunda corrida no debe crear ni destruir constraints");
         assertEquals(1, afterSecond.size(), "Solo la PRIMARY KEY debe quedar");
     }
+
+    @Test
+    @DisplayName("LOG_EVENT heredada (MESSAGE VARCHAR(255)): el initializer ensancha y un mensaje de 470 chars persiste")
+    void ensureLogEventColumnLengths_widensLegacyColumns() {
+        jdbcTemplate.execute("""
+                CREATE TABLE LOG_EVENT (
+                    id VARCHAR(36) PRIMARY KEY,
+                    logged_at TIMESTAMP WITH TIME ZONE,
+                    level VARCHAR(255),
+                    logger VARCHAR(255),
+                    thread VARCHAR(255),
+                    message VARCHAR(255),
+                    book_id VARCHAR(255),
+                    trace_id VARCHAR(255),
+                    step VARCHAR(255)
+                )
+                """);
+
+        // La situación del bug: un mensaje legítimo de 470 caracteres reventaba
+        // el INSERT ("Value too long for column MESSAGE CHARACTER VARYING(255)").
+        String longMessage = "Serializing PageImpl instances as-is is not supported, "
+                + "meaning that there is no guarantee about the stability of the resulting JSON structure. " // 129
+                + "The Spring Data commons team recommends using PagedModel instead. ".repeat(7);
+        assertThrows(Exception.class, () -> jdbcTemplate.update(
+                "INSERT INTO LOG_EVENT (id, logged_at, level, logger, thread, message) "
+                        + "VALUES ('1', NOW(), 'WARN', 'org.s.d.w', 't1', ?)", longMessage));
+
+        initializer.ensureLogEventColumnLengths();
+
+        assertDoesNotThrow(() -> jdbcTemplate.update(
+                "INSERT INTO LOG_EVENT (id, logged_at, level, logger, thread, message) "
+                        + "VALUES ('1', NOW(), 'WARN', 'org.s.d.w', 't1', ?)", longMessage),
+                "Después de ensanchar MESSAGE, los mensajes largos del mundo real deben persistir");
+        Integer width = jdbcTemplate.queryForObject(
+                "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_NAME = 'LOG_EVENT' AND COLUMN_NAME = 'MESSAGE'",
+                Integer.class);
+        assertEquals(8000, width, "MESSAGE debe quedar en VARCHAR(8000)");
+    }
 }
