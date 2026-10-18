@@ -42,6 +42,9 @@ class FileProcessingControllerTest {
     private BookRepository bookRepository;
 
     @Mock
+    private com.glez.frontendservice.repository.ChunksRepository chunksRepository;
+
+    @Mock
     private com.glez.frontendservice.services.BookPipelineOrchestrator bookPipelineOrchestrator;
 
     @Mock
@@ -53,7 +56,8 @@ class FileProcessingControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new FileProcessingController(bookProcessingService, bookRepository, bookPipelineOrchestrator, processingTraceService);
+        controller = new FileProcessingController(bookProcessingService, bookRepository,
+                chunksRepository, bookPipelineOrchestrator, processingTraceService);
         bookId = UUID.randomUUID();
         book = new Book();
         book.setId(bookId);
@@ -200,6 +204,82 @@ class FileProcessingControllerTest {
             assertEquals(HttpStatus.OK, response.getStatusCode());
             assertNotNull(response.getBody());
             assertTrue(response.getBody().isEmpty());
+        }
+
+        @Test
+        @DisplayName("The list carries each book's translation progress (total/completed chunks) for the audio picker")
+        void getAllBooks_returnsChunkProgress() {
+            record View(UUID id, String name) implements BookRepository.BookListView {
+                @Override
+                public UUID getId() {
+                    return id;
+                }
+
+                @Override
+                public String getName() {
+                    return name;
+                }
+
+                @Override
+                public com.glez.frontendservice.model.ProcessingStatus getStatus() {
+                    return null;
+                }
+
+                @Override
+                public ProcessStep getCurrentStep() {
+                    return null;
+                }
+
+                @Override
+                public String getLastTraceId() {
+                    return null;
+                }
+
+                @Override
+                public String getAudioFilePath() {
+                    return null;
+                }
+            }
+            record Count(UUID bookId, long total, long completed)
+                    implements com.glez.frontendservice.repository.ChunksRepository.ChunkCountView {
+                @Override
+                public UUID getBookId() {
+                    return bookId;
+                }
+
+                @Override
+                public long getTotal() {
+                    return total;
+                }
+
+                @Override
+                public long getCompleted() {
+                    return completed;
+                }
+            }
+            UUID translatedId = UUID.randomUUID();
+            UUID partialId = UUID.randomUUID();
+            when(bookRepository.findBookListViews()).thenReturn(List.of(
+                    new View(translatedId, "traducido.pdf"),
+                    new View(partialId, "parcial.pdf")));
+            when(chunksRepository.countByBookIds(anyList(),
+                    eq(com.glez.frontendservice.model.ChunkStatus.COMPLETED)))
+                    .thenReturn(List.of(
+                            new Count(translatedId, 44L, 44L),
+                            new Count(partialId, 44L, 17L)));
+
+            ResponseEntity<List<Map<String, Object>>> response = controller.getAllBooks();
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            assertNotNull(response.getBody());
+            Map<String, Object> translated = response.getBody().get(0);
+            assertEquals(44L, translated.get("totalChunks"));
+            assertEquals(44L, translated.get("completedChunks"),
+                    "Fully translated book: the picker's 'ya traducido' signal");
+            Map<String, Object> partial = response.getBody().get(1);
+            assertEquals(44L, partial.get("totalChunks"));
+            assertEquals(17L, partial.get("completedChunks"),
+                    "Partially translated book: NOT offered by the picker");
         }
     }
 

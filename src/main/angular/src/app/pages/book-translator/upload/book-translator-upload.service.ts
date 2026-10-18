@@ -49,6 +49,10 @@ export interface BookListItem {
     currentStep?: string;
     lastTraceId?: string;
     audioFilePath?: string;
+    /** Total de chunks del libro (progreso de traducción, para el picker de Generar Audiolibro). */
+    totalChunks?: number;
+    /** Chunks ya traducidos: totalChunks > 0 && totalChunks === completedChunks = libro traducido. */
+    completedChunks?: number;
 }
 
 /** Bloque semántico de un libro (GET /api/blocks/{bookId}). */
@@ -221,10 +225,18 @@ export class BookTranslatorUploadService {
         );
     }
 
-    processBook(bookId: string): Observable<{ message: string }> {
+    /**
+     * Genera el audiolibro de UN libro YA TRADUCIDO, como etapa manual e
+     * independiente (checkpoint AUDIO, el mismo contrato que usa el gestor
+     * de novelas): sin traducción encadenada, reanudable (los bloques con
+     * audio en disco se saltan).
+     */
+    generateAudioBook(bookId: string): Observable<{ message: string }> {
+        const params = new HttpParams().set('to', 'AUDIO');
         return this.http.post<{ message: string }>(
             `${this.API_URL}/${bookId}/process`,
             {},
+            { params },
         );
     }
 

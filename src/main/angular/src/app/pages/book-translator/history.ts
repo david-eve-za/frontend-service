@@ -76,7 +76,7 @@ interface BookRow {
                 <p-button
                   *ngIf="book.status !== 'COMPLETED'"
                   icon="pi pi-play-circle"
-                  [label]="book.status === 'FAILED' || book.currentStep ? 'Reanudar' : 'Iniciar'"
+                  [label]="book.status === 'FAILED' || book.currentStep ? 'Reanudar traducción' : 'Traducir'"
                   styleClass="p-button-sm"
                   [styleClass]="'p-button-sm ' + (book.status === 'FAILED' ? 'p-button-warning' : 'p-button-primary')"
                   [disabled]="resuming[book.id]"
@@ -216,15 +216,17 @@ export class BookTranslatorHistory implements OnInit, OnDestroy {
     if (this.resuming[book.id]) return;
     this.resuming[book.id] = true;
     try {
-      await firstValueFrom(this.uploadService.processBook(book.id));
+      // SOLO la etapa de traducción (checkpoint TRANSLATE): el audio ya no
+      // se encadena automáticamente — se genera desde «Generar Audiolibro».
+      await firstValueFrom(this.uploadService.startTranslation(book.id, []));
       this.messageService.add({
         severity: 'success',
-        summary: 'Procesamiento',
-        detail: 'Pipeline iniciado/reanudado.'
+        summary: 'Traducción',
+        detail: 'Traducción iniciada/reanudada. El audiolibro se genera desde «Generar Audiolibro».'
       });
       this.watchBook(book.id);
     } catch (err: any) {
-      const detail = err?.error?.error || 'No se pudo iniciar el procesamiento.';
+      const detail = err?.error?.error || 'No se pudo iniciar la traducción.';
       this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
       this.resuming[book.id] = false;
     }

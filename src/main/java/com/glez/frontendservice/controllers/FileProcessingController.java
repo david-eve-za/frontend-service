@@ -6,6 +6,7 @@ import com.glez.frontendservice.model.Book;
 import com.glez.frontendservice.model.ChunkDto;
 import com.glez.frontendservice.model.PaginatedResponse;
 import com.glez.frontendservice.repository.BookRepository;
+import com.glez.frontendservice.repository.ChunksRepository;
 import com.glez.frontendservice.services.BookProcessingService;
 import com.glez.frontendservice.services.BookPipelineOrchestrator;
 import com.glez.frontendservice.services.ProcessingTraceService;
@@ -39,6 +40,7 @@ public class FileProcessingController {
 
     private final BookProcessingService bookProcessingService;
     private final BookRepository bookRepository;
+    private final ChunksRepository chunksRepository;
     private final BookPipelineOrchestrator bookPipelineOrchestrator;
     private final ProcessingTraceService processingTraceService;
 
@@ -82,13 +84,27 @@ public class FileProcessingController {
         }
     }
 
-    @Operation(summary = "List all books", description = "Retrieves a list of all books with their IDs, status, current step and audio artifact.")
+    @Operation(summary = "List all books", description = "Retrieves a list of all books with their IDs, status, current step, audio artifact and translation "
+            + "progress (total/completed chunks in ONE grouped query) — the completed==total signal drives the "
+            + "'Generar Audiolibro' book picker (books that are already fully translated).")
     @GetMapping("/list")
     public ResponseEntity<List<Map<String, Object>>> getAllBooks() {
         // Light projection: the full_text CLOB of every book used to ride
         // along on every listing (findAll of entities).
-        List<Map<String, Object>> books = bookRepository.findBookListViews().stream()
+        List<BookRepository.BookListView> books = bookRepository.findBookListViews();
+        // Translation progress of the WHOLE list in one grouped query
+        // (countByBookIds): no per-book chunk scans, no CLOB loads.
+        Map<UUID, ChunksRepository.ChunkCountView> counts = new HashMap<>();
+        if (!books.isEmpty()) {
+            List<UUID> ids = books.stream().map(BookRepository.BookListView::getId).toList();
+            for (ChunksRepository.ChunkCountView view : chunksRepository.countByBookIds(
+                    ids, com.glez.frontendservice.model.ChunkStatus.COMPLETED)) {
+                counts.put(view.getBookId(), view);
+            }
+        }
+        List<Map<String, Object>> response = books.stream()
                 .map(book -> {
+                    ChunksRepository.ChunkCountView count = counts.get(book.getId());
                     Map<String, Object> bookMap = new HashMap<>();
                     bookMap.put("id", book.getId());
                     bookMap.put("name", book.getName());
@@ -96,10 +112,12 @@ public class FileProcessingController {
                     bookMap.put("currentStep", book.getCurrentStep());
                     bookMap.put("lastTraceId", book.getLastTraceId());
                     bookMap.put("audioFilePath", book.getAudioFilePath());
+                    bookMap.put("totalChunks", count != null ? count.getTotal() : 0L);
+                    bookMap.put("completedChunks", count != null ? count.getCompleted() : 0L);
                     return bookMap;
                 })
                 .collect(Collectors.toList());
-        return ResponseEntity.ok(books);
+        return ResponseEntity.ok(response);
     }
 
     @Operation(summary = "Get book status", description = "Retrieves the processing status of a book by its ID.")
