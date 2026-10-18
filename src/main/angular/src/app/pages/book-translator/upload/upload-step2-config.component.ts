@@ -6,6 +6,10 @@ import { SelectModule } from 'primeng/select';
 import { ButtonModule } from 'primeng/button';
 import { ToastModule } from 'primeng/toast';
 import { MessageService } from 'primeng/api';
+import {
+    BookTranslatorUploadService,
+    BookListItem,
+} from './book-translator-upload.service';
 
 export interface ProcessingConfig {
     targetLanguage: string;
@@ -15,14 +19,25 @@ export interface ProcessingConfig {
 /** Clave de persistencia local de la configuración de generación de audio. */
 const AUDIOBOOK_CONFIG_KEY = 'audiobook-config';
 
+/** Opción del combo: un libro ya traducido, listo para generar su audiolibro. */
+export interface TranslatedBookOption {
+    label: string;
+    value: string;
+    /** El libro ya tiene audiolibro generado (re-ejecutar lo reanuda/completa). */
+    hasAudio: boolean;
+}
+
 /**
- * Página Generar Audiolibro del pipeline: configuración de la voz y las
- * demás opciones de generación de audio. La configuración se guarda en
- * localStorage hasta que el backend exponga un endpoint de configuración.
+ * Página Generar Audiolibro del pipeline: SELECCIÓN MANUAL del libro ya
+ * traducido (combo) y configuración de la voz. El audio NUNCA se encadena
+ * tras la traducción: la traducción termina en su checkpoint (to=TRANSLATE)
+ * y esta página es la única entrada manual de la etapa de audio
+ * (to=AUDIO — el mismo contrato de etapa independiente que usa el gestor
+ * de novelas; los bloques con audio en disco se saltan, de modo que
+ * re-ejecutar reanuda donde se quedó).
  *
- * Los patrones de limpieza no se eligen aquí: el backend aplica
- * automáticamente todos los patrones habilitados al extraer y almacenar
- * el texto del archivo (Extraer → Limpiar → Almacenar en BD).
+ * La configuración de voz se guarda en localStorage hasta que el backend
+ * exponga un endpoint de configuración.
  */
 @Component({
     selector: 'app-upload-step2-config',
@@ -41,9 +56,46 @@ const AUDIOBOOK_CONFIG_KEY = 'audiobook-config';
         <div class="card">
             <div class="font-semibold text-xl mb-4">Generar Audiolibro</div>
             <p class="text-gray-600 mb-6">
-                Configura la voz y las opciones con las que se generará el
-                audiolibro.
+                Selecciona el libro traducido al que quieres generar el
+                audiolibro y configura la voz. La traducción ya no lanza el
+                audio automáticamente.
             </p>
+
+            <!-- Libro ya traducido -->
+            <div class="mb-6">
+                <label class="block text-sm font-medium mb-2"
+                    >Libro traducido *</label
+                >
+                @if (loadingBooks) {
+                    <div class="text-gray-500 flex items-center gap-2">
+                        <i class="pi pi-spin pi-spinner"></i>
+                        Cargando libros…
+                    </div>
+                } @else if (translatedOptions.length === 0) {
+                    <div
+                        class="p-4 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600"
+                    >
+                        Aún no hay libros traducidos: traduce un documento
+                        desde Traducir Libro y aparecerá aquí.
+                    </div>
+                } @else {
+                    <p-select
+                        [options]="translatedOptions"
+                        [(ngModel)]="selectedBookId"
+                        optionLabel="label"
+                        optionValue="value"
+                        placeholder="Selecciona un libro traducido"
+                        styleClass="w-full"
+                        [showClear]="true"
+                    >
+                    </p-select>
+                    <small class="text-gray-500"
+                        >Solo se listan los libros con todos sus chunks
+                        traducidos. Los marcados con ✔ ya tienen audiolibro:
+                        volver a generarlos reanuda lo que falte.</small
+                    >
+                }
+            </div>
 
             <!-- TTS Voice -->
             <div class="mb-6">
@@ -104,14 +156,24 @@ const AUDIOBOOK_CONFIG_KEY = 'audiobook-config';
             </div>
 
             <!-- Action Buttons -->
-            <div class="flex justify-content-end pt-4 border-t">
+            <div class="flex justify-content-end pt-4 border-t gap-3">
                 <p-button
                     label="Guardar Configuración"
                     icon="pi pi-save"
                     (click)="saveConfig()"
-                    styleClass="p-button-primary"
+                    styleClass="p-button-secondary p-button-outlined"
                     iconPos="right"
                     [disabled]="!isValid()"
+                >
+                </p-button>
+                <p-button
+                    label="Generar Audiolibro"
+                    icon="pi pi-volume-up"
+                    (click)="generateAudioBook()"
+                    styleClass="p-button-primary"
+                    iconPos="right"
+                    [loading]="generating"
+                    [disabled]="!canGenerate"
                 >
                 </p-button>
             </div>
@@ -124,6 +186,12 @@ export class UploadStep2ConfigComponent implements OnInit {
         targetLanguage: 'es',
         ttsVoice: 'Paulina',
     };
+
+    /** Libros ya traducidos (todos los chunks COMPLETED), para el combo. */
+    translatedOptions: TranslatedBookOption[] = [];
+    selectedBookId?: string;
+    loadingBooks = false;
+    generating = false;
 
     languages = [
         { label: 'Español (es)', value: 'es' },
@@ -158,10 +226,12 @@ export class UploadStep2ConfigComponent implements OnInit {
     constructor(
         private messageService: MessageService,
         private cdr: ChangeDetectorRef,
+        private uploadService: BookTranslatorUploadService,
     ) {}
 
     ngOnInit() {
         this.loadSavedConfig();
+        this.loadTranslatedBooks();
     }
 
     /** Recupera la configuración guardada en localStorage, si existe. */
@@ -177,8 +247,72 @@ export class UploadStep2ConfigComponent implements OnInit {
         }
     }
 
+    /**
+     * Carga los libros y deja en el combo SOLO los totalmente traducidos
+     * (totalChunks > 0 && completedChunks === totalChunks). El progreso de
+     * chunks llega en la misma llamada del listado (una query agrupada),
+     * así que el filtro no genera peticiones extra.
+     */
+    loadTranslatedBooks() {
+        this.loadingBooks = true;
+        this.uploadService.getAllBooks().subscribe({
+            next: (books) => {
+                const translated = books
+                    .filter(
+                        (book) =>
+                            (book.totalChunks ?? 0) > 0 &&
+                            (book.completedChunks ?? 0) ===
+                                (book.totalChunks ?? 0),
+                    )
+                    .map((book) => this.toOption(book))
+                    // Sin audiolibro primero: son los pendientes reales.
+                    .sort((a, b) =>
+                        a.hasAudio === b.hasAudio
+                            ? a.label.localeCompare(b.label)
+                            : a.hasAudio
+                              ? 1
+                              : -1,
+                    );
+                this.translatedOptions = translated;
+                // La selección previa puede haber dejado de existir.
+                if (
+                    this.selectedBookId &&
+                    !translated.some((o) => o.value === this.selectedBookId)
+                ) {
+                    this.selectedBookId = undefined;
+                }
+                this.loadingBooks = false;
+                this.cdr.markForCheck();
+            },
+            error: () => {
+                this.loadingBooks = false;
+                this.messageService.add({
+                    sticky: true,
+                    severity: 'error',
+                    summary: 'Error',
+                    detail: 'No se pudo cargar la lista de libros.',
+                });
+            },
+        });
+    }
+
+    private toOption(book: BookListItem): TranslatedBookOption {
+        const hasAudio = !!book.audioFilePath;
+        return {
+            value: book.id,
+            hasAudio,
+            label:
+                (book.name ?? book.id) +
+                (hasAudio ? '  ✔ audiolibro' : ''),
+        };
+    }
+
     isValid(): boolean {
         return !!this.config.targetLanguage && !!this.config.ttsVoice;
+    }
+
+    get canGenerate(): boolean {
+        return !!this.selectedBookId && !this.generating && !this.loadingBooks;
     }
 
     saveConfig() {
@@ -200,5 +334,41 @@ export class UploadStep2ConfigComponent implements OnInit {
                 detail: 'No se pudo guardar la configuración.',
             });
         }
+    }
+
+    /**
+     * Lanza la etapa de AUDIO del libro seleccionado (to=AUDIO): etapa
+     * manual e independiente, reanudable — los bloques que ya tienen su
+     * mp3 en disco se saltan y solo se generan los pendientes.
+     */
+    generateAudioBook() {
+        if (!this.canGenerate || !this.selectedBookId) return;
+        this.generating = true;
+        this.uploadService.generateAudioBook(this.selectedBookId).subscribe({
+            next: () => {
+                this.generating = false;
+                const name = this.translatedOptions.find(
+                    (o) => o.value === this.selectedBookId,
+                )?.label;
+                this.messageService.add({
+                    severity: 'success',
+                    summary: 'Audiolibro en marcha',
+                    detail:
+                        `Generación iniciada para ${name ?? 'el libro'}. ` +
+                        'Sigue el avance en el Panel de estado → Procesos (o desde su botón «Ver logs»).',
+                });
+                this.cdr.markForCheck();
+            },
+            error: (err) => {
+                this.generating = false;
+                this.messageService.add({
+                    sticky: true,
+                    severity: 'error',
+                    summary: 'No se pudo iniciar la generación',
+                    detail: err?.error?.error ?? err?.message ?? 'error',
+                });
+                this.cdr.markForCheck();
+            },
+        });
     }
 }
