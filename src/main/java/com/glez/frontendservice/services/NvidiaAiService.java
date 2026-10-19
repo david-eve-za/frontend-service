@@ -230,6 +230,7 @@ public class NvidiaAiService {
                                     .model(currentModel)
                                     .temperature(0.2)
                                     .topP(0.95)
+                                    .timeout(Duration.ofMinutes(60)) // Timeout largo para piezas grandes (~8K tokens)
                                     .maxTokens(outputTokenLimit))
                             .call()
                             .chatResponse();
