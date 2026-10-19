@@ -166,6 +166,47 @@ class NvidiaAiServiceTest {
             boolean result = invokeIsRetryableError(exception);
             assertFalse(result, "410 belongs to isModelGone (rotate, never retry the same dead model)");
         }
+
+        @Test
+        @DisplayName("SDK-typed server 5xx (500/502/504) are retryable: they are the long-queue death")
+        void isRetryableError_withTypedServer5xx_returnsTrue() {
+            // Incidente 19-oct: deepseek/llama colgados ~20 min morían con
+            // un error del SERVIDOR que la lista no reconocía → "Non-retryable"
+            // → chunk entero muerto. Los 5xx son transitorios por naturaleza.
+            OpenAIServiceException e500 = org.mockito.Mockito.mock(OpenAIServiceException.class);
+            org.mockito.Mockito.lenient().when(e500.statusCode()).thenReturn(500);
+            assertTrue(invokeIsRetryableError(e500), "500 (server error) rotates");
+
+            OpenAIServiceException e502 = org.mockito.Mockito.mock(OpenAIServiceException.class);
+            org.mockito.Mockito.lenient().when(e502.statusCode()).thenReturn(502);
+            assertTrue(invokeIsRetryableError(e502), "502 (bad gateway) rotates");
+
+            OpenAIServiceException e504 = org.mockito.Mockito.mock(OpenAIServiceException.class);
+            org.mockito.Mockito.lenient().when(e504.statusCode()).thenReturn(504);
+            assertTrue(invokeIsRetryableError(e504), "504 (gateway timeout) rotates");
+        }
+
+        @Test
+        @DisplayName("Wrapped (cause chain) server 5xx is detected through the generic wrap")
+        void isRetryableError_withWrappedServer5xx_returnsTrue() {
+            OpenAIServiceException serverError = org.mockito.Mockito.mock(OpenAIServiceException.class);
+            org.mockito.Mockito.lenient().when(serverError.statusCode()).thenReturn(500);
+            Exception wrapped = new RuntimeException("Error calling model: internal error", serverError);
+            assertTrue(invokeIsRetryableError(wrapped),
+                    "The classifier must walk the cause chain (Spring AI wraps SDK errors)");
+        }
+
+        @Test
+        @DisplayName("Message-formatted 5xx (\"500: …\") rotate; 4xx stays non-retryable")
+        void isRetryableError_withMessageFormedServer5xx_returnsTrue() {
+            assertTrue(invokeIsRetryableError(
+                    new RuntimeException("500: {\"detail\":\"upstream connect error\"}")),
+                    "SDK message format \"<status>: <body>\" with 500 rotates");
+            assertTrue(invokeIsRetryableError(new RuntimeException("504: Gateway Timeout")),
+                    "504 gateway timeout rotates");
+            assertFalse(invokeIsRetryableError(new RuntimeException("400: Bad Request")),
+                    "4xx is a hard error: it must keep failing fast");
+        }
     }
 
     @Nested
@@ -313,7 +354,7 @@ class NvidiaAiServiceTest {
     class PieceTimeSelfHealingTests {
 
         @Test
-        @DisplayName("countsAsSlowFailure: retryable + at/over the server ceiling; blips and fatals never count")
+        @DisplayName("countsAsSlowFailure: ANY error at/over the server ceiling is slow; only fast failures are not")
         void countsAsSlowFailure_classifiesCorrectly() {
             assertTrue(invokeCountsAsSlowFailure(new OpenAIIoException("Request failed"), 243),
                     "The REAL incident signature: an SDK IO failure at the observed ~243s");
@@ -323,8 +364,16 @@ class NvidiaAiServiceTest {
                     "Any retryable failure (e.g. a JDK timeout) at the ceiling is slow");
             assertFalse(invokeCountsAsSlowFailure(new OpenAIIoException("Request failed"), 100),
                     "A network blip that fails fast is a normal retryable rotation, never a slow timeout");
-            assertFalse(invokeCountsAsSlowFailure(new RuntimeException("Invalid request format"), 300),
-                    "Non-retryable failures are never slow timeouts");
+            // Incidente 19-oct: deepseek colgado 20.8 min terminó en un 500
+            // del servidor que la clasificación vieja trataba de
+            // "Non-retryable" y mataba el chunk ENTERO. Tras pagar el techo
+            // en tiempo de pared, CUALQUIER error es lento: rota (y a la
+            // segunda, re-divide) en vez de matar.
+            assertTrue(invokeCountsAsSlowFailure(
+                            new RuntimeException("500: {\"detail\":\"upstream connect error\"}"), 1230),
+                    "A 20-min server death is a SLOW failure, never a chunk killer");
+            assertTrue(invokeCountsAsSlowFailure(new RuntimeException("Invalid request format"), 300),
+                    "Even a hard-typed error counts as slow at the ceiling: rotate first");
         }
 
         @Test
@@ -477,6 +526,59 @@ class NvidiaAiServiceTest {
             assertTrue(prompt.contains("WORLD-CLASS TRANSLATOR and a hyper-meticulous LITERARY EDITOR"),
                     "The role/style guidance must always be present to avoid literal translations");
             assertTrue(prompt.contains("fluent and idiomatic in es"));
+        }
+    }
+
+    @Nested
+    @DisplayName("Provider hot-switch tests (el pool se re-resuelve ENTRE intentos)")
+    class ProviderHotSwitchTests {
+
+        /** Servicio con pool NVIDIA de 2 modelos + pool ollama de 1: el flip cambia el tamaño (2→1). */
+        private NvidiaAiService hotSwitchService() {
+            return new NvidiaAiService(null, "nvidia-model-1,nvidia-model-2", 3, rateLimiter,
+                    inspector, 8192, 1024, 3.5, 1.15, providerSettings,
+                    "ollama:local-model", 240, 2);
+        }
+
+        @Test
+        @DisplayName("Cambio de proveedor EN CALIENTE (nvidia→ollama): la rotación en curso se pasa al pool nuevo")
+        void callModelWithRotation_providerFlippedMidRotation_switchesToTheNewPool() {
+            // Incidente 19-oct: el usuario cambió el proveedor a ollama a las
+            // 09:28:18 y la rotación iniciada a las 09:28:12 disparó deepseek
+            // (NVIDIA) a las 09:28:47 — el pool era un SNAPSHOT. El pool debe
+            // re-resolverse entre intentos: arranque y primer intento con
+            // nvidia, después, ollama para siempre.
+            NvidiaAiService service = hotSwitchService();
+            org.mockito.Mockito.when(providerSettings.translationProvider())
+                    .thenReturn("nvidia", "nvidia", "ollama");
+            org.mockito.Mockito.when(inspector.isNvidiaOnline()).thenReturn(false);
+            org.mockito.Mockito.when(inspector.isOllamaOnline()).thenReturn(false);
+
+            RuntimeException e = assertThrows(RuntimeException.class,
+                    () -> service.callModelWithRotation("prompt", 8192,
+                            NvidiaAiService.AiUseCase.TRANSLATION));
+
+            // La rotación murió sondeando el pool NUEVO (ollama, 1 modelo),
+            // no agotando el VIEJO (nvidia, 2 modelos). Sin el hot-switch
+            // el mensaje diría "2 rotation slots" y jamás sondearía ollama.
+            assertTrue(e.getMessage().contains("1 rotation slots"),
+                    "Debe fallar rápido contra el pool NUEVO: " + e.getMessage());
+            verify(inspector, org.mockito.Mockito.atLeastOnce()).isOllamaOnline();
+        }
+
+        @Test
+        @DisplayName("Sin cambio de proveedor la rotación agota SU pool original y nunca sondea el otro")
+        void callModelWithRotation_providerUnchanged_exhaustsOriginalPoolOnly() {
+            NvidiaAiService service = hotSwitchService();
+            org.mockito.Mockito.when(providerSettings.translationProvider()).thenReturn("nvidia");
+            org.mockito.Mockito.when(inspector.isNvidiaOnline()).thenReturn(false);
+
+            RuntimeException e = assertThrows(RuntimeException.class,
+                    () -> service.callModelWithRotation("prompt", 8192,
+                            NvidiaAiService.AiUseCase.TRANSLATION));
+
+            assertTrue(e.getMessage().contains("2 rotation slots"), e.getMessage());
+            verify(inspector, org.mockito.Mockito.never()).isOllamaOnline();
         }
     }
 

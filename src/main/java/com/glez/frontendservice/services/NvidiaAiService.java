@@ -180,6 +180,29 @@ public class NvidiaAiService {
         int slowTimeouts = 0;
 
         while (attempts < totalModels * maxRetries) {
+            // HOT-SWITCH: la selección de proveedor se re-lee ENTRE
+            // intentos. Una rotación puede vivir muchos minutos (llamadas
+            // de hasta 60 min con el timeout ampliado) y un cambio de
+            // proveedor en Configuración no debe dejar que el pool del
+            // proveedor ANTERIOR siga disparando llamadas tras el cambio
+            // (incidente 19-oct: proveedor cambiado a ollama a las
+            // 09:28:18 y la rotación disparó deepseek a las 09:28:47).
+            // resolvePool devuelve SIEMPRE las mismas instancias de lista
+            // (nvidia u ollama), así que la comparación por referencia
+            // detecta el cambio sin coste y sin log por intento.
+            List<String> livePool = resolvePool(useCase);
+            if (livePool != pool) {
+                log.warn("[llm] Proveedor cambiado EN CALIENTE durante la rotación de {} "
+                                + "(nuevo pool: {} modelo(s)): la rotación continúa con el pool nuevo",
+                        useCase, livePool.size());
+                pool = livePool;
+                totalModels = pool.size();
+                // Presupuesto fresco para el proveedor nuevo: los intentos
+                // y los techos pagados al proveedor ANTERIOR no cuentan.
+                attempts = 0;
+                slowTimeouts = 0;
+                skippedOffline = 0;
+            }
             String currentModel = pool.get(currentModelIndex.get() % totalModels);
             // Pre-flight CONSCIENTE DEL PROVEEDOR: los modelos ollama: son
             // LOCALES (siempre disponibles, sin depender de la red); los
@@ -358,14 +381,23 @@ public class NvidiaAiService {
     }
 
     /**
-     * Cuenta como fallo lento un intento que era REINTENTABLE (la pieza
-     * seguía generándose, no fue un error de petición) y cuya duración
-     * alcanzó el techo de tiempo del servidor — la firma de una
-     * generación asesinada por el límite de ~240 s, no un blip de red
-     * (los blips fallan en segundos, sin acercarse al techo).
+     * Cuenta como fallo lento CUALQUIER intento cuya duración alcanzó el
+     * techo de tiempo del servidor — sea cual sea el tipo de excepción.
+     *
+     * <p>Antes exigía además que el error fuera "reintentable", y ese fue
+     * el matadero de chunks del 19-oct: deepseek/llama colgados ~20 min
+     * morían con un 500 del servidor que la lista de reintentables no
+     * reconocía, esquivaba tanto la vía lenta (re-división) como la
+     * reintentable (rotación) y caía en el "Non-retryable" que mataba el
+     * chunk ENTERO tras 20 minutos pagados. Tras pagar el techo en tiempo
+     * de pared, matar el chunk nunca ahorra nada: rotar puede salvarla
+     * con otro modelo y, a la segunda, la pieza se re-divide. Los fallos
+     * DUROS de verdad (400/401/403…) fallan en segundos y siguen por la
+     * vía no-reintentable; el parámetro {@code e} se conserva por la
+     * firma, no participa en la decisión.</p>
      */
     boolean countsAsSlowFailure(Exception e, long elapsedSeconds) {
-        return elapsedSeconds >= serverCeilingSeconds && isRetryableError(e);
+        return elapsedSeconds >= serverCeilingSeconds;
     }
 
     private boolean isRetryableError(Exception e) {
@@ -383,6 +415,22 @@ public class NvidiaAiService {
         if (e instanceof OllamaTransientException) {
             return true;
         }
+        // 5xx TIPADOS del servidor NVIDIA/proxy (500/502/504…): la firma de
+        // una cola larga que muere en el lado del servidor (19-oct:
+        // deepseek/llama colgados ~20 min que acaban en 500). Transitorios
+        // por naturaleza — rotan. Se camina la cadena de causas como en
+        // isModelGone porque el wrap genérico de Spring AI oculta la
+        // excepción original del SDK.
+        Throwable serverError = e;
+        int serverHops = 0;
+        while (serverError != null && serverHops < 6) {
+            if (serverError instanceof OpenAIServiceException apiException
+                    && apiException.statusCode() >= 500) {
+                return true;
+            }
+            serverError = serverError.getCause();
+            serverHops++;
+        }
         String message = e.getMessage();
         if (message == null) {
             return false;
@@ -398,7 +446,12 @@ public class NvidiaAiService {
                 // no-reintentable.
                 || message.contains("timeout")
                 || message.contains("timed out")
-                || message.contains("503");
+                || message.contains("503")
+                // 5xx por MENSAJE con el formato del SDK "<status>: <body>"
+                // (el ':' evita coincidencias de números sueltos).
+                || message.contains("500:")
+                || message.contains("502:")
+                || message.contains("504:");
     }
 
     private void rotateModel(int poolSize) {
@@ -412,13 +465,26 @@ public class NvidiaAiService {
      * (app.nvidia.models, que ya incluye sus fallbacks locales).
      */
     private List<String> poolFor(AiUseCase useCase) {
+        List<String> pool = resolvePool(useCase);
+        log.debug("[llm] Pool para {}: proveedor {} ({} modelos)",
+                useCase,
+                pool == ollamaModelNames ? "ollama" : "nvidia",
+                pool.size());
+        return pool;
+    }
+
+    /**
+     * Resolución SILENCIOSA del pool (sin log): la usa el hot-switch de la
+     * rotación para re-leer el proveedor en CADA intento. Devuelve siempre
+     * la MISMA instancia por proveedor ({@code ollamaModelNames} o
+     * {@code modelNames}), de modo que la identidad de la referencia es la
+     * señal de cambio.
+     */
+    private List<String> resolvePool(AiUseCase useCase) {
         String provider = useCase == AiUseCase.STORY_WIZARD
                 ? providerSettings.storyProvider()
                 : providerSettings.translationProvider();
         boolean useOllama = "ollama".equalsIgnoreCase(provider) && !ollamaModelNames.isEmpty();
-        log.debug("[llm] Pool para {}: proveedor {} ({} modelos)",
-                useCase, useOllama ? "ollama" : "nvidia",
-                useOllama ? ollamaModelNames.size() : modelNames.size());
         return useOllama ? ollamaModelNames : modelNames;
     }
 
