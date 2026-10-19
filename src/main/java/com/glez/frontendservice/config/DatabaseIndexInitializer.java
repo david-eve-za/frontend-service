@@ -84,6 +84,7 @@ public class DatabaseIndexInitializer {
         }
         ensureTraceStatusEnum();
         ensureLogEventColumnLengths();
+        ensureVideoStoryProjectColumnLengths();
         for (IndexDefinition index : INDEXES) {
             try {
                 // IF NOT EXISTS: a no-op when hbm2ddl already created it.
@@ -192,6 +193,23 @@ public class DatabaseIndexInitializer {
             } catch (Exception e) {
                 log.warn("Could not widen log_event column [{}]: {}", alteration, e.getMessage());
             }
+        }
+    }
+
+    /**
+     * Widens VIDEO_STORY_PROJECTS.VIDEO_PROMPT to the 40000 chars the entity
+     * declares. hbm2ddl never alters an existing column: the wizard's step 5
+     * now produces the filled 15-section MASTER PROMPT (tables and negative
+     * constraints included), which overflows the 20000-char column the table
+     * was born with — a legitimate output would blow the save at persist
+     * time. Idempotent: re-declaring the same length is a no-op; H2
+     * preserves the rows on a widening ALTER.
+     */
+    void ensureVideoStoryProjectColumnLengths() {
+        try {
+            jdbcTemplate.execute("ALTER TABLE VIDEO_STORY_PROJECTS ALTER COLUMN VIDEO_PROMPT VARCHAR(40000)");
+        } catch (Exception e) {
+            log.warn("Could not widen video_story_projects.video_prompt column: {}", e.getMessage());
         }
     }
 

@@ -92,10 +92,18 @@ export interface ScenesStepPayload {
     language: string;
 }
 
-/** Paso 4 (opcional): la escena que se transporta a la plantilla de video. */
+/**
+ * Paso 5 (opcional): la escena objetivo (índice 1-based, default la primera)
+ * y la referencia opcional (a lo sumo UNA: archivo, URL o búsqueda web) para
+ * la plantilla MASTER de 15 secciones. Todos los campos opcionales → cero
+ * interacción humana obligatoria.
+ */
 export interface VideoStepPayload {
-    scene: string;
+    sceneIndex?: number | null;
     animationStyle?: string | null;
+    referenceFileContent?: string | null;
+    referenceUrl?: string | null;
+    referenceSearch?: string | null;
 }
 
 /**
@@ -142,7 +150,7 @@ export class StoryWizardClientService {
             this.http.post<VideoStoryProject>(`${this.API_URL}/${id}/scenes`, payload));
     }
 
-    /** PASO 5 (opcional): transporta una escena a la plantilla de video. */
+    /** PASO 5 (opcional): transporta una escena a la plantilla MASTER de video. */
     generateVideo(id: string, payload: VideoStepPayload): Observable<VideoStoryProject> {
         return this.aiCall(
             this.http.post<VideoStoryProject>(`${this.API_URL}/${id}/video`, payload));

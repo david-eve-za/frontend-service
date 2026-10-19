@@ -14,6 +14,7 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Predicate;
 
@@ -30,8 +31,10 @@ import java.util.function.Predicate;
  *       assets con IDs estables.</li>
  *   <li>PASO 4 (SCENE PROMPT GENERATOR): historia+diseños producen las
  *       ESCENAS — el número y los tiempos se derivan de la duración.</li>
- *   <li>PASO 5, opcional (VIDEO GENERATION TEMPLATE): una escena elegida se
- *       transporta a la plantilla final de generación de video.</li>
+ *   <li>PASO 5, opcional (VIDEO GENERATION MASTER PROMPT): la escena
+ *       elegida por índice (default: la primera, SIN interacción) se
+ *       transporta a la plantilla MASTER de 15 secciones con TODA la cadena
+ *       embebida y una referencia opcional (archivo | URL | web).</li>
  * </ol>
  *
  * <p><b>Observabilidad exhaustiva</b>: cada paso corre con MDC
@@ -67,6 +70,8 @@ public class VideoStoryWizardService {
 
     private final NvidiaAiService ai;
     private final VideoStoryProjectRepository projectRepository;
+    /** Referencia opcional del paso 5 (archivo | URL | búsqueda web) — solo el wizard. */
+    private final WizardReferenceService referenceService;
 
     /**
      * PASO 1: valida el formulario, ensambla la plantilla narrativa, pide la
@@ -256,15 +261,16 @@ public class VideoStoryWizardService {
     }
 
     /**
-     * PASO 5 (opcional): transporta UNA escena elegida a la plantilla final
-     * de generación de video. Requiere que el paso 4 haya terminado. Se puede
-     * repetir: cada ejecución sobrescribe la plantilla anterior.
+     * PASO 5 (opcional): transporta UNA escena del paso 4 — AUTO-SELECCIONADA
+     * por índice 1-based (sin input: la primera) — a la PLANTILLA MASTER de
+     * 15 secciones de generación de video, embebiendo TODA la cadena
+     * aprobada (historia, diseños, assets y escenas) en los slots de la
+     * EXECUTION INSTRUCTION. La REFERENCIA OPCIONAL (contenido de archivo,
+     * URL o término de búsqueda web) se resuelve aquí y viaja al prompt como
+     * material de inspiración. Se puede repetir: cada ejecución sobrescribe
+     * la plantilla anterior. CERO interacción humana obligatoria.
      */
     public VideoStoryProject generateVideoPrompt(UUID projectId, WizardVideoStepRequest request) {
-        if (request == null || request.scene() == null || request.scene().isBlank()) {
-            log.warn("[wizard] Paso 5 (video) rechazado: escena ausente");
-            throw new IllegalArgumentException("Pega la escena que quieres convertir en video.");
-        }
         acquireProject(projectId);
         wizardMdc(projectId, "WIZARD_VIDEO");
         try {
@@ -272,21 +278,57 @@ public class VideoStoryWizardService {
                     p -> p.getScenes() != null,
                     "El proyecto aún no tiene escenas: ejecuta el paso 4 primero.");
 
-            // El estilo del paso 4 por defecto es el del paso 2 (misma línea visual).
-            String animationStyle = request.animationStyle() != null && !request.animationStyle().isBlank()
-                    ? request.animationStyle().trim()
-                    : project.getDesignStyle();
+            // El estilo del paso 5 por defecto es el del paso 2 (misma línea visual).
+            String animationStyle = request != null && request.animationStyle() != null
+                    && !request.animationStyle().isBlank()
+                            ? request.animationStyle().trim()
+                            : project.getDesignStyle();
 
-            log.info("[wizard] Paso 5 (video) iniciado: «{}» — escena pegada de {} caracteres, estilo «{}»",
-                    project.getTitle(), request.scene().length(),
-                    animationStyle == null ? "(del proyecto)" : animationStyle);
+            // Escena objetivo AUTO-SELECCIONADA de las escenas generadas: sin
+            // input, la primera; con índice 1-based, la elegida.
+            List<VideoStoryPromptFactory.SceneBlock> sceneBlocks =
+                    VideoStoryPromptFactory.parseScenes(project.getScenes());
+            if (sceneBlocks.isEmpty()) {
+                log.warn("[wizard] Paso 5 (video) rechazado: escenas sin cabeceras «SCENE NN» reconocibles");
+                throw new IllegalArgumentException(
+                        "No se pudo identificar ninguna escena «SCENE NN» en las escenas del proyecto: "
+                                + "regenera el paso 4 y vuelve a intentarlo.");
+            }
+            int sceneIndex = request != null && request.sceneIndex() != null
+                    && request.sceneIndex() > 0 ? request.sceneIndex() : 1;
+            if (sceneIndex > sceneBlocks.size()) {
+                log.warn("[wizard] Paso 5 (video) rechazado: índice {} sobre {} escenas",
+                        sceneIndex, sceneBlocks.size());
+                throw new IllegalArgumentException("El proyecto solo tiene " + sceneBlocks.size()
+                        + " escena(s): elige un índice entre 1 y " + sceneBlocks.size() + ".");
+            }
+            VideoStoryPromptFactory.SceneBlock target = sceneBlocks.get(sceneIndex - 1);
 
-            String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(request.scene(), animationStyle);
-            String videoPrompt = generate("paso 5 (video)", prompt, DEFAULT_STEP_OUTPUT_TOKENS);
+            // Referencia opcional (archivo | URL | búsqueda web): si el
+            // usuario la aportó y no se puede resolver, el paso falla con
+            // un mensaje accionable — nunca se descarta en silencio.
+            String reference = referenceService.resolveReference(
+                    request == null ? null : request.referenceFileContent(),
+                    request == null ? null : request.referenceUrl(),
+                    request == null ? null : request.referenceSearch());
+
+            log.info("[wizard] Paso 5 (video) iniciado: «{}» — escena {} de {} «{}», estilo «{}», "
+                            + "referencia «{}»",
+                    project.getTitle(), sceneIndex, sceneBlocks.size(), target.id(),
+                    animationStyle == null ? "(del proyecto)" : animationStyle,
+                    reference == null ? "ninguna" : "sí (" + reference.length() + " caracteres)");
+
+            String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(
+                    project.getTitle(), project.getStory(), project.getDesigns(),
+                    project.getAssets(), project.getScenes(), target.id(), animationStyle,
+                    project.getSceneLanguage(), project.getAssetsAspectRatio(),
+                    project.getSceneAvgSeconds(), reference);
+            String videoPrompt = generate("paso 5 (video)", prompt, LONG_STEP_OUTPUT_TOKENS);
 
             project.setVideoPrompt(videoPrompt);
-            log.info("[wizard] Plantilla de video generada para «{}»: {} caracteres",
-                    project.getTitle(), videoPrompt.length());
+            log.info("[wizard] Plantilla MASTER de video generada para «{}»: {} caracteres "
+                            + "(escena «{}» de {})",
+                    project.getTitle(), videoPrompt.length(), target.id(), sceneBlocks.size());
             return saveUpdated(project);
         } finally {
             releaseProject(projectId);

@@ -82,8 +82,8 @@ public class VideoStoryProject {
     @Column(name = "scenes", length = 30000)
     private String scenes;
 
-    /** PASO 4 (opcional) — Plantilla de generación de video final (rellena por la IA desde una escena). */
-    @Column(name = "video_prompt", length = 20000)
+    /** PASO 5 (opcional) — Plantilla MASTER de generación de video (15 secciones) rellena por la IA desde una escena. */
+    @Column(name = "video_prompt", length = 40000)
     private String videoPrompt;
 
     @Column(name = "created_at", nullable = false)
