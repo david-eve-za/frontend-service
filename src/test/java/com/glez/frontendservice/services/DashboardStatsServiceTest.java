@@ -44,6 +44,12 @@ class DashboardStatsServiceTest {
     @Mock
     private CatalogStatsService catalogStatsService;
 
+    @Mock
+    private VideoStoryStatsService videoStoryStatsService;
+
+    @Mock
+    private VideoStoryWizardService videoStoryWizardService;
+
     private JdbcTemplate jdbcTemplate;
     private DashboardStatsService service;
 
@@ -73,7 +79,15 @@ class DashboardStatsServiceTest {
                 )""");
 
         service = new DashboardStatsService(jdbcTemplate, pipelineOrchestrator, catalogSyncService,
-                catalogStatsService);
+                catalogStatsService, videoStoryStatsService, videoStoryWizardService);
+        // El panel del asistente se simula vacío: este test valida la
+        // agregación de LIBROS; el asistente tiene su propia suite H2.
+        org.mockito.Mockito.lenient().when(videoStoryStatsService.wizardStats())
+                .thenReturn(new DashboardStatsDto.WizardStatsDto(0, 0, 0, 0, List.of()));
+        org.mockito.Mockito.lenient().when(videoStoryStatsService.wizardProcesses(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of());
+        org.mockito.Mockito.lenient().when(videoStoryWizardService.getRunningProjectIds())
+                .thenReturn(Set.of());
         setField("datasourceUrl", JDBC_URL);
     }
 
@@ -167,9 +181,15 @@ class DashboardStatsServiceTest {
         DataSource failingDataSource = mock(DataSource.class);
         when(failingDataSource.getConnection()).thenThrow(new RuntimeException("connection refused"));
         service = new DashboardStatsService(new JdbcTemplate(failingDataSource), pipelineOrchestrator,
-                catalogSyncService, catalogStatsService);
+                catalogSyncService, catalogStatsService, videoStoryStatsService, videoStoryWizardService);
         setField("datasourceUrl", JDBC_URL);
         when(catalogSyncService.getStatus()).thenReturn(NovelsCatalogSyncStatus.idle());
+        org.mockito.Mockito.lenient().when(videoStoryStatsService.wizardStats())
+                .thenReturn(new DashboardStatsDto.WizardStatsDto(0, 0, 0, 0, List.of()));
+        org.mockito.Mockito.lenient().when(videoStoryStatsService.wizardProcesses(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of());
+        org.mockito.Mockito.lenient().when(videoStoryWizardService.getRunningProjectIds())
+                .thenReturn(Set.of());
 
         DashboardStatsDto stats = service.getStats();
 

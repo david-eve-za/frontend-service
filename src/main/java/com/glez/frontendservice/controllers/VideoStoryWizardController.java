@@ -8,7 +8,9 @@ import com.glez.frontendservice.dtos.WizardScenesStepRequest;
 import com.glez.frontendservice.dtos.WizardVideoStepRequest;
 import com.glez.frontendservice.model.VideoStoryProject;
 import com.glez.frontendservice.repository.VideoStoryProjectRepository;
+import com.glez.frontendservice.services.VideoStoryTraceService;
 import com.glez.frontendservice.services.VideoStoryWizardService;
+import com.glez.frontendservice.dtos.VideoStoryTraceDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -43,6 +45,7 @@ public class VideoStoryWizardController {
 
     private final VideoStoryWizardService wizard;
     private final VideoStoryProjectRepository projectRepository;
+    private final VideoStoryTraceService traceService;
 
     @Operation(summary = "Lista los proyectos del asistente", description = "Resúmenes (sin outputs pesados), más recientes primero.")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Proyectos del asistente"))
@@ -156,6 +159,26 @@ public class VideoStoryWizardController {
     public ResponseEntity<?> generateVideo(@PathVariable UUID id,
             @RequestBody WizardVideoStepRequest request) {
         return runStep(() -> wizard.generateVideoPrompt(id, request));
+    }
+
+    @Operation(summary = "Cronología del proyecto (trazas de cada intento de paso)",
+            description = "El equivalente wizard de la cronología del pipeline de libros: un evento por "
+                    + "intento de paso (historia, diseños, assets, escenas, plantilla MASTER) con estado, "
+                    + "intento, duración y causa del fallo. 404 si el proyecto no existe.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Eventos de traza del proyecto, la más antigua primero"),
+            @ApiResponse(responseCode = "404", description = "Proyecto desconocido")
+    })
+    @GetMapping("/{id}/timeline")
+    public ResponseEntity<List<VideoStoryTraceDto>> timeline(@PathVariable UUID id) {
+        try {
+            return ResponseEntity.ok(traceService.timeline(id));
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage() != null && e.getMessage().contains("no encontrado")) {
+                return ResponseEntity.notFound().build();
+            }
+            throw e;
+        }
     }
 
     @Operation(summary = "Descarga el STORYBOARD completo en un solo documento",

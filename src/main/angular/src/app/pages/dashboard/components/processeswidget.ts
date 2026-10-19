@@ -13,15 +13,21 @@ import {
     DashboardService,
     DashboardStats,
     BookProcess,
+    WizardProcess,
 } from '../dashboard.service';
 
-/** Etiqueta en español de cada paso del pipeline. */
+/** Etiqueta en español de cada paso del pipeline y del asistente. */
 const STEP_LABELS: Record<string, string> = {
     EXTRACT: 'Extracción',
     SPLIT: 'División',
     TRANSLATE: 'Traducción',
     AUDIO: 'Audio',
     FINALIZE: 'Finalización',
+    STORY: '1. Historia',
+    DESIGNS: '2. Diseños',
+    ASSETS: '3. Assets',
+    SCENES: '4. Escenas',
+    VIDEO: '5. Plantilla MASTER',
 };
 
 /**
@@ -245,6 +251,69 @@ const STEP_LABELS: Record<string, string> = {
                     {{ s.processes.catalogSync.lastError }}
                 </div>
             }
+
+            <span class="block text-muted-color font-medium mt-4 mb-2"
+                >Asistente de Historias</span
+            >
+            @if ((s.processes.wizardProcesses?.length ?? 0) > 0) {
+                <ul class="list-none p-0 m-0">
+                    @for (
+                        process of s.processes.wizardProcesses;
+                        track process.projectId
+                    ) {
+                        <li
+                            class="flex items-center justify-between gap-3 py-3 border-t border-surface"
+                        >
+                            <div class="flex items-center gap-3 min-w-0">
+                                <i
+                                    [class]="
+                                        process.running
+                                            ? 'pi pi-spin pi-spinner text-primary'
+                                            : wizardIcon(process.state)
+                                    "
+                                ></i>
+                                <div class="min-w-0">
+                                    <span
+                                        class="font-medium block truncate"
+                                        >{{ process.title || process.projectId }}</span
+                                    >
+                                    <span
+                                        class="text-muted-color text-sm block"
+                                    >
+                                        {{ stepLabel(process.currentStep) }} ·
+                                        {{ process.stepsDone }}/{{
+                                            process.stepsTotal
+                                        }}
+                                        pasos
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                                <p-button
+                                    icon="pi pi-list"
+                                    size="small"
+                                    severity="secondary"
+                                    [outlined]="true"
+                                    [disabled]="busy()"
+                                    pTooltip="Ver logs en vivo de este proyecto (traza = id del proyecto)"
+                                    tooltipPosition="top"
+                                    (click)="viewWizardLogs(process)"
+                                />
+                                <p-tag
+                                    [value]="wizardStateLabel(process.state)"
+                                    [severity]="
+                                        wizardStateSeverity(process.state)
+                                    "
+                                />
+                            </div>
+                        </li>
+                    }
+                </ul>
+            } @else {
+                <div class="text-muted-color py-3 border-t border-surface">
+                    Ningún proyecto del asistente con la cadena pendiente.
+                </div>
+            }
         }
         <p-confirmDialog />
         <p-toast position="top-right" />
@@ -349,6 +418,48 @@ export class ProcessesWidget {
         }
     }
 
+    /** Estado derivado de un proyecto del asistente (panel). */
+    wizardStateLabel(state: string): string {
+        switch (state) {
+            case 'RUNNING':
+                return 'En curso';
+            case 'FAILED':
+                return 'Fallido';
+            case 'IN_PROGRESS':
+                return 'En progreso';
+            case 'NEW':
+                return 'Nuevo';
+            default:
+                return state;
+        }
+    }
+
+    wizardStateSeverity(
+        state: string,
+    ): 'info' | 'success' | 'danger' | 'warn' | 'secondary' {
+        switch (state) {
+            case 'RUNNING':
+                return 'info';
+            case 'FAILED':
+                return 'danger';
+            case 'IN_PROGRESS':
+                return 'warn';
+            default:
+                return 'secondary';
+        }
+    }
+
+    wizardIcon(state: string): string {
+        switch (state) {
+            case 'FAILED':
+                return 'pi pi-exclamation-triangle text-red-400';
+            case 'IN_PROGRESS':
+                return 'pi pi-sparkles text-primary';
+            default:
+                return 'pi pi-circle-fill text-muted-color';
+        }
+    }
+
     start(process: BookProcess): void {
         this.run(() => this.dashboardService.startBook(process.bookId));
     }
@@ -406,6 +517,20 @@ export class ProcessesWidget {
                 text: 'NovelsCatalogSync',
                 clearExclude: 1,
                 name: 'Sincronización del catálogo',
+            },
+        });
+    }
+
+    /**
+     * Logs en vivo de un proyecto del asistente: su traza MDC ES el id del
+     * proyecto (sin bookId), así que el enlace filtra el visor por ese
+     * traceId — cada paso del wizard queda correlacionado por proyecto.
+     */
+    viewWizardLogs(process: WizardProcess): void {
+        this.router.navigate(['/logs'], {
+            queryParams: {
+                text: process.projectId,
+                name: `Asistente — ${process.title || process.projectId}`,
             },
         });
     }

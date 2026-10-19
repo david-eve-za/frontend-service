@@ -43,6 +43,8 @@ public class DashboardStatsService {
     private final BookPipelineOrchestrator pipelineOrchestrator;
     private final NovelsCatalogSyncService catalogSyncService;
     private final CatalogStatsService catalogStatsService;
+    private final VideoStoryStatsService videoStoryStatsService;
+    private final VideoStoryWizardService videoStoryWizardService;
 
     @Value("${spring.datasource.url}")
     private String datasourceUrl;
@@ -76,7 +78,10 @@ public class DashboardStatsService {
                     chunkStats(books),
                     // Cached counts (Caffeine "catalogCounts"): the dashboard
                     // polls every 15s; the sync evicts them when it finishes.
-                    catalogStatsService.catalogStats());
+                    catalogStatsService.catalogStats(),
+                    // Asistente de Historias: métricas ligeras sin cache
+                    // (tablas diminutas junto al catálogo).
+                    videoStoryStatsService.wizardStats());
         } catch (Exception e) {
             // Un panel de monitoreo debe degradarse, no fallar: se reporta la
             // caída con métricas vacías para que la UI siempre pueda renderizar.
@@ -91,11 +96,13 @@ public class DashboardStatsService {
         // import del tipo anidado dentro de los argumentos del constructor del
         // record contenedor dispara una circularidad de atribución en javac.
         DatabaseStatusDto database = new DatabaseStatusDto("DOWN", null, null, datasourceUrl, null, error);
-        ProcessStatusDto processes = new ProcessStatusDto(List.of(), catalogSyncService.getStatus(), List.of());
+        ProcessStatusDto processes = new ProcessStatusDto(List.of(), catalogSyncService.getStatus(),
+                List.of(), List.of());
         BookStatsDto books = new BookStatsDto(0, 0, 0, 0, 0, Map.of());
         ChunkStatsDto chunks = new ChunkStatsDto(0, 0);
         DashboardStatsDto.CatalogStatsDto catalog = new DashboardStatsDto.CatalogStatsDto(0, 0, List.of());
-        return new DashboardStatsDto(database, processes, books, chunks, catalog);
+        DashboardStatsDto.WizardStatsDto wizard = new DashboardStatsDto.WizardStatsDto(0, 0, 0, 0, List.of());
+        return new DashboardStatsDto(database, processes, books, chunks, catalog, wizard);
     }
 
     /**
@@ -197,7 +204,11 @@ public class DashboardStatsService {
                 .toList();
 
         NovelsCatalogSyncStatus sync = catalogSyncService.getStatus();
-        return new ProcessStatusDto(running, sync, bookProcesses);
+        // Procesos del Asistente de Historias: proyectos con la cadena
+        // incompleta, con el cerrojo del wizard como fuente de "running".
+        List<DashboardStatsDto.WizardProcessDto> wizardProcesses =
+                videoStoryStatsService.wizardProcesses(videoStoryWizardService.getRunningProjectIds());
+        return new ProcessStatusDto(running, sync, bookProcesses, wizardProcesses);
     }
 
     /** Orden estable de estados para la lista de procesos del panel. */

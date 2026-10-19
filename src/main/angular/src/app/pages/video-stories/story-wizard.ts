@@ -22,6 +22,7 @@ import {
     StoryWizardClientService,
     VideoStoryProject,
     VideoStoryProjectSummary,
+    VideoStoryTraceEvent,
 } from './story-wizard.service';
 
 /** Opción de los p-select: etiqueta ES, valor EN listo para las plantillas. */
@@ -819,6 +820,62 @@ interface SelectOption {
                         [value]="p.videoPrompt"
                     ></textarea>
                 }
+
+                <!-- ═══════ CRONOLOGÍA DEL PROYECTO (trazas de cada intento de paso) ═══════ -->
+                @if (wizardTimeline.length > 0) {
+                    <div class="flex items-center justify-between mt-6 mb-2">
+                        <div class="font-semibold text-lg">Cronología del proyecto</div>
+                        <p-button
+                            icon="pi pi-refresh"
+                            severity="secondary"
+                            [text]="true"
+                            [loading]="timelineLoading"
+                            pTooltip="Refresca la cronología"
+                            tooltipPosition="top"
+                            (onClick)="loadTimeline()"
+                        />
+                    </div>
+                    <p-table
+                        [value]="wizardTimeline"
+                        dataKey="id"
+                        [paginator]="wizardTimeline.length > 8"
+                        [rows]="8"
+                        [tableStyle]="{ 'min-width': '640px' }"
+                    >
+                        <ng-template pTemplate="header">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Paso</th>
+                                <th>Estado</th>
+                                <th class="text-center">Intento</th>
+                                <th>Duración</th>
+                                <th>Detalle</th>
+                            </tr>
+                        </ng-template>
+                        <ng-template pTemplate="body" let-ev>
+                            <tr>
+                                <td>{{ ev.startedAt | date: 'dd/MM HH:mm' }}</td>
+                                <td>{{ traceStepLabel(ev.step) }}</td>
+                                <td>
+                                    <p-tag
+                                        [value]="traceStatusLabel(ev.status)"
+                                        [severity]="traceStatusSeverity(ev.status)"
+                                    />
+                                </td>
+                                <td class="text-center">{{ ev.attempt }}</td>
+                                <td>{{ traceDuration(ev.durationMs) }}</td>
+                                <td
+                                    class="text-sm"
+                                    [class.text-red-500]="!!ev.errorMessage"
+                                    [pTooltip]="ev.errorMessage || ev.details || ''"
+                                    tooltipPosition="top"
+                                >
+                                    {{ ev.errorMessage || ev.details || '' }}
+                                </td>
+                            </tr>
+                        </ng-template>
+                    </p-table>
+                }
             }
         </div>
 
@@ -1015,6 +1072,10 @@ export class StoryWizard {
     autoMode = true;
     autoRunning = false;
     autoStep = '';
+
+    // ── Cronología del proyecto (trazas persistidas de cada intento de paso). ──
+    wizardTimeline: VideoStoryTraceEvent[] = [];
+    timelineLoading = false;
 
     // ── Selectores (etiqueta ES, valor EN). ──
     readonly genreOptions: SelectOption[] = [
@@ -1254,6 +1315,7 @@ export class StoryWizard {
                         detail: `«${project.title}» — continúa con el paso 2 cuando quieras.`,
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     // Modo automático: la cadena 2→5 arranca sola (nula
                     // interacción tras el formulario de historia).
@@ -1301,6 +1363,7 @@ export class StoryWizard {
                         detail: 'Continúa con el paso 3 cuando quieras.',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1341,6 +1404,7 @@ export class StoryWizard {
                         detail: 'Biblioteca con IDs estables lista para las escenas.',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1384,6 +1448,7 @@ export class StoryWizard {
                         detail: 'El paso 5 (plantilla MASTER de video) ya está disponible.',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1430,6 +1495,7 @@ export class StoryWizard {
                         detail: 'Cópiala a tu herramienta de video (Sora, Veo, Runway, Kling…).',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1591,6 +1657,7 @@ export class StoryWizard {
             });
         }
         this.loadProjects();
+        this.loadTimeline();
         this.cdr.markForCheck();
     }
 
@@ -1642,6 +1709,8 @@ export class StoryWizard {
         this.referenceFileName = null;
         this.autoRunning = false;
         this.autoStep = '';
+        this.wizardTimeline = [];
+        this.timelineLoading = false;
     }
 
     openProject(summary: VideoStoryProjectSummary) {
@@ -1731,6 +1800,93 @@ export class StoryWizard {
         });
     }
 
+    // ═══════════════ Cronología del proyecto (trazas) ═══════════════
+
+    /** Cronología del proyecto activo: un evento por intento de paso. */
+    loadTimeline(): void {
+        const p = this.project();
+        if (!p) {
+            this.wizardTimeline = [];
+            return;
+        }
+        this.timelineLoading = true;
+        this.client.timeline(p.id).subscribe({
+            next: (events) => {
+                this.wizardTimeline = events;
+                this.timelineLoading = false;
+                this.cdr.markForCheck();
+            },
+            error: () => {
+                // La cronología es un extra de monitoreo: degrada en silencio.
+                this.timelineLoading = false;
+            },
+        });
+    }
+
+    traceStepLabel(step: string): string {
+        switch (step) {
+            case 'STORY':
+                return '1. Historia';
+            case 'DESIGNS':
+                return '2. Diseños';
+            case 'ASSETS':
+                return '3. Assets';
+            case 'SCENES':
+                return '4. Escenas';
+            case 'VIDEO':
+                return '5. Plantilla MASTER';
+            default:
+                return step;
+        }
+    }
+
+    traceStatusLabel(status: string): string {
+        switch (status) {
+            case 'STARTED':
+                return 'En curso';
+            case 'COMPLETED':
+                return 'Completado';
+            case 'FAILED':
+                return 'Fallido';
+            case 'SKIPPED':
+                return 'Omitido';
+            case 'CANCELLED':
+                return 'Cancelado';
+            default:
+                return status;
+        }
+    }
+
+    traceStatusSeverity(
+        status: string,
+    ): 'info' | 'success' | 'danger' | 'warn' | 'secondary' {
+        switch (status) {
+            case 'STARTED':
+                return 'info';
+            case 'COMPLETED':
+                return 'success';
+            case 'FAILED':
+                return 'danger';
+            case 'SKIPPED':
+                return 'secondary';
+            case 'CANCELLED':
+                return 'warn';
+            default:
+                return 'secondary';
+        }
+    }
+
+    /** Duración legible de un intento: 45 s / 2.3 min. */
+    traceDuration(ms: number | null): string {
+        if (ms == null) {
+            return '—';
+        }
+        if (ms < 60_000) {
+            return (ms / 1000).toFixed(1) + ' s';
+        }
+        return (ms / 60_000).toFixed(1) + ' min';
+    }
+
     /**
      * REANUDA un proyecto de la biblioteca: lo carga en el asistente con
      * los formularios pre-rellenos para continuar los pasos pendientes.
@@ -1739,6 +1895,7 @@ export class StoryWizard {
         this.client.get(summary.id).subscribe({
             next: (project) => {
                 this.project.set(project);
+                this.loadTimeline();
                 // Prefill de los formularios de los pasos con lo ya configurado.
                 this.designStyle = project.designStyle ?? this.designStyle;
                 this.assetsStyle = project.designStyle ?? null;

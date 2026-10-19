@@ -41,6 +41,21 @@ export interface VideoStoryProjectSummary {
     createdAt: string;
 }
 
+/** Evento de la cronología de un proyecto (GET /{id}/timeline). */
+export interface VideoStoryTraceEvent {
+    id: string;
+    /** STORY | DESIGNS | ASSETS | SCENES | VIDEO */
+    step: string;
+    /** STARTED | COMPLETED | FAILED | SKIPPED | CANCELLED */
+    status: string;
+    attempt: number;
+    startedAt: string;
+    finishedAt: string | null;
+    durationMs: number | null;
+    errorMessage: string | null;
+    details: string | null;
+}
+
 /** Payload del paso 1: el mismo formulario de historia del Creador de Historias. */
 export interface StoryPromptPayload {
     title: string;
@@ -125,6 +140,11 @@ export class StoryWizardClientService {
     /** Proyecto completo con todos los outputs de la cadena. */
     get(id: string): Observable<VideoStoryProject> {
         return this.http.get<VideoStoryProject>(`${this.API_URL}/${id}`);
+    }
+
+    /** Cronología del proyecto: un evento por intento de paso, como el pipeline de libros. */
+    timeline(id: string): Observable<VideoStoryTraceEvent[]> {
+        return this.http.get<VideoStoryTraceEvent[]>(`${this.API_URL}/${id}/timeline`);
     }
 
     /** PASO 1: crea el proyecto y genera la historia con la IA. */

@@ -9,6 +9,7 @@ import { StatusChartWidget } from './components/statuschartwidget';
 import { ChunksProgressWidget } from './components/chunksprogresswidget';
 import { ProcessesWidget } from './components/processeswidget';
 import { ElscioneActivityWidget } from './components/elscioneactivitywidget';
+import { WizardActivityWidget } from './components/wizardactivitywidget';
 
 /** Frecuencia de sondeo de /api/dashboard/stats. */
 const REFRESH_INTERVAL_MS = 15000;
@@ -24,6 +25,7 @@ const REFRESH_INTERVAL_MS = 15000;
         ChunksProgressWidget,
         ProcessesWidget,
         ElscioneActivityWidget,
+        WizardActivityWidget,
     ],
     template: `
         <div class="flex items-center justify-between mb-4">
@@ -85,6 +87,9 @@ const REFRESH_INTERVAL_MS = 15000;
             </div>
             <div class="col-span-12">
                 <app-elscione-activity-widget [stats]="stats()" />
+            </div>
+            <div class="col-span-12">
+                <app-wizard-activity-widget [stats]="stats()" />
             </div>
         </div>
     `,
