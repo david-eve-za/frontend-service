@@ -157,7 +157,7 @@ app:
     # en traducción (33 idiomas, fast-thinking: sin razonamiento, todo el
     # tope de salida es traducción visible); gemma4 y gpt-oss son los
     # generalistas creativos. El prefijo "ollama:" enruta a localhost:11434.
-    models: "ollama:gemma4-40k,ollama:gpt-oss:20b"
+    models: "ollama:gpt-oss:20b"
   ai:
     # PROVEEDOR POR CASO DE USO (nvidia | ollama). Son los DEFAULTS al
     # arrancar; la selección real se cambia EN CALIENTE desde la página de
