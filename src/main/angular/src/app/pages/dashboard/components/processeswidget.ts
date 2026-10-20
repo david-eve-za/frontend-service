@@ -523,13 +523,14 @@ export class ProcessesWidget {
 
     /**
      * Logs en vivo de un proyecto del asistente: su traza MDC ES el id del
-     * proyecto (sin bookId), así que el enlace filtra el visor por ese
-     * traceId — cada paso del wizard queda correlacionado por proyecto.
+     * proyecto (sin bookId). ?trace= alimenta el filtro MDC del visor — el
+     * traceId casa EXACTO con cada línea de todos los pasos del wizard,
+     * incluida la llamada del paso 1 (el id se asigna antes de la llamada).
      */
     viewWizardLogs(process: WizardProcess): void {
         this.router.navigate(['/logs'], {
             queryParams: {
-                text: process.projectId,
+                trace: process.projectId,
                 name: `Asistente — ${process.title || process.projectId}`,
             },
         });

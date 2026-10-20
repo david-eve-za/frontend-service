@@ -77,6 +77,9 @@ class VideoStoryStatsServiceTest {
     private VideoStoryProject project(String title, String story, String designs,
             String assets, String scenes, String videoPrompt) {
         VideoStoryProject project = new VideoStoryProject();
+        // Sin @GeneratedValue: el id lo asigna quien crea (el servicio del
+        // asistente desde antes de la llamada IA; los tests directamente).
+        project.setId(UUID.randomUUID());
         project.setTitle(title);
         project.setStory(story);
         project.setDesigns(designs);

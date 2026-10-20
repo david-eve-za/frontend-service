@@ -69,9 +69,10 @@ public class LogStreamController {
 
     @Operation(summary = "Búsqueda en el histórico de logs persistido en BD",
             description = "Consulta paginada del histórico (retención configurable, por defecto 7 días) "
-                    + "por rango de tiempo, nivel, clase(s), libro del pipeline o texto en el mensaje. "
-                    + "El contexto MDC (bookId, traceId, step) se reconstruye en cada evento. "
-                    + "Orden descendente por fecha (lo más reciente primero).")
+                    + "por rango de tiempo, nivel, clase(s), libro del pipeline, traceId de traza "
+                    + "(el id de proyecto del asistente de historias o el traceId de cualquier proceso) "
+                    + "o texto en el mensaje. El contexto MDC (bookId, traceId, step) se reconstruye en "
+                    + "cada evento. Orden descendente por fecha (lo más reciente primero).")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Página de eventos de log persistidos"))
     @GetMapping("/search")
     public ResponseEntity<PaginatedResponse<LogEventDto>> search(
@@ -87,6 +88,8 @@ public class LogStreamController {
             @RequestParam(required = false) String loggers,
             @Parameter(description = "bookId del pipeline (MDC), opcional")
             @RequestParam(required = false) String bookId,
+            @Parameter(description = "traceId de traza MDC (p. ej. el id de un proyecto del asistente), opcional")
+            @RequestParam(required = false) String traceId,
             @Parameter(description = "Texto contenido en el mensaje o en la clase, opcional")
             @RequestParam(required = false) String q,
             @RequestParam(defaultValue = "0") int page,
@@ -95,7 +98,7 @@ public class LogStreamController {
         Pageable pageable = PageRequest.of(Math.max(0, page), pageSize, Sort.by(Sort.Direction.DESC, "loggedAt"));
         List<String> loggerNames = parseLoggers(loggers);
         Page<LogEventDto> result = logEventRepository
-                .findAll(searchSpecification(from, to, level, loggerNames, bookId, q), pageable)
+                .findAll(searchSpecification(from, to, level, loggerNames, bookId, traceId, q), pageable)
                 .map(LogStreamController::toDto);
         return ResponseEntity.ok(new PaginatedResponse<>(result));
     }
@@ -113,7 +116,8 @@ public class LogStreamController {
 
     /**
      * Filtros opcionales del histórico: rango de tiempo, nivel exacto,
-     * selección múltiple de clases (IN), libro del pipeline y texto en
+     * selección múltiple de clases (IN), libro del pipeline, traceId de
+     * traza (proceso del asistente o cualquier traza MDC) y texto en
      * mensaje o clase. Los vacíos/nulos no filtran — una petición sin
      * parámetros devuelve la primera página del histórico reciente.
      *
@@ -123,7 +127,8 @@ public class LogStreamController {
      * una lista y se combinan con {@code cb.and(...)}.</p>
      */
     private static Specification<LogEvent> searchSpecification(
-            Instant from, Instant to, String level, List<String> loggers, String bookId, String q) {
+            Instant from, Instant to, String level, List<String> loggers,
+            String bookId, String traceId, String q) {
         return (root, query, cb) -> {
             List<Predicate> filters = new ArrayList<>();
             if (from != null) {
@@ -142,6 +147,9 @@ public class LogStreamController {
             }
             if (bookId != null && !bookId.isBlank()) {
                 filters.add(cb.equal(root.get("bookId"), bookId.trim()));
+            }
+            if (traceId != null && !traceId.isBlank()) {
+                filters.add(cb.equal(root.get("traceId"), traceId.trim()));
             }
             if (q != null && !q.isBlank()) {
                 String like = "%" + q.trim().toLowerCase() + "%";

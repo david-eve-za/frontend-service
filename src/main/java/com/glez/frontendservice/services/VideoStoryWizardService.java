@@ -88,10 +88,13 @@ public class VideoStoryWizardService {
             throw new IllegalArgumentException("Faltan campos obligatorios del formulario de historia.");
         }
 
-        // El proyecto nace DESPUÉS de la llamada: el paso 1 corre bajo una
-        // traza temporal; el id del proyecto queda correlacionado en el log
-        // de creación para poder seguirlo en el visor.
-        wizardMdc(UUID.randomUUID(), "WIZARD_STORY");
+        // El id se genera AQUÍ, antes de la llamada: el MDC traceId del paso
+        // 1 ES el id futuro del proyecto, de modo que TODAS las líneas del
+        // paso (llamada a la IA incluida, que puede tardar minutos) quedan
+        // rastreables en el visor bajo el mismo id que la cronología y el
+        // panel de procesos.
+        UUID projectId = UUID.randomUUID();
+        wizardMdc(projectId, "WIZARD_STORY");
         try {
             log.info("[wizard] Paso 1 (historia) iniciado: «{}» — género «{}», tono «{}», audiencia «{}», "
                             + "duración {}s, {} personajes, plataforma «{}»",
@@ -103,6 +106,7 @@ public class VideoStoryWizardService {
             String story = generate("paso 1 (historia)", prompt, DEFAULT_STEP_OUTPUT_TOKENS);
 
             VideoStoryProject project = new VideoStoryProject();
+            project.setId(projectId);
             project.setTitle(request.title().trim());
             project.setStory(story);
             // La duración dirige la extensión de las escenas (paso 4).
@@ -112,12 +116,11 @@ public class VideoStoryWizardService {
             project.setUpdatedAt(now);
             VideoStoryProject saved = projectRepository.save(project);
 
-            // Traza POST-creación: la fila del proyecto tiene que existir
-            // para colgarle el evento. La duración REAL de la IA viaja en
-            // los detalles; el evento queda como evidencia del paso en la
-            // cronología del proyecto (los fallos del paso 1 no dejan fila
-            // que tracear y quedan solo en el visor de logs, por diseño:
-            // no se crean proyectos vacíos).
+            // Traza del intento (la fila ya existe): el evento queda en la
+            // cronología con el MISMO id que llevó el MDC durante toda la
+            // llamada — visor de logs y cronología correlacionan 1:1. Los
+            // fallos del paso 1 no dejan fila que tracear y quedan solo en
+            // el visor de logs, por diseño: no se crean proyectos vacíos.
             VideoStoryTraceEvent trace = traceService.startStep(saved.getId(), VideoStoryStep.STORY, null);
             traceService.completeStep(trace, "historia de " + story.length() + " caracteres en "
                     + (System.currentTimeMillis() - aiStart) + " ms de IA");

@@ -181,20 +181,26 @@ public class VideoStoryStatsService {
         Timestamp cutoff = Timestamp.from(firstDay.atStartOfDay(zone).toInstant());
 
         // day ("yyyy-MM-dd") -> [creados, completados, fallidos]
+        //
+        // CAST(x AS TIMESTAMP) es OBLIGATORIO: las columnas son TIMESTAMP
+        // WITH TIME ZONE y FORMATDATETIME las renderiza en UTC — sin el
+        // cast, los conteos caían en el día UTC y la serie (etiquetada con
+        // LocalDate de la zona local) los perdía entre las 19:00-24:00
+        // locales (bug destapado por el test de la serie a esa hora).
         Map<String, long[]> byDay = new HashMap<>();
         jdbcTemplate.query(
-                "SELECT FORMATDATETIME(created_at, 'yyyy-MM-dd') AS day_key, COUNT(*) AS TOTAL "
+                "SELECT FORMATDATETIME(CAST(created_at AS TIMESTAMP), 'yyyy-MM-dd') AS day_key, COUNT(*) AS TOTAL "
                         + "FROM VIDEO_STORY_PROJECTS WHERE created_at >= ? "
-                        + "GROUP BY FORMATDATETIME(created_at, 'yyyy-MM-dd')",
+                        + "GROUP BY FORMATDATETIME(CAST(created_at AS TIMESTAMP), 'yyyy-MM-dd')",
                 rs -> {
                     byDay.computeIfAbsent(rs.getString("day_key"), key -> new long[3])[0]
                             += rs.getLong("TOTAL");
                 },
                 cutoff);
         jdbcTemplate.query(
-                "SELECT FORMATDATETIME(finished_at, 'yyyy-MM-dd') AS day_key, STATUS, COUNT(*) AS TOTAL "
+                "SELECT FORMATDATETIME(CAST(finished_at AS TIMESTAMP), 'yyyy-MM-dd') AS day_key, STATUS, COUNT(*) AS TOTAL "
                         + "FROM VIDEO_STORY_TRACE_EVENT WHERE finished_at >= ? "
-                        + "GROUP BY FORMATDATETIME(finished_at, 'yyyy-MM-dd'), STATUS",
+                        + "GROUP BY FORMATDATETIME(CAST(finished_at AS TIMESTAMP), 'yyyy-MM-dd'), STATUS",
                 rs -> {
                     long[] counts = byDay.computeIfAbsent(rs.getString("day_key"), key -> new long[3]);
                     if (TraceEventStatus.COMPLETED.name().equals(rs.getString("STATUS"))) {

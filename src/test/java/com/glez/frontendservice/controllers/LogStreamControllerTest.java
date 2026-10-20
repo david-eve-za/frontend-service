@@ -57,7 +57,7 @@ class LogStreamControllerTest {
                 .thenReturn(new PageImpl<>(List.of(event), PageRequest.of(0, 50), 1));
 
         ResponseEntity<PaginatedResponse<LogEventDto>> response =
-                controller.search(null, null, null, null, null, null, 0, 50);
+                controller.search(null, null, null, null, null, null, null, 0, 50);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -80,7 +80,7 @@ class LogStreamControllerTest {
         ResponseEntity<PaginatedResponse<LogEventDto>> response = controller.search(
                 null, null, null,
                 "c.g.f.services.BookProcessingService , c.g.f.services.ChunkTranslationService, ",
-                null, null, 0, 50);
+                null, null, null, 0, 50);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         verify(logEventRepository).findAll(any(Specification.class), any(Pageable.class));
@@ -93,7 +93,7 @@ class LogStreamControllerTest {
                 .thenReturn(new PageImpl<>(List.<LogEvent>of(), PageRequest.of(0, 200), 0));
 
         ResponseEntity<PaginatedResponse<LogEventDto>> response =
-                controller.search(null, null, null, null, null, null, -3, 99_999);
+                controller.search(null, null, null, null, null, null, null, -3, 99_999);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
@@ -109,7 +109,7 @@ class LogStreamControllerTest {
                 .thenReturn(new PageImpl<>(List.<LogEvent>of(), PageRequest.of(0, 50), 0));
 
         ResponseEntity<PaginatedResponse<LogEventDto>> response =
-                controller.search(null, null, null, null, null, null, 0, 50);
+                controller.search(null, null, null, null, null, null, null, 0, 50);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());

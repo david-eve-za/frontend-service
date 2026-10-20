@@ -6,6 +6,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { SelectModule } from 'primeng/select';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
@@ -825,15 +826,25 @@ interface SelectOption {
                 @if (wizardTimeline.length > 0) {
                     <div class="flex items-center justify-between mt-6 mb-2">
                         <div class="font-semibold text-lg">Cronología del proyecto</div>
-                        <p-button
-                            icon="pi pi-refresh"
-                            severity="secondary"
-                            [text]="true"
-                            [loading]="timelineLoading"
-                            pTooltip="Refresca la cronología"
-                            tooltipPosition="top"
-                            (onClick)="loadTimeline()"
-                        />
+                        <div class="flex gap-2">
+                            <p-button
+                                icon="pi pi-list"
+                                severity="secondary"
+                                [text]="true"
+                                pTooltip="Ver logs en vivo de este proyecto (traza = id del proyecto)"
+                                tooltipPosition="top"
+                                (onClick)="viewProjectLogs(p)"
+                            />
+                            <p-button
+                                icon="pi pi-refresh"
+                                severity="secondary"
+                                [text]="true"
+                                [loading]="timelineLoading"
+                                pTooltip="Refresca la cronología"
+                                tooltipPosition="top"
+                                (onClick)="loadTimeline()"
+                            />
+                        </div>
                     </div>
                     <p-table
                         [value]="wizardTimeline"
@@ -996,6 +1007,7 @@ export class StoryWizard {
     private readonly messageService = inject(MessageService);
     private readonly confirmationService = inject(ConfirmationService);
     private readonly cdr = inject(ChangeDetectorRef);
+    private readonly router = inject(Router);
 
     /** Estado del wizard y biblioteca. */
     readonly project = signal<VideoStoryProject | null>(null);
@@ -1885,6 +1897,20 @@ export class StoryWizard {
             return (ms / 1000).toFixed(1) + ' s';
         }
         return (ms / 60_000).toFixed(1) + ' min';
+    }
+
+    /**
+     * Logs en vivo del proyecto: su traza MDC ES el id del proyecto, así
+     * que ?trace= separa TODOS los pasos de este proyecto (incluida la
+     * llamada del paso 1) de cualquier otro proceso.
+     */
+    viewProjectLogs(project: VideoStoryProject): void {
+        this.router.navigate(['/logs'], {
+            queryParams: {
+                trace: project.id,
+                name: `Asistente — ${project.title}`,
+            },
+        });
     }
 
     /**

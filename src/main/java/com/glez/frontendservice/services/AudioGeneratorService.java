@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.slf4j.MDC;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -107,8 +108,14 @@ public class AudioGeneratorService {
                 // 2b. Sintetizar los fragmentos en paralelo con virtual
                 // threads, con un tope suave de concurrencia hacia Edge
                 // TTS (p.ej. 3 simultáneas) y conservando el orden de
-                // mezcla posterior.
+                // mezcla posterior. El contexto MDC del hilo llamador
+                // (bookId/traceId/step del AUDIO que se sintetiza) se
+                // CAPTURA AQUÍ y se restaura dentro de cada tarea: los
+                // virtual threads NO heredan el ThreadLocal del MDC y,
+                // sin esto, todas las líneas de Edge TTS quedaban con
+                // traza vacía («[//]») — imposibles de rastrear por libro.
                 int total = chunks.size();
+                Map<String, String> callerMdc = MDC.getCopyOfContextMap();
                 @SuppressWarnings("unchecked")
                 CompletableFuture<Path>[] futures = new CompletableFuture[total];
                 for (int i = 0; i < total; i++) {
@@ -116,10 +123,14 @@ public class AudioGeneratorService {
                     final String normalized = normalizeText(chunks.get(i));
                     futures[i] = CompletableFuture.supplyAsync(() -> {
                         ttsConcurrency.acquireUninterruptibly();
+                        if (callerMdc != null) {
+                            MDC.setContextMap(callerMdc);
+                        }
                         try {
                             Path chunkPath = tempDir.resolve(String.format("chunk_%04d.mp3", index));
                             return textToAudio(normalized, chunkPath, ttsVoice) ? chunkPath : null;
                         } finally {
+                            MDC.clear();
                             ttsConcurrency.release();
                         }
                     }, ttsExecutor);

@@ -1,5 +1,6 @@
 package com.glez.frontendservice.services;
 
+import com.glez.frontendservice.dtos.StoryPromptRequest;
 import com.glez.frontendservice.dtos.WizardAssetsStepRequest;
 import com.glez.frontendservice.dtos.WizardDesignStepRequest;
 import com.glez.frontendservice.dtos.WizardVideoStepRequest;
@@ -18,6 +19,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -274,6 +276,48 @@ class VideoStoryWizardServiceTest {
     /** Petición del paso 5 SIN ningún campo: la interacción humana cero. */
     private WizardVideoStepRequest emptyVideoRequest() {
         return new WizardVideoStepRequest(null, null, null, null, null);
+    }
+
+    /** Payload mínimo válido del formulario de historia (paso 1). */
+    private StoryPromptRequest validStoryRequest() {
+        return new StoryPromptRequest(
+                "Historia mínima", "Comedy", null, "All ages", null, null,
+                null, null, "Comedic", null, null, null, null,
+                null, null, null, null,
+                "Whether to admit they like each other", "The confession",
+                "English", 60, null, null, null, "YouTube Shorts");
+    }
+
+    @Test
+    @DisplayName("Paso 1 (historia): el id se asigna ANTES de la llamada y correlaciona traza y cronología")
+    void createProjectWithStory_assignsTraceIdAsProjectId() {
+        when(ai.callModelWithRotation(anyString(), anyInt())).thenReturn("TITLE — La historia completa…");
+        when(projectRepository.save(any(VideoStoryProject.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        VideoStoryProject created = wizard.createProjectWithStory(validStoryRequest());
+
+        // El id existe ANTES de la llamada (MDC traceId = id futuro del
+        // proyecto): TODAS las líneas del paso 1, llamada a la IA incluida,
+        // quedan rastreables en el visor bajo este mismo id.
+        assertNotNull(created.getId(), "El id se asigna en el servicio, no por el generador");
+        verify(ai).callModelWithRotation(anyString(), anyInt());
+        // La traza del paso 1 se abre con EL MISMO id que llevó el MDC.
+        verify(traceService).startStep(eq(created.getId()), eq(VideoStoryStep.STORY), isNull());
+        verify(traceService).completeStep(any(), contains("caracteres"));
+    }
+
+    @Test
+    @DisplayName("Paso 1 (historia): un fallo de la IA no crea proyecto ni deja rastro persistido")
+    void createProjectWithStory_aiFailure_createsNothing() {
+        when(ai.callModelWithRotation(anyString(), anyInt()))
+                .thenThrow(new IllegalStateException("La generación con la IA falló en el paso 1 (historia)"));
+
+        assertThrows(IllegalStateException.class,
+                () -> wizard.createProjectWithStory(validStoryRequest()));
+
+        verify(projectRepository, org.mockito.Mockito.never()).save(any());
+        verify(traceService, org.mockito.Mockito.never()).startStep(any(), any(), any());
     }
 
     @Test
