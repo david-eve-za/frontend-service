@@ -70,4 +70,45 @@ public class Novel {
 
     @OneToMany(mappedBy = "novel", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<NovelVolume> volumes = new ArrayList<>();
+
+    // --- Campos de enriquecimiento AniList ---
+    @Column(name = "anilist_id")
+    private Integer anilistId;
+
+    @Column(name = "anilist_cover_url", length = 512)
+    private String anilistCoverUrl;
+
+    @Column(name = "anilist_description", columnDefinition = "TEXT")
+    private String anilistDescription;
+
+    @ElementCollection
+    @CollectionTable(name = "novel_anilist_genres", joinColumns = @JoinColumn(name = "novel_id"))
+    @Column(name = "genre")
+    private List<String> anilistGenres = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "novel_anilist_tags", joinColumns = @JoinColumn(name = "novel_id"))
+    @Column(name = "tag")
+    private List<String> anilistTags = new ArrayList<>();
+
+    @Column(name = "anilist_status")
+    private String anilistStatus;
+
+    @Column(name = "anilist_average_score")
+    private Integer anilistAverageScore;
+
+    @Column(name = "anilist_format")
+    private String anilistFormat;
+
+    @Column(name = "anilist_source")
+    private String anilistSource;
+
+    @Column(name = "anilist_country_of_origin")
+    private String anilistCountryOfOrigin;
+
+    @Column(name = "anilist_volumes")
+    private Integer anilistVolumes;
+
+    @Column(name = "anilist_chapters")
+    private Integer anilistChapters;
 }

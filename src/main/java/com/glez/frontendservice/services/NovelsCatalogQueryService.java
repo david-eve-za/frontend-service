@@ -137,7 +137,19 @@ public class NovelsCatalogQueryService {
                 novel.getTitle(),
                 novel.getCategory(),
                 volumeCount,
-                novel.getLastSyncedAt());
+                novel.getLastSyncedAt(),
+                novel.getAnilistId(),
+                novel.getAnilistCoverUrl(),
+                novel.getAnilistDescription(),
+                novel.getAnilistGenres(),
+                novel.getAnilistTags(),
+                novel.getAnilistStatus(),
+                novel.getAnilistAverageScore(),
+                novel.getAnilistFormat(),
+                novel.getAnilistSource(),
+                novel.getAnilistCountryOfOrigin(),
+                novel.getAnilistVolumes(),
+                novel.getAnilistChapters());
     }
 
     private VolumeDto toVolumeDto(NovelVolume volume,
