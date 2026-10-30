@@ -4,10 +4,12 @@ import com.glez.frontendservice.dtos.NovelSummaryDto;
 import com.glez.frontendservice.dtos.NovelsCatalogSyncStatus;
 import com.glez.frontendservice.dtos.VolumeDto;
 import com.glez.frontendservice.dtos.VolumePreparedDto;
+import com.glez.frontendservice.dtos.anilist.AniListSearchPreview;
 import com.glez.frontendservice.services.NovelsCatalogQueryService;
 import com.glez.frontendservice.services.NovelsCatalogSyncService;
 import com.glez.frontendservice.services.NovelsVolumeTextService;
 import com.glez.frontendservice.services.VolumeAudioDownloadService;
+import com.glez.frontendservice.services.anilist.NovelAnilistEnrichmentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -15,17 +17,14 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+
+@RestController
 
 @RestController
 @RequestMapping("/api/novels-manager")

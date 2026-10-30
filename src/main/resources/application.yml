@@ -115,7 +115,7 @@ app:
     # offline, la rotación cae al modelo local de Ollama para no dejar
     # al pipeline sin traducción. El prefijo "ollama:" enruta la llamada
     # al servidor local (http://localhost:11434), no a la API de NVIDIA.
-    models: "z-ai/glm-5.3,openai/gpt-oss-20b,nvidia/nemotron-3-super-120b-a12b,z-ai/glm-5.3-flash,deepseek-ai/deepseek-v4.1-flash,meta/llama-3.2-90b-vision-instruct,ollama:gpt-oss:20b"
+    models: "openai/gpt-oss-20b"
     max-retries: 3
     # Cuota de la API de NVIDIA en solicitudes por minuto. El pipeline
     # completo (traducción con reintentos/rotación y extracción del

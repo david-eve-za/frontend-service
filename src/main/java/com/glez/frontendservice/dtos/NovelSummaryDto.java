@@ -1,6 +1,7 @@
 package com.glez.frontendservice.dtos;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -11,5 +12,18 @@ public record NovelSummaryDto(
         String title,
         String category,
         long volumeCount,
-        Instant lastSyncedAt) {
+        Instant lastSyncedAt,
+        // --- Campos de enriquecimiento AniList ---
+        Integer anilistId,
+        String anilistCoverUrl,
+        String anilistDescription,
+        List<String> anilistGenres,
+        List<String> anilistTags,
+        String anilistStatus,
+        Integer anilistAverageScore,
+        String anilistFormat,
+        String anilistSource,
+        String anilistCountryOfOrigin,
+        Integer anilistVolumes,
+        Integer anilistChapters) {
 }
