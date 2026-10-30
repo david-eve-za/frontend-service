@@ -8,6 +8,7 @@ import com.glez.frontendservice.model.ChunkStatus;
 import com.glez.frontendservice.model.Novel;
 import com.glez.frontendservice.model.NovelVolume;
 import com.glez.frontendservice.model.NovelVolumeFile;
+import com.glez.frontendservice.model.ChunkStatus;
 import com.glez.frontendservice.repository.BookRepository;
 import com.glez.frontendservice.repository.BookRepository.BookStatusView;
 import com.glez.frontendservice.repository.ChunksRepository;
@@ -18,15 +19,18 @@ import com.glez.frontendservice.repository.NovelVolumeRepository;
 import com.glez.frontendservice.repository.NovelVolumeRepository.NovelVolumeCount;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -67,8 +71,19 @@ public class NovelsCatalogQueryService {
                 .collect(Collectors.toMap(NovelVolumeCount::getNovelId,
                         NovelVolumeCount::getVolumeCount));
 
-        return novels.map(novel -> toSummary(novel,
-                volumeCounts.getOrDefault(novel.getId(), 0L)));
+        // Forzar evaluación inmediata dentro de la transacción para evitar
+        // problemas de lazy loading (anilistGenres, anilistTags)
+        List<NovelSummaryDto> content = novels.getContent().stream()
+                .map(novel -> toSummary(novel, volumeCounts.getOrDefault(novel.getId(), 0L)))
+                .collect(Collectors.toList());
+
+        return new PageImpl<>(content, novels.getPageable(), novels.getTotalElements());
+    }
+
+    /** Busca una novela por ID (para endpoint de detalle). */
+    @Transactional(readOnly = true)
+    public Optional<Novel> findById(UUID novelId) {
+        return novelRepository.findById(novelId);
     }
 
     /** Volúmenes (nivel 2) de una obra con estados derivados y acciones habilitadas. */
@@ -131,7 +146,16 @@ public class NovelsCatalogQueryService {
                 .collect(Collectors.groupingBy(file -> file.getVolume().getId()));
     }
 
-    private NovelSummaryDto toSummary(Novel novel, long volumeCount) {
+    public NovelSummaryDto toSummary(Novel novel, long volumeCount) {
+        // Forzar inicialización de colecciones lazy dentro de la transacción
+        // para evitar LazyInitializationException durante la serialización JSON
+        List<String> genres = novel.getAnilistGenres() != null
+                ? new ArrayList<>(novel.getAnilistGenres())
+                : null;
+        List<String> tags = novel.getAnilistTags() != null
+                ? new ArrayList<>(novel.getAnilistTags())
+                : null;
+
         return new NovelSummaryDto(
                 novel.getId(),
                 novel.getTitle(),
@@ -141,8 +165,8 @@ public class NovelsCatalogQueryService {
                 novel.getAnilistId(),
                 novel.getAnilistCoverUrl(),
                 novel.getAnilistDescription(),
-                novel.getAnilistGenres(),
-                novel.getAnilistTags(),
+                genres,
+                tags,
                 novel.getAnilistStatus(),
                 novel.getAnilistAverageScore(),
                 novel.getAnilistFormat(),
