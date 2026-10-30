@@ -17,7 +17,9 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -102,6 +104,34 @@ class AudioGeneratorServiceTest {
             audioGeneratorService.processTextToAudio(text, outputPath);
 
             verify(edgeTtsClient, times(2)).synthesizeToFile(anyString(), any(Path.class), any());
+        }
+
+        @Test
+        @DisplayName("El MDC del libro viaja a los fragmentos paralelos de TTS (rastreabilidad por proceso)")
+        void processTextToAudio_propagatesCallerMdcToParallelFragments() {
+            // Los virtual threads de los fragmentos NO heredan el ThreadLocal
+            // del MDC: sin captura/restauración, las líneas de Edge TTS iban
+            // con traza vacía («[//]») y el AUDIO no era rastreable por libro.
+            Path outputPath = tempDir.resolve("output.mp3");
+            String text = "Texto de prueba con dos fragmentos.";
+            List<String> chunks = List.of("Fragmento 1", "Fragmento 2");
+            when(textSplitter.split(text, "es", 1000)).thenReturn(chunks);
+            List<String> seenBookIds = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+            doAnswer(inv -> {
+                seenBookIds.add(org.slf4j.MDC.get("bookId"));
+                return null;
+            }).when(edgeTtsClient).synthesizeToFile(anyString(), any(Path.class), any());
+
+            org.slf4j.MDC.put("bookId", "libro-para-trazar");
+            try {
+                audioGeneratorService.processTextToAudio(text, outputPath);
+            } finally {
+                org.slf4j.MDC.clear();
+            }
+
+            assertEquals(2, seenBookIds.size(), "Ambos fragmentos se sintetizaron");
+            assertTrue(seenBookIds.stream().allMatch("libro-para-trazar"::equals),
+                    "Cada fragmento paralelo debe ver el MDC del libro del hilo llamador");
         }
 
         @Test

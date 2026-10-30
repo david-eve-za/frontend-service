@@ -6,6 +6,8 @@ import com.glez.frontendservice.dtos.WizardDesignStepRequest;
 import com.glez.frontendservice.dtos.WizardScenesStepRequest;
 import com.glez.frontendservice.dtos.WizardVideoStepRequest;
 import com.glez.frontendservice.model.VideoStoryProject;
+import com.glez.frontendservice.model.VideoStoryStep;
+import com.glez.frontendservice.model.VideoStoryTraceEvent;
 import com.glez.frontendservice.repository.VideoStoryProjectRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -15,6 +17,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 
@@ -72,6 +75,8 @@ public class VideoStoryWizardService {
     private final VideoStoryProjectRepository projectRepository;
     /** Referencia opcional del paso 5 (archivo | URL | búsqueda web) — solo el wizard. */
     private final WizardReferenceService referenceService;
+    /** Cronología persistida de cada intento de paso (tabla propia del wizard). */
+    private final VideoStoryTraceService traceService;
 
     /**
      * PASO 1: valida el formulario, ensambla la plantilla narrativa, pide la
@@ -83,20 +88,25 @@ public class VideoStoryWizardService {
             throw new IllegalArgumentException("Faltan campos obligatorios del formulario de historia.");
         }
 
-        // El proyecto nace DESPUÉS de la llamada: el paso 1 corre bajo una
-        // traza temporal; el id del proyecto queda correlacionado en el log
-        // de creación para poder seguirlo en el visor.
-        wizardMdc(UUID.randomUUID(), "WIZARD_STORY");
+        // El id se genera AQUÍ, antes de la llamada: el MDC traceId del paso
+        // 1 ES el id futuro del proyecto, de modo que TODAS las líneas del
+        // paso (llamada a la IA incluida, que puede tardar minutos) quedan
+        // rastreables en el visor bajo el mismo id que la cronología y el
+        // panel de procesos.
+        UUID projectId = UUID.randomUUID();
+        wizardMdc(projectId, "WIZARD_STORY");
         try {
             log.info("[wizard] Paso 1 (historia) iniciado: «{}» — género «{}», tono «{}», audiencia «{}», "
                             + "duración {}s, {} personajes, plataforma «{}»",
                     request.title(), request.genre(), request.tone(), request.targetAudience(),
                     request.videoDurationSeconds(), request.characterCount(), request.platform());
 
+            long aiStart = System.currentTimeMillis();
             String prompt = VideoStoryPromptFactory.buildStoryPrompt(request);
             String story = generate("paso 1 (historia)", prompt, DEFAULT_STEP_OUTPUT_TOKENS);
 
             VideoStoryProject project = new VideoStoryProject();
+            project.setId(projectId);
             project.setTitle(request.title().trim());
             project.setStory(story);
             // La duración dirige la extensión de las escenas (paso 4).
@@ -105,6 +115,15 @@ public class VideoStoryWizardService {
             project.setCreatedAt(now);
             project.setUpdatedAt(now);
             VideoStoryProject saved = projectRepository.save(project);
+
+            // Traza del intento (la fila ya existe): el evento queda en la
+            // cronología con el MISMO id que llevó el MDC durante toda la
+            // llamada — visor de logs y cronología correlacionan 1:1. Los
+            // fallos del paso 1 no dejan fila que tracear y quedan solo en
+            // el visor de logs, por diseño: no se crean proyectos vacíos.
+            VideoStoryTraceEvent trace = traceService.startStep(saved.getId(), VideoStoryStep.STORY, null);
+            traceService.completeStep(trace, "historia de " + story.length() + " caracteres en "
+                    + (System.currentTimeMillis() - aiStart) + " ms de IA");
 
             log.info("[wizard] Proyecto CREADO: «{}» (id={}, historia de {} caracteres, duración objetivo {})",
                     saved.getTitle(), saved.getId(), story.length(),
@@ -137,16 +156,24 @@ public class VideoStoryWizardService {
             log.info("[wizard] Paso 2 (diseños) iniciado: «{}» — estilo «{}», {} personajes",
                     project.getTitle(), request.animationStyle().trim(), characterCount);
 
-            String prompt = VideoStoryPromptFactory.buildCharacterDesignPrompt(
-                    project.getStory(), request.animationStyle(), characterCount);
-            String designs = generate("paso 2 (diseños)", prompt, DEFAULT_STEP_OUTPUT_TOKENS);
+            VideoStoryTraceEvent trace = traceService.startStep(projectId, VideoStoryStep.DESIGNS,
+                    "estilo «" + request.animationStyle().trim() + "», " + characterCount + " personajes");
+            try {
+                String prompt = VideoStoryPromptFactory.buildCharacterDesignPrompt(
+                        project.getStory(), request.animationStyle(), characterCount);
+                String designs = generate("paso 2 (diseños)", prompt, DEFAULT_STEP_OUTPUT_TOKENS);
 
-            project.setDesignStyle(request.animationStyle().trim());
-            project.setDesignCharacterCount(characterCount);
-            project.setDesigns(designs);
-            log.info("[wizard] Diseños generados para «{}»: {} caracteres",
-                    project.getTitle(), designs.length());
-            return saveUpdated(project);
+                project.setDesignStyle(request.animationStyle().trim());
+                project.setDesignCharacterCount(characterCount);
+                project.setDesigns(designs);
+                traceService.completeStep(trace, designs.length() + " caracteres de diseños");
+                log.info("[wizard] Diseños generados para «{}»: {} caracteres",
+                        project.getTitle(), designs.length());
+                return saveUpdated(project);
+            } catch (Exception e) {
+                traceService.failStep(trace, e);
+                throw e;
+            }
         } finally {
             releaseProject(projectId);
             MDC.clear();
@@ -184,16 +211,24 @@ public class VideoStoryWizardService {
                     targetAudience == null ? "(derivada de la historia)" : targetAudience,
                     colorPalette == null ? "(derivada de la historia)" : colorPalette);
 
-            String prompt = VideoStoryPromptFactory.buildAssetsPrompt(
-                    project.getStory(), project.getDesigns(), animationStyle,
-                    targetAudience, aspectRatio, colorPalette);
-            String assets = generate("paso 3 (assets)", prompt, LONG_STEP_OUTPUT_TOKENS);
+            VideoStoryTraceEvent trace = traceService.startStep(projectId, VideoStoryStep.ASSETS,
+                    "aspecto «" + aspectRatio + "»");
+            try {
+                String prompt = VideoStoryPromptFactory.buildAssetsPrompt(
+                        project.getStory(), project.getDesigns(), animationStyle,
+                        targetAudience, aspectRatio, colorPalette);
+                String assets = generate("paso 3 (assets)", prompt, LONG_STEP_OUTPUT_TOKENS);
 
-            project.setAssetsAspectRatio(aspectRatio);
-            project.setAssets(assets);
-            log.info("[wizard] Assets generados para «{}»: {} caracteres (aspecto {})",
-                    project.getTitle(), assets.length(), aspectRatio);
-            return saveUpdated(project);
+                project.setAssetsAspectRatio(aspectRatio);
+                project.setAssets(assets);
+                traceService.completeStep(trace, assets.length() + " caracteres de biblioteca");
+                log.info("[wizard] Assets generados para «{}»: {} caracteres (aspecto {})",
+                        project.getTitle(), assets.length(), aspectRatio);
+                return saveUpdated(project);
+            } catch (Exception e) {
+                traceService.failStep(trace, e);
+                throw e;
+            }
         } finally {
             releaseProject(projectId);
             MDC.clear();
@@ -240,20 +275,28 @@ public class VideoStoryWizardService {
                     speakerSecond == null ? "-" : speakerSecond,
                     language);
 
-            String prompt = VideoStoryPromptFactory.buildScenePrompt(
-                    project.getStory(), project.getDesigns(), sceneCount, total,
-                    speakerFirst, speakerSecond, language);
-            String scenes = generate("paso 4 (escenas)", prompt, LONG_STEP_OUTPUT_TOKENS);
+            VideoStoryTraceEvent trace = traceService.startStep(projectId, VideoStoryStep.SCENES,
+                    sceneCount + " escenas ≈ " + avgSeconds + "s, idioma «" + language + "»");
+            try {
+                String prompt = VideoStoryPromptFactory.buildScenePrompt(
+                        project.getStory(), project.getDesigns(), sceneCount, total,
+                        speakerFirst, speakerSecond, language);
+                String scenes = generate("paso 4 (escenas)", prompt, LONG_STEP_OUTPUT_TOKENS);
 
-            project.setSceneAvgSeconds(avgSeconds);
-            project.setSceneSpeaker1(speakerFirst);
-            project.setSceneSpeaker2(speakerSecond);
-            project.setSceneLanguage(language);
-            project.setScenes(scenes);
-            log.info("[wizard] Escenas generadas para «{}»: {} caracteres ({} escenas ≈ {}s para {})",
-                    project.getTitle(), scenes.length(), sceneCount, avgSeconds,
-                    total != null ? VideoStoryPromptFactory.formatDuration(total) : "duración desconocida");
-            return saveUpdated(project);
+                project.setSceneAvgSeconds(avgSeconds);
+                project.setSceneSpeaker1(speakerFirst);
+                project.setSceneSpeaker2(speakerSecond);
+                project.setSceneLanguage(language);
+                project.setScenes(scenes);
+                traceService.completeStep(trace, scenes.length() + " caracteres (" + sceneCount + " escenas)");
+                log.info("[wizard] Escenas generadas para «{}»: {} caracteres ({} escenas ≈ {}s para {})",
+                        project.getTitle(), scenes.length(), sceneCount, avgSeconds,
+                        total != null ? VideoStoryPromptFactory.formatDuration(total) : "duración desconocida");
+                return saveUpdated(project);
+            } catch (Exception e) {
+                traceService.failStep(trace, e);
+                throw e;
+            }
         } finally {
             releaseProject(projectId);
             MDC.clear();
@@ -318,18 +361,27 @@ public class VideoStoryWizardService {
                     animationStyle == null ? "(del proyecto)" : animationStyle,
                     reference == null ? "ninguna" : "sí (" + reference.length() + " caracteres)");
 
-            String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(
-                    project.getTitle(), project.getStory(), project.getDesigns(),
-                    project.getAssets(), project.getScenes(), target.id(), animationStyle,
-                    project.getSceneLanguage(), project.getAssetsAspectRatio(),
-                    project.getSceneAvgSeconds(), reference);
-            String videoPrompt = generate("paso 5 (video)", prompt, LONG_STEP_OUTPUT_TOKENS);
+            VideoStoryTraceEvent trace = traceService.startStep(projectId, VideoStoryStep.VIDEO,
+                    "escena «" + target.id() + "» de " + sceneBlocks.size());
+            try {
+                String prompt = VideoStoryPromptFactory.buildVideoGenerationPrompt(
+                        project.getTitle(), project.getStory(), project.getDesigns(),
+                        project.getAssets(), project.getScenes(), target.id(), animationStyle,
+                        project.getSceneLanguage(), project.getAssetsAspectRatio(),
+                        project.getSceneAvgSeconds(), reference);
+                String videoPrompt = generate("paso 5 (video)", prompt, LONG_STEP_OUTPUT_TOKENS);
 
-            project.setVideoPrompt(videoPrompt);
-            log.info("[wizard] Plantilla MASTER de video generada para «{}»: {} caracteres "
-                            + "(escena «{}» de {})",
-                    project.getTitle(), videoPrompt.length(), target.id(), sceneBlocks.size());
-            return saveUpdated(project);
+                project.setVideoPrompt(videoPrompt);
+                traceService.completeStep(trace,
+                        videoPrompt.length() + " caracteres de plantilla MASTER (escena «" + target.id() + "»)");
+                log.info("[wizard] Plantilla MASTER de video generada para «{}»: {} caracteres "
+                                + "(escena «{}» de {})",
+                        project.getTitle(), videoPrompt.length(), target.id(), sceneBlocks.size());
+                return saveUpdated(project);
+            } catch (Exception e) {
+                traceService.failStep(trace, e);
+                throw e;
+            }
         } finally {
             releaseProject(projectId);
             MDC.clear();
@@ -389,6 +441,11 @@ public class VideoStoryWizardService {
 
     private void releaseProject(UUID projectId) {
         runningProjects.remove(projectId);
+    }
+
+    /** Ids de proyectos con un paso en curso — el panel de procesos los marca Running. */
+    public Set<UUID> getRunningProjectIds() {
+        return Set.copyOf(runningProjects);
     }
 
     /**

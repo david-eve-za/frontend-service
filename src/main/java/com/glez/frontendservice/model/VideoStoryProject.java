@@ -23,8 +23,15 @@ import java.util.UUID;
 @Table(name = "video_story_projects")
 public class VideoStoryProject {
 
+    /**
+     * Id del proyecto: lo ASIGNA el servicio (no @GeneratedValue) para que
+     * el PASO 1 pueda conocerlo desde ANTES de la llamada a la IA — el
+     * MDC traceId del paso 1 ES el id futuro del proyecto, así TODAS sus
+     * líneas (llamada incluida, minutos) quedan rastreables en el visor
+     * bajo el mismo id que la cronología. La columna H2 es la misma
+     * ('uuid not null') y el único escritor es el propio asistente.
+     */
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     /** Nombre interno con el que se identifica el proyecto. */

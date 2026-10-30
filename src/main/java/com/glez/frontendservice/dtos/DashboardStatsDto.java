@@ -6,14 +6,16 @@ import java.util.UUID;
 
 /**
  * Métricas agregadas del panel de control: estado de la base de datos,
- * procesos en ejecución, pipeline de libros, chunks y catálogo.
+ * procesos en ejecución, pipeline de libros, chunks, catálogo y asistente
+ * de historias.
  */
 public record DashboardStatsDto(
         DatabaseStatusDto database,
         ProcessStatusDto processes,
         BookStatsDto books,
         ChunkStatsDto chunks,
-        CatalogStatsDto catalog) {
+        CatalogStatsDto catalog,
+        WizardStatsDto wizard) {
 
     /** Estado de la conexión a la base de datos H2 y del archivo en disco. */
     public record DatabaseStatusDto(
@@ -47,11 +49,30 @@ public record DashboardStatsDto(
             boolean running) {
     }
 
-    /** Procesos activos: pipeline de libros + sincronización del catálogo. */
+    /** Procesos activos: pipeline de libros + sincronización + asistente de historias. */
     public record ProcessStatusDto(
             List<RunningProcessDto> running,
             NovelsCatalogSyncStatus catalogSync,
-            List<BookProcessDto> books) {
+            List<BookProcessDto> books,
+            List<WizardProcessDto> wizardProcesses) {
+    }
+
+    /**
+     * Proyecto del Asistente de Historias con la cadena incompleta, para
+     * el panel de procesos: estado derivado (RUNNING si hay un paso en
+     * curso en memoria de esta instancia; FAILED si su último intento de
+     * paso terminó fallido; IN_PROGRESS si ya tiene outputs; NEW si solo
+     * existe), paso siguiente pendiente y progreso de la cadena (n/5).
+     */
+    public record WizardProcessDto(
+            UUID projectId,
+            String title,
+            String state,
+            String currentStep,
+            int stepsDone,
+            int stepsTotal,
+            boolean running,
+            java.time.Instant updatedAt) {
     }
 
     /**
@@ -91,5 +112,27 @@ public record DashboardStatsDto(
             String day,
             long novels,
             long volumes) {
+    }
+
+    /** Métricas del Asistente de Historias para el panel de estado. */
+    public record WizardStatsDto(
+            long totalProjects,
+            long completedChains,
+            long stepsCompleted,
+            long stepsFailed,
+            List<WizardActivityPointDto> activity) {
+    }
+
+    /**
+     * Actividad del asistente en un día: proyectos creados y pasos
+     * completados/fallidos (por el resultado del intento). Los días sin
+     * actividad llegan ya rellenados a cero: la serie de 14 días es
+     * continua, igual que la del catálogo.
+     */
+    public record WizardActivityPointDto(
+            String day,
+            long createdProjects,
+            long completedSteps,
+            long failedSteps) {
     }
 }

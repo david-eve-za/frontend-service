@@ -28,6 +28,22 @@ export interface BookProcess {
     running: boolean;
 }
 
+/**
+ * Proyecto del Asistente de Historias con la cadena incompleta (panel de
+ * procesos): estado derivado, paso siguiente y progreso n/5.
+ */
+export interface WizardProcess {
+    projectId: string;
+    title: string;
+    /** RUNNING | FAILED | IN_PROGRESS | NEW */
+    state: string;
+    currentStep: string;
+    stepsDone: number;
+    stepsTotal: number;
+    running: boolean;
+    updatedAt: string;
+}
+
 export interface CatalogSyncStatus {
     state: 'IDLE' | 'RUNNING' | 'COMPLETED' | 'CANCELLED' | 'FAILED';
     currentPath: string | null;
@@ -47,6 +63,7 @@ export interface ProcessStatus {
     running: RunningProcess[];
     catalogSync: CatalogSyncStatus;
     books: BookProcess[];
+    wizardProcesses: WizardProcess[];
 }
 
 export interface BookStats {
@@ -76,6 +93,23 @@ export interface CatalogStats {
     activity: CatalogActivityPoint[];
 }
 
+/** Actividad del asistente en un día (para el gráfico del panel). */
+export interface WizardActivityPoint {
+    day: string;
+    createdProjects: number;
+    completedSteps: number;
+    failedSteps: number;
+}
+
+/** Métricas del Asistente de Historias (gráfico del panel de estado). */
+export interface WizardStats {
+    totalProjects: number;
+    completedChains: number;
+    stepsCompleted: number;
+    stepsFailed: number;
+    activity: WizardActivityPoint[];
+}
+
 /** Mirror of DashboardStatsDto (GET /api/dashboard/stats). */
 export interface DashboardStats {
     database: DatabaseStatus;
@@ -83,6 +117,7 @@ export interface DashboardStats {
     books: BookStats;
     chunks: ChunkStats;
     catalog: CatalogStats;
+    wizard: WizardStats;
 }
 
 @Injectable({ providedIn: 'root' })

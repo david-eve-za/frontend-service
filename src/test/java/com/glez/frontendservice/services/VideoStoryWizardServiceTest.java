@@ -1,9 +1,11 @@
 package com.glez.frontendservice.services;
 
+import com.glez.frontendservice.dtos.StoryPromptRequest;
 import com.glez.frontendservice.dtos.WizardAssetsStepRequest;
 import com.glez.frontendservice.dtos.WizardDesignStepRequest;
 import com.glez.frontendservice.dtos.WizardVideoStepRequest;
 import com.glez.frontendservice.model.VideoStoryProject;
+import com.glez.frontendservice.model.VideoStoryStep;
 import com.glez.frontendservice.repository.VideoStoryProjectRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,11 +19,13 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
@@ -47,13 +51,16 @@ class VideoStoryWizardServiceTest {
     @Mock
     private WizardReferenceService referenceService;
 
+    @Mock
+    private VideoStoryTraceService traceService;
+
     private VideoStoryWizardService wizard;
 
     private final UUID projectId = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
-        wizard = new VideoStoryWizardService(ai, projectRepository, referenceService);
+        wizard = new VideoStoryWizardService(ai, projectRepository, referenceService, traceService);
     }
 
     /** Proyecto con historia y diseños completos (listo para el paso 3). */
@@ -271,6 +278,48 @@ class VideoStoryWizardServiceTest {
         return new WizardVideoStepRequest(null, null, null, null, null);
     }
 
+    /** Payload mínimo válido del formulario de historia (paso 1). */
+    private StoryPromptRequest validStoryRequest() {
+        return new StoryPromptRequest(
+                "Historia mínima", "Comedy", null, "All ages", null, null,
+                null, null, "Comedic", null, null, null, null,
+                null, null, null, null,
+                "Whether to admit they like each other", "The confession",
+                "English", 60, null, null, null, "YouTube Shorts");
+    }
+
+    @Test
+    @DisplayName("Paso 1 (historia): el id se asigna ANTES de la llamada y correlaciona traza y cronología")
+    void createProjectWithStory_assignsTraceIdAsProjectId() {
+        when(ai.callModelWithRotation(anyString(), anyInt())).thenReturn("TITLE — La historia completa…");
+        when(projectRepository.save(any(VideoStoryProject.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        VideoStoryProject created = wizard.createProjectWithStory(validStoryRequest());
+
+        // El id existe ANTES de la llamada (MDC traceId = id futuro del
+        // proyecto): TODAS las líneas del paso 1, llamada a la IA incluida,
+        // quedan rastreables en el visor bajo este mismo id.
+        assertNotNull(created.getId(), "El id se asigna en el servicio, no por el generador");
+        verify(ai).callModelWithRotation(anyString(), anyInt());
+        // La traza del paso 1 se abre con EL MISMO id que llevó el MDC.
+        verify(traceService).startStep(eq(created.getId()), eq(VideoStoryStep.STORY), isNull());
+        verify(traceService).completeStep(any(), contains("caracteres"));
+    }
+
+    @Test
+    @DisplayName("Paso 1 (historia): un fallo de la IA no crea proyecto ni deja rastro persistido")
+    void createProjectWithStory_aiFailure_createsNothing() {
+        when(ai.callModelWithRotation(anyString(), anyInt()))
+                .thenThrow(new IllegalStateException("La generación con la IA falló en el paso 1 (historia)"));
+
+        assertThrows(IllegalStateException.class,
+                () -> wizard.createProjectWithStory(validStoryRequest()));
+
+        verify(projectRepository, org.mockito.Mockito.never()).save(any());
+        verify(traceService, org.mockito.Mockito.never()).startStep(any(), any(), any());
+    }
+
     @Test
     @DisplayName("Paso 5 (video): SIN input se auto-selecciona la PRIMERA escena y se genera la plantilla MASTER")
     void generateVideoPrompt_zeroInput_autoSelectsFirstScene() {
@@ -399,5 +448,42 @@ class VideoStoryWizardServiceTest {
                 anyInt());
         assertEquals("Plantilla MASTER completa…", result.getVideoPrompt());
         assertFalse(result.getScenes().isBlank(), "Las escenas siguen presentes tras el paso 5");
+    }
+
+    @Test
+    @DisplayName("Paso 5 (video): el intento queda trazado en la cronología (STARTED → COMPLETED)")
+    void generateVideoPrompt_recordsTrace_startedThenCompleted() {
+        VideoStoryProject project = projectWithScenes();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(referenceService.resolveReference(isNull(), isNull(), isNull())).thenReturn(null);
+        when(ai.callModelWithRotation(anyString(), anyInt())).thenReturn("Plantilla MASTER…");
+        when(projectRepository.save(any(VideoStoryProject.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        wizard.generateVideoPrompt(projectId, emptyVideoRequest());
+
+        // El intento se abre con el paso correcto y detalles de la escena,
+        // y cierra COMPLETED con el tamaño del output.
+        verify(traceService).startStep(eq(projectId), eq(VideoStoryStep.VIDEO), contains("SCENE 01"));
+        verify(traceService).completeStep(any(), contains("caracteres de plantilla MASTER"));
+        verify(traceService, org.mockito.Mockito.never()).failStep(any(), any());
+    }
+
+    @Test
+    @DisplayName("Paso 5 (video): un fallo de la IA queda trazado como FAILED y se propaga")
+    void generateVideoPrompt_aiFailure_recordsTraceFailed() {
+        VideoStoryProject project = projectWithScenes();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(referenceService.resolveReference(isNull(), isNull(), isNull())).thenReturn(null);
+        when(ai.callModelWithRotation(anyString(), anyInt()))
+                .thenThrow(new IllegalStateException("La generación con la IA falló en el paso 5 (video)"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> wizard.generateVideoPrompt(projectId, emptyVideoRequest()));
+
+        verify(traceService).startStep(eq(projectId), eq(VideoStoryStep.VIDEO), anyString());
+        verify(traceService).failStep(any(), eq(e));
+        verify(traceService, org.mockito.Mockito.never()).completeStep(any(), anyString());
+        assertFalse(e.getMessage().isEmpty());
     }
 }

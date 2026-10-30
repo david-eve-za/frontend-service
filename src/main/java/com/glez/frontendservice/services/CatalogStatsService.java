@@ -84,12 +84,17 @@ public class CatalogStatsService {
         return series;
     }
 
-    /** Volca en byDay[index] el COUNT(*) por día de una tabla del catálogo. */
+    /** Volca en byDay[index] el COUNT(*) por día LOCAL de una tabla del catálogo. */
     private void countByDay(String table, Timestamp cutoff, Map<String, long[]> byDay, int index) {
-        // Alias day_key: "day" es palabra reservada en H2 2.x.
+        // Alias day_key: "day" es palabra reservada en H2 2.x. El CAST es
+        // OBLIGATORIO: created_at es TIMESTAMP WITH TIME ZONE y
+        // FORMATDATETIME lo renderiza en UTC; con el cast al TIMESTAMP local
+        // el día de la clave coincide con el LocalDate de la serie (sin él,
+        // los conteos de las 18:00-24:00 locales caían en el día UTC
+        // siguiente y desaparecían del gráfico).
         jdbcTemplate.query(
-                "SELECT FORMATDATETIME(created_at, 'yyyy-MM-dd') AS day_key, COUNT(*) AS total FROM " + table
-                        + " WHERE created_at >= ? GROUP BY FORMATDATETIME(created_at, 'yyyy-MM-dd')",
+                "SELECT FORMATDATETIME(CAST(created_at AS TIMESTAMP), 'yyyy-MM-dd') AS day_key, COUNT(*) AS total FROM " + table
+                        + " WHERE created_at >= ? GROUP BY FORMATDATETIME(CAST(created_at AS TIMESTAMP), 'yyyy-MM-dd')",
                 rs -> {
                     byDay.computeIfAbsent(rs.getString("day_key"), key -> new long[2])[index]
                             += rs.getLong("total");

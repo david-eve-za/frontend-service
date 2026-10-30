@@ -255,8 +255,9 @@ const DEFAULT_EXCLUDE = 'NovelsCatalogSync';
                         >
                         @if (ev.mdc['bookId']) {
                             <span
-                                class="whitespace-nowrap text-xs px-1 rounded bg-cyan-100 dark:bg-cyan-400/20 text-cyan-700 dark:text-cyan-300"
-                                [title]="'bookId: ' + ev.mdc['bookId']"
+                                class="whitespace-nowrap text-xs px-1 rounded bg-cyan-100 dark:bg-cyan-400/20 text-cyan-700 dark:text-cyan-300 cursor-pointer"
+                                [title]="'bookId: ' + ev.mdc['bookId'] + ' — clic para filtrar este proceso'"
+                                (click)="filterBy(ev.mdc['bookId']!)"
                                 >📘 {{ ev.mdc['bookId'].substring(0, 8) }}</span
                             >
                         }
@@ -269,8 +270,9 @@ const DEFAULT_EXCLUDE = 'NovelsCatalogSync';
                         }
                         @if (ev.mdc['traceId']) {
                             <span
-                                class="whitespace-nowrap text-xs px-1 rounded bg-blue-100 dark:bg-blue-400/20 text-blue-700 dark:text-blue-300"
-                                [title]="'traceId: ' + ev.mdc['traceId']"
+                                class="whitespace-nowrap text-xs px-1 rounded bg-blue-100 dark:bg-blue-400/20 text-blue-700 dark:text-blue-300 cursor-pointer"
+                                [title]="'traceId: ' + ev.mdc['traceId'] + ' — clic para filtrar este proceso'"
+                                (click)="filterBy(ev.mdc['traceId']!)"
                                 >🔗
                                 {{ ev.mdc['traceId'].substring(0, 8) }}</span
                             >
@@ -386,18 +388,26 @@ export class LogViewer implements OnInit, OnDestroy {
     });
 
     ngOnInit() {
-        // Deep-link desde el panel de procesos: ?book=<id> (filtro MDC del
-        // libro), ?text=<q> (texto), ?clearExclude=1 (muestra los eventos
-        // del sync, ocultos por defecto) y ?name= para el chip del
-        // encabezado. Suscripción (no snapshot): Angular REUSA el
-        // componente al re-navegar a /logs con otros parámetros.
+        // Deep-link desde el panel de procesos y el asistente: ?book=<id>
+        // y ?trace=<id> (ambos alimentan el filtro MDC en vivo — el
+        // bookId del pipeline o el traceId de cualquier proceso, p. ej.
+        // el id de un proyecto del asistente), ?text=<q> (texto),
+        // ?clearExclude=1 (muestra los eventos del sync, ocultos por
+        // defecto) y ?name= para el chip del encabezado. Suscripción
+        // (no snapshot): Angular REUSA el componente al re-navegar a
+        // /logs con otros parámetros.
         this.route.queryParamMap.subscribe((params) => {
             const book = params.get('book');
+            const trace = params.get('trace');
             const text = params.get('text');
             const name = params.get('name');
             if (book) {
                 this.traceFilter.set(book);
                 this.linkedProcessName.set(name ?? book);
+            }
+            if (trace) {
+                this.traceFilter.set(trace);
+                this.linkedProcessName.set(name ?? trace);
             }
             if (text) {
                 this.textFilter.set(text);
@@ -433,6 +443,14 @@ export class LogViewer implements OnInit, OnDestroy {
     clear() {
         this.events.set([]);
         this.pausedCount.set(0);
+    }
+
+    /**
+     * Filtra la traza por un valor exacto: el clic en el chip 🔗 (traceId)
+     * o 📘 (bookId) de cualquier evento separa ese proceso del resto.
+     */
+    filterBy(value: string): void {
+        this.traceFilter.set(value);
     }
 
     /**
@@ -491,6 +509,12 @@ export class LogViewer implements OnInit, OnDestroy {
             TRANSLATE: 'Traducción',
             AUDIO: 'Audio',
             FINALIZE: 'Finalización',
+            WIZARD_STORY: 'Historia',
+            WIZARD_DESIGNS: 'Diseños',
+            WIZARD_ASSETS: 'Assets',
+            WIZARD_SCENES: 'Escenas',
+            WIZARD_VIDEO: 'Plantilla',
+            WIZARD_STORYBOARD: 'Storyboard',
         };
         return labels[step] ?? step;
     }

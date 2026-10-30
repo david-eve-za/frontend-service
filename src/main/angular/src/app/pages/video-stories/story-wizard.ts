@@ -6,7 +6,11 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { SelectModule } from 'primeng/select';
+import { SelectButtonModule } from 'primeng/selectbutton';
+import { ToggleSwitchModule } from 'primeng/toggleswitch';
+import { AccordionModule } from 'primeng/accordion';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
@@ -22,12 +26,38 @@ import {
     StoryWizardClientService,
     VideoStoryProject,
     VideoStoryProjectSummary,
+    VideoStoryTraceEvent,
 } from './story-wizard.service';
 
 /** Opción de los p-select: etiqueta ES, valor EN listo para las plantillas. */
 interface SelectOption {
     label: string;
     value: string;
+}
+
+/** Perfil por género: tono sugerido, conflicto por defecto y subgéneros. */
+interface GenreProfile {
+    tone: string;
+    conflict: string;
+    subgenres: string[];
+}
+
+/** Tarjeta de conflicto emocional del paso 1 (radiogroup de cards). */
+interface ConflictCard {
+    label: string;
+    value: string;
+    icon: string;
+}
+
+/** Premisa del arranque rápido: aplica género, tono, conflicto y final. */
+interface PremisePreset {
+    label: string;
+    hint: string;
+    icon: string;
+    genre: string;
+    tone: string;
+    ending: string;
+    conflict: string;
 }
 
 /**
@@ -56,6 +86,9 @@ interface SelectOption {
         CommonModule,
         FormsModule,
         SelectModule,
+        SelectButtonModule,
+        ToggleSwitchModule,
+        AccordionModule,
         ButtonModule,
         InputTextModule,
         TextareaModule,
@@ -68,6 +101,13 @@ interface SelectOption {
         CheckboxModule,
     ],
     providers: [MessageService, ConfirmationService],
+    styles: `
+        /* Los grupos de chips envuelven en móvil (PrimeNG los deja en una
+           fila con nowrap y desbordan el viewport). */
+        .p-selectbutton {
+            flex-wrap: wrap;
+        }
+    `,
     template: `
         <p-toast [life]="12000"></p-toast>
         <p-confirmDialog icon="pi pi-exclamation-triangle"></p-confirmDialog>
@@ -157,283 +197,521 @@ interface SelectOption {
             @if (!project()) {
                 <div class="font-semibold text-lg mb-3">Paso 1 — Historia</div>
                 <p class="text-muted-color text-sm mb-3">
-                    Rellena la plantilla narrativa; la IA escribirá la historia
-                    completa con hook, estructura, personajes y cliffhanger.
+                    Elige y genera: la IA escribirá la historia completa con
+                    hook, estructura, personajes y cliffhanger. Todos los campos
+                    traen un valor listo para usar; solo el género es
+                    imprescindible.
                 </p>
 
-                <div class="grid grid-cols-12 gap-4">
-                    <div class="col-span-12 md:col-span-6">
-                        <label class="block text-sm font-medium mb-2">Título *</label>
-                        <input
-                            pInputText
-                            type="text"
-                            class="w-full"
-                            placeholder="Nombre interno de la historia…"
-                            [(ngModel)]="title"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Género *</label>
-                        <p-select
-                            [options]="genreOptions"
-                            [(ngModel)]="genre"
-                            optionLabel="label"
-                            optionValue="value"
-                            placeholder="Elige el género"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Subgénero</label>
-                        <input
-                            pInputText
-                            type="text"
-                            class="w-full"
-                            placeholder="P. ej. slow burn office romance…"
-                            [(ngModel)]="subgenre"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Audiencia *</label>
-                        <p-select
-                            [options]="audienceOptions"
-                            [(ngModel)]="targetAudience"
-                            optionLabel="label"
-                            optionValue="value"
-                            placeholder="¿Para quién?"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">País / cultura</label>
-                        <input
-                            pInputText
-                            type="text"
-                            class="w-full"
-                            placeholder="P. ej. Japón…"
-                            [(ngModel)]="countryCulture"
-                        />
-                    </div>
-                    <div class="col-span-12 md:col-span-6">
-                        <label class="block text-sm font-medium mb-2">Ubicación preferida</label>
-                        <input
-                            pInputText
-                            type="text"
-                            class="w-full"
-                            placeholder="Ciudad o tipo de lugar…"
-                            [(ngModel)]="location"
-                        />
-                    </div>
-                    <div class="col-span-12">
-                        <label class="block text-sm font-medium mb-2">
-                            Temas, conflictos y relaciones
-                        </label>
-                        <textarea
-                            pInputTextarea
-                            rows="2"
-                            class="w-full"
-                            placeholder="Ambición, celos, un secreto del pasado… (opcional)"
-                            [(ngModel)]="themes"
-                        ></textarea>
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Tono emocional *</label>
-                        <p-select
-                            [options]="toneOptions"
-                            [(ngModel)]="tone"
-                            optionLabel="label"
-                            optionValue="value"
-                            placeholder="¿Cómo debe sentirse?"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Estilo visual</label>
-                        <p-select
-                            [options]="visualStyleOptions"
-                            [(ngModel)]="visualStyle"
-                            optionLabel="label"
-                            optionValue="value"
-                            placeholder="Formato de animación"
-                            styleClass="w-full"
-                            [showClear]="true"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Realismo</label>
-                        <p-select
-                            [options]="realismOptions"
-                            [(ngModel)]="realismLevel"
-                            optionLabel="label"
-                            optionValue="value"
-                            placeholder="Realismo"
-                            styleClass="w-full"
-                            [showClear]="true"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Apto para familias</label>
-                        <p-select
-                            [options]="familyFriendlyOptions"
-                            [(ngModel)]="familyFriendly"
-                            optionLabel="label"
-                            optionValue="value"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
-                    <div class="col-span-12 md:col-span-4">
-                        <label class="block text-sm font-medium mb-2">Requisitos del personaje 1</label>
-                        <textarea
-                            pInputTextarea
-                            rows="2"
-                            class="w-full"
-                            placeholder="Edad, personalidad, lo que oculta… (opcional)"
-                            [(ngModel)]="character1Requirements"
-                        ></textarea>
-                    </div>
-                    <div class="col-span-12 md:col-span-4">
-                        <label class="block text-sm font-medium mb-2">Requisitos del personaje 2</label>
-                        <textarea
-                            pInputTextarea
-                            rows="2"
-                            class="w-full"
-                            placeholder="Edad, personalidad, lo que oculta… (opcional)"
-                            [(ngModel)]="character2Requirements"
-                        ></textarea>
-                    </div>
-                    <div class="col-span-12 md:col-span-4">
-                        <label class="block text-sm font-medium mb-2">Otros personajes</label>
-                        <textarea
-                            pInputTextarea
-                            rows="2"
-                            class="w-full"
-                            placeholder="Requisitos del resto del reparto (opcional)"
-                            [(ngModel)]="otherCharacterRequirements"
-                        ></textarea>
-                    </div>
-                    <div class="col-span-12 md:col-span-6">
-                        <label class="block text-sm font-medium mb-2">
-                            Conflicto emocional principal *
-                        </label>
-                        <textarea
-                            pInputTextarea
-                            rows="2"
-                            class="w-full"
-                            placeholder="Lo que confrontan en el clímax…"
-                            [(ngModel)]="mainEmotionalConflict"
-                        ></textarea>
-                    </div>
-                    <div class="col-span-12 md:col-span-6">
-                        <label class="block text-sm font-medium mb-2">Elemento sin resolver *</label>
-                        <textarea
-                            pInputTextarea
-                            rows="2"
-                            class="w-full"
-                            placeholder="Lo que NO se resuelve al final…"
-                            [(ngModel)]="unresolvedElement"
-                        ></textarea>
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Tipo de final</label>
-                        <p-select
-                            [options]="endingTypeOptions"
-                            [(ngModel)]="endingType"
-                            optionLabel="label"
-                            optionValue="value"
-                            placeholder="Cómo termina"
-                            styleClass="w-full"
-                            [showClear]="true"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Nº de personajes</label>
-                        <p-select
-                            [options]="characterCountOptions"
-                            [(ngModel)]="characterCount"
-                            optionLabel="label"
-                            optionValue="value"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Idioma del diálogo *</label>
-                        <p-select
-                            [options]="languageOptions"
-                            [(ngModel)]="dialogueLanguage"
-                            optionLabel="label"
-                            optionValue="value"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Duración del video *</label>
-                        <p-select
-                            [options]="videoDurationOptions"
-                            [(ngModel)]="videoDurationSeconds"
-                            optionLabel="label"
-                            optionValue="value"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
-                    <div class="col-span-4 md:col-span-2">
-                        <label class="block text-sm font-medium mb-2">Ritmo inicio %</label>
-                        <input
-                            pInputText
-                            type="number"
-                            min="0"
-                            max="100"
-                            class="w-full"
-                            [(ngModel)]="pacingFirstPercent"
-                        />
-                    </div>
-                    <div class="col-span-4 md:col-span-2">
-                        <label class="block text-sm font-medium mb-2">Ritmo medio %</label>
-                        <input
-                            pInputText
-                            type="number"
-                            min="0"
-                            max="100"
-                            class="w-full"
-                            [(ngModel)]="pacingMiddlePercent"
-                        />
-                    </div>
-                    <div class="col-span-4 md:col-span-2">
-                        <label class="block text-sm font-medium mb-2">Ritmo final %</label>
-                        <input
-                            pInputText
-                            type="number"
-                            min="0"
-                            max="100"
-                            class="w-full"
-                            [(ngModel)]="pacingFinalPercent"
-                        />
-                    </div>
-                    <div class="col-span-6 md:col-span-3">
-                        <label class="block text-sm font-medium mb-2">Plataforma / formato *</label>
-                        <p-select
-                            [options]="platformOptions"
-                            [(ngModel)]="platform"
-                            optionLabel="label"
-                            optionValue="value"
-                            placeholder="¿Dónde se publicará?"
-                            styleClass="w-full"
-                            [showClear]="false"
-                        />
-                    </div>
+                <!-- Arranque rápido: premisas de un clic + sorpresa -->
+                <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+                    <span id="premiseLabel" class="text-sm font-medium">¿Cómo empiezas?</span>
+                    <p-button
+                        label="Sorpréndeme"
+                        icon="pi pi-sparkles"
+                        size="small"
+                        [outlined]="true"
+                        severity="secondary"
+                        (onClick)="surpriseMe()"
+                    />
                 </div>
+                <div
+                    class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4"
+                    role="group"
+                    aria-labelledby="premiseLabel"
+                >
+                    @for (preset of premisePresets; track preset.label) {
+                        <button
+                            type="button"
+                            class="p-3 text-left border rounded-lg bg-transparent cursor-pointer transition-colors duration-150 border-surface-200 dark:border-surface-600 hover:bg-surface-50 dark:hover:bg-surface-800"
+                            (click)="applyPreset(preset)"
+                        >
+                            <i class="{{ preset.icon }} text-primary"></i>
+                            <span class="block text-sm font-medium mt-1">{{ preset.label }}</span>
+                            <span class="block text-xs text-muted-color">{{ preset.hint }}</span>
+                        </button>
+                    }
+                </div>
+
+                @if (storyErrors.length > 0) {
+                    <div
+                        class="mb-4 p-3 border rounded-lg text-sm border-orange-300 bg-orange-50"
+                        role="alert"
+                    >
+                        <div class="font-medium mb-1">
+                            <i class="pi pi-exclamation-circle text-orange-500"></i>
+                            Antes de generar, revisa:
+                        </div>
+                        <ul class="ml-4 list-disc">
+                            @for (error of storyErrors; track error) {
+                                <li>{{ error }}</li>
+                            }
+                        </ul>
+                    </div>
+                }
+
+                <!-- Género: la única decisión sin valor por defecto -->
+                <div class="mb-4">
+                    <label id="genreLabel" class="block text-sm font-medium mb-2">
+                        Género <span class="text-red-500">*</span>
+                        <span class="sr-only">(obligatorio)</span>
+                    </label>
+                    <p-selectbutton
+                        [options]="genreOptions"
+                        [ngModel]="genre"
+                        (ngModelChange)="onGenreChange($event)"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                        ariaLabelledBy="genreLabel"
+                    />
+                    @if (genre === null && storyErrors.length > 0) {
+                        <small class="block text-red-500 mt-1">
+                            Elige un género para empezar.
+                        </small>
+                    }
+                </div>
+
+                <!-- Tono: sugerido según el género, editable -->
+                <div class="mb-4">
+                    <label id="toneLabel" class="block text-sm font-medium mb-2">Tono</label>
+                    <p-selectbutton
+                        [options]="toneOptions"
+                        [ngModel]="tone"
+                        (ngModelChange)="tone = $event"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                        ariaLabelledBy="toneLabel"
+                    />
+                </div>
+
+                <!-- Plataforma: deriva aspecto, duración y ritmo de escenas -->
+                <div class="mb-4">
+                    <label id="platformLabel" class="block text-sm font-medium mb-2">
+                        ¿Dónde se publicará?
+                    </label>
+                    <p-selectbutton
+                        [options]="platformOptions"
+                        [ngModel]="platform"
+                        (ngModelChange)="onPlatformChange($event)"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                        ariaLabelledBy="platformLabel"
+                    >
+                        <ng-template pTemplate="item" let-item>
+                            <i class="{{ item.icon }} text-primary"></i>
+                            <span class="text-sm">{{ item.label }}</span>
+                        </ng-template>
+                    </p-selectbutton>
+                    <small class="block text-muted-color mt-1">
+                        Al cambiar de plataforma ajustamos el formato (vertical u
+                        horizontal), la duración sugerida y el ritmo de escenas.
+                    </small>
+                </div>
+
+                <!-- Duración del video -->
+                <div class="mb-4">
+                    <label id="durationLabel" class="block text-sm font-medium mb-2">
+                        Duración del video
+                    </label>
+                    <p-selectbutton
+                        [options]="videoDurationOptions"
+                        [ngModel]="videoDurationSeconds"
+                        (ngModelChange)="onDurationChange($event)"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                        ariaLabelledBy="durationLabel"
+                    />
+                </div>
+
+                <!-- Audiencia -->
+                <div class="mb-4">
+                    <label id="audienceLabel" class="block text-sm font-medium mb-2">Audiencia</label>
+                    <p-selectbutton
+                        [options]="audienceOptions"
+                        [ngModel]="targetAudience"
+                        (ngModelChange)="onAudienceChange($event)"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                        ariaLabelledBy="audienceLabel"
+                    />
+                </div>
+
+                <!-- Apto para familias (fijado a ON con audiencia infantil) -->
+                <div class="mb-4 flex items-center gap-2 flex-wrap">
+                    <p-toggleswitch
+                        [ngModel]="familyFriendly"
+                        (ngModelChange)="familyFriendly = $event"
+                        inputId="familyFriendly"
+                        [disabled]="targetAudience === 'Children'"
+                    />
+                    <label for="familyFriendly" class="text-sm cursor-pointer">Apto para familias</label>
+                    @if (targetAudience === 'Children') {
+                        <small class="text-muted-color">
+                            Con audiencia «Niños» siempre está activado.
+                        </small>
+                    }
+                </div>
+
+                <!-- Conflicto emocional: tarjetas + «Otro» opcional -->
+                <div class="mb-4">
+                    <label id="conflictLabel" class="block text-sm font-medium mb-2">
+                        Conflicto emocional
+                        <span class="text-muted-color text-xs font-normal">
+                            (el corazón del clímax)
+                        </span>
+                    </label>
+                    <div
+                        class="grid grid-cols-2 md:grid-cols-4 gap-2"
+                        role="radiogroup"
+                        aria-labelledby="conflictLabel"
+                    >
+                        @for (option of conflictOptions; track option.value) {
+                            <button
+                                type="button"
+                                role="radio"
+                                [attr.aria-checked]="conflict === option.value"
+                                class="p-3 text-left border rounded-lg bg-transparent cursor-pointer transition-colors duration-150 border-surface-200 dark:border-surface-600"
+                                [class.border-primary]="conflict === option.value"
+                                [class.bg-surface-50]="conflict === option.value"
+                                (click)="onConflictChange(option.value)"
+                            >
+                                <i class="{{ option.icon }} text-primary"></i>
+                                <span class="block text-sm mt-1">{{ option.label }}</span>
+                            </button>
+                        }
+                        <button
+                            type="button"
+                            role="radio"
+                            [attr.aria-checked]="conflict === '__other__'"
+                            class="p-3 text-left border rounded-lg bg-transparent cursor-pointer transition-colors duration-150 border-surface-200 dark:border-surface-600"
+                            [class.border-primary]="conflict === '__other__'"
+                            [class.bg-surface-50]="conflict === '__other__'"
+                            (click)="onConflictChange('__other__')"
+                        >
+                            <i class="pi pi-pencil text-primary"></i>
+                            <span class="block text-sm mt-1">Otro…</span>
+                        </button>
+                    </div>
+                    @if (conflict === '__other__') {
+                        <input
+                            pInputText
+                            type="text"
+                            id="conflictOther"
+                            class="w-full mt-2"
+                            placeholder="P. ej. cuidar de su madre o aceptar el trabajo de su vida…"
+                            [(ngModel)]="conflictOther"
+                        />
+                    }
+                </div>
+
+                <!-- Tipo de final -->
+                <div class="mb-4">
+                    <label id="endingLabel" class="block text-sm font-medium mb-2">Tipo de final</label>
+                    <p-selectbutton
+                        [options]="endingTypeOptions"
+                        [ngModel]="endingType"
+                        (ngModelChange)="onEndingChange($event)"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                        ariaLabelledBy="endingLabel"
+                    />
+                </div>
+
+                <!-- Idioma del diálogo: recuerda la última elección -->
+                <div class="mb-4">
+                    <label id="languageLabel" class="block text-sm font-medium mb-2">
+                        Idioma del diálogo
+                    </label>
+                    <p-selectbutton
+                        [options]="languageOptions"
+                        [ngModel]="dialogueLanguage"
+                        (ngModelChange)="onLanguageChange($event)"
+                        optionLabel="label"
+                        optionValue="value"
+                        [allowEmpty]="false"
+                        ariaLabelledBy="languageLabel"
+                    />
+                </div>
+
+                <!-- Ajustes avanzados: todo opcional y colapsado -->
+                <p-accordion value="" class="mb-4">
+                    <p-accordion-panel value="advanced">
+                        <p-accordion-header>
+                            <span class="text-sm font-medium">Ajustes avanzados</span>
+                            <span class="text-muted-color text-xs"> (todo opcional)</span>
+                        </p-accordion-header>
+                        <p-accordion-content>
+                            <div class="grid grid-cols-12 gap-4 pt-2">
+                                <div class="col-span-12 md:col-span-6">
+                                    <label for="title" class="block text-sm font-medium mb-2">Título</label>
+                                    <input
+                                        pInputText
+                                        type="text"
+                                        id="title"
+                                        class="w-full"
+                                        placeholder="Vacío: se genera uno automáticamente…"
+                                        [(ngModel)]="title"
+                                    />
+                                </div>
+                                <div class="col-span-12 md:col-span-6">
+                                    <label id="subgenreLabel" class="block text-sm font-medium mb-2">
+                                        Subgénero
+                                        <span class="text-muted-color text-xs font-normal">(según el género)</span>
+                                    </label>
+                                    <p-selectbutton
+                                        [options]="subgenreOptions"
+                                        [ngModel]="subgenre"
+                                        (ngModelChange)="onSubgenreChange($event)"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        [allowEmpty]="true"
+                                        ariaLabelledBy="subgenreLabel"
+                                    />
+                                    @if (subgenre === '__other__') {
+                                        <input
+                                            pInputText
+                                            type="text"
+                                            id="subgenreOther"
+                                            class="w-full mt-2"
+                                            placeholder="P. ej. slow burn de cocina…"
+                                            [(ngModel)]="subgenreOther"
+                                        />
+                                    }
+                                </div>
+                                <div class="col-span-12 md:col-span-6">
+                                    <label id="settingLabel" class="block text-sm font-medium mb-2">
+                                        Ambientación
+                                        <span class="text-muted-color text-xs font-normal">(vacío: la IA decide)</span>
+                                    </label>
+                                    <p-selectbutton
+                                        [options]="settingOptions"
+                                        [ngModel]="setting"
+                                        (ngModelChange)="onSettingChange($event)"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        [allowEmpty]="true"
+                                        ariaLabelledBy="settingLabel"
+                                    />
+                                    @if (setting === '__other__') {
+                                        <input
+                                            pInputText
+                                            type="text"
+                                            id="settingOther"
+                                            class="w-full mt-2"
+                                            placeholder="P. ej. Kioto, en una panadería tradicional…"
+                                            [(ngModel)]="settingOther"
+                                        />
+                                    }
+                                </div>
+                                <div class="col-span-12 md:col-span-6">
+                                    <label id="unresolvedLabel" class="block text-sm font-medium mb-2">
+                                        Lo que NO se resuelve
+                                        <span class="text-muted-color text-xs font-normal">(ligado al final)</span>
+                                    </label>
+                                    <p-selectbutton
+                                        [options]="unresolvedSelectOptions"
+                                        [ngModel]="unresolved"
+                                        (ngModelChange)="onUnresolvedChange($event)"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        [allowEmpty]="false"
+                                        ariaLabelledBy="unresolvedLabel"
+                                    />
+                                    @if (unresolved === '__other__') {
+                                        <input
+                                            pInputText
+                                            type="text"
+                                            id="unresolvedOther"
+                                            class="w-full mt-2"
+                                            placeholder="P. ej. qué contiene la carta que no se atreve a abrir…"
+                                            [(ngModel)]="unresolvedOther"
+                                        />
+                                    }
+                                </div>
+                                <div class="col-span-12 md:col-span-4">
+                                    <label id="characterCountLabel" class="block text-sm font-medium mb-2">
+                                        Nº de personajes
+                                    </label>
+                                    <p-selectbutton
+                                        [options]="characterCountOptions"
+                                        [ngModel]="characterCount"
+                                        (ngModelChange)="onCharacterCountChange($event)"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        [allowEmpty]="false"
+                                        ariaLabelledBy="characterCountLabel"
+                                    />
+                                </div>
+                                <div class="col-span-12 md:col-span-4">
+                                    <label for="character1Requirements" class="block text-sm font-medium mb-2">
+                                        Personaje 1
+                                    </label>
+                                    <textarea
+                                        pInputTextarea
+                                        rows="2"
+                                        id="character1Requirements"
+                                        class="w-full"
+                                        placeholder="Edad, personalidad, lo que oculta… (opcional)"
+                                        [(ngModel)]="character1Requirements"
+                                    ></textarea>
+                                </div>
+                                <div class="col-span-12 md:col-span-4">
+                                    <label for="character2Requirements" class="block text-sm font-medium mb-2">
+                                        Personaje 2
+                                    </label>
+                                    <textarea
+                                        pInputTextarea
+                                        rows="2"
+                                        id="character2Requirements"
+                                        class="w-full"
+                                        placeholder="Edad, personalidad, lo que oculta… (opcional)"
+                                        [(ngModel)]="character2Requirements"
+                                    ></textarea>
+                                </div>
+                                <div class="col-span-12 md:col-span-4">
+                                    <label for="otherCharacterRequirements" class="block text-sm font-medium mb-2">
+                                        Otros personajes
+                                    </label>
+                                    <textarea
+                                        pInputTextarea
+                                        rows="2"
+                                        id="otherCharacterRequirements"
+                                        class="w-full"
+                                        placeholder="Requisitos del resto del reparto (opcional)"
+                                        [(ngModel)]="otherCharacterRequirements"
+                                    ></textarea>
+                                </div>
+                                <div class="col-span-12 md:col-span-8">
+                                    <label id="visualStyleLabel" class="block text-sm font-medium mb-2">
+                                        Formato de animación
+                                        <span class="text-muted-color text-xs font-normal">(vacío: 3D cinematográfico)</span>
+                                    </label>
+                                    <p-selectbutton
+                                        [options]="visualStyleOptions"
+                                        [ngModel]="visualStyle"
+                                        (ngModelChange)="visualStyle = $event"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        [allowEmpty]="true"
+                                        ariaLabelledBy="visualStyleLabel"
+                                    />
+                                </div>
+                                <div class="col-span-12 md:col-span-4">
+                                    <label id="realismLabel" class="block text-sm font-medium mb-2">
+                                        Realismo
+                                        <span class="text-muted-color text-xs font-normal">(vacío: estilizado)</span>
+                                    </label>
+                                    <p-selectbutton
+                                        [options]="realismOptions"
+                                        [ngModel]="realismLevel"
+                                        (ngModelChange)="realismLevel = $event"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        [allowEmpty]="true"
+                                        ariaLabelledBy="realismLabel"
+                                    />
+                                </div>
+                                <div class="col-span-12 md:col-span-6">
+                                    <label id="animationStyleLabel" class="block text-sm font-medium mb-2">
+                                        Estilo de animación
+                                        <span class="text-muted-color text-xs font-normal">
+                                            (se hereda a los pasos 2, 3 y 5)
+                                        </span>
+                                    </label>
+                                    <p-select
+                                        [options]="animationStyleOptions"
+                                        [ngModel]="animationStyle"
+                                        (ngModelChange)="onAnimationStyleChange($event)"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        ariaLabelledBy="animationStyleLabel"
+                                        placeholder="Vacío: Pixar / DreamWorks"
+                                        styleClass="w-full"
+                                        [showClear]="true"
+                                    />
+                                </div>
+                                <div class="col-span-12 md:col-span-6">
+                                    <label id="pacingLabel" class="block text-sm font-medium mb-2">
+                                        Ritmo narrativo
+                                    </label>
+                                    <p-selectbutton
+                                        [options]="pacingOptions"
+                                        [ngModel]="pacingPreset"
+                                        (ngModelChange)="onPacingPresetChange($event)"
+                                        optionLabel="label"
+                                        optionValue="value"
+                                        [allowEmpty]="false"
+                                        ariaLabelledBy="pacingLabel"
+                                    />
+                                    @if (pacingPreset === 'custom') {
+                                        <div class="grid grid-cols-3 gap-2 mt-2">
+                                            <div>
+                                                <label for="pacingFirstPercent" class="block text-xs text-muted-color mb-1">
+                                                    Inicio %
+                                                </label>
+                                                <input
+                                                    pInputText
+                                                    type="number"
+                                                    id="pacingFirstPercent"
+                                                    min="0"
+                                                    max="100"
+                                                    class="w-full"
+                                                    [(ngModel)]="pacingFirstPercent"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label for="pacingMiddlePercent" class="block text-xs text-muted-color mb-1">
+                                                    Medio %
+                                                </label>
+                                                <input
+                                                    pInputText
+                                                    type="number"
+                                                    id="pacingMiddlePercent"
+                                                    min="0"
+                                                    max="100"
+                                                    class="w-full"
+                                                    [(ngModel)]="pacingMiddlePercent"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label for="pacingFinalPercent" class="block text-xs text-muted-color mb-1">
+                                                    Final %
+                                                </label>
+                                                <input
+                                                    pInputText
+                                                    type="number"
+                                                    id="pacingFinalPercent"
+                                                    min="0"
+                                                    max="100"
+                                                    class="w-full"
+                                                    [(ngModel)]="pacingFinalPercent"
+                                                />
+                                            </div>
+                                        </div>
+                                        @if (pacingFirstPercent + pacingMiddlePercent + pacingFinalPercent !== 100) {
+                                            <small class="block text-red-500 mt-1">
+                                                La suma debe ser 100 % (ahora
+                                                {{ pacingFirstPercent + pacingMiddlePercent + pacingFinalPercent }} %).
+                                            </small>
+                                        }
+                                    }
+                                </div>
+                            </div>
+                        </p-accordion-content>
+                    </p-accordion-panel>
+                </p-accordion>
 
                 <div class="mt-4">
                     <p-button
                         label="Generar Historia con IA"
                         icon="pi pi-magic"
-                        [disabled]="!storyFormValid() || generatingStory"
+                        [disabled]="generatingStory"
                         [loading]="generatingStory"
                         (onClick)="generateStory()"
                     />
@@ -456,10 +734,11 @@ interface SelectOption {
                             icon="pi pi-copy"
                             severity="secondary"
                             [text]="true"
+                            ariaLabel="Copiar la historia"
                             (onClick)="copyText(p.story!, 'La historia')"
                         />
                     </div>
-                    <textarea pInputTextarea rows="7" class="w-full" readonly [value]="p.story"></textarea>
+                    <textarea pInputTextarea rows="7" class="w-full" readonly id="outputStory" aria-label="Historia generada" [value]="p.story"></textarea>
                 }
 
                 <!-- ═════════ PASO 2: DISEÑOS ═════════ -->
@@ -470,27 +749,34 @@ interface SelectOption {
                         generada, con consistencia visual entre escenas.
                     </p>
                     <div class="grid grid-cols-12 gap-4">
-                        <div class="col-span-12 md:col-span-6">
-                            <label class="block text-sm font-medium mb-2">Estilo de animación 3D *</label>
+                        <div class="col-span-12 md:col-span-8">
+                            <label id="designStyleLabel" class="block text-sm font-medium mb-2">
+                                Estilo de animación 3D
+                                <span class="text-muted-color text-xs font-normal">(heredado; editable)</span>
+                            </label>
                             <p-select
                                 [options]="animationStyleOptions"
                                 [(ngModel)]="designStyle"
                                 optionLabel="label"
                                 optionValue="value"
+                                ariaLabelledBy="designStyleLabel"
                                 placeholder="Elige el estilo visual"
                                 styleClass="w-full"
                                 [showClear]="false"
                             />
                         </div>
-                        <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Nº de personajes</label>
-                            <p-select
+                        <div class="col-span-12 md:col-span-4">
+                            <label id="designCountLabel" class="block text-sm font-medium mb-2">
+                                Personajes a diseñar
+                                <span class="text-muted-color text-xs font-normal">(heredado del paso 1)</span>
+                            </label>
+                            <p-selectbutton
                                 [options]="designCountOptions"
                                 [(ngModel)]="designCharacterCount"
                                 optionLabel="label"
                                 optionValue="value"
-                                styleClass="w-full"
-                                [showClear]="false"
+                                [allowEmpty]="false"
+                                ariaLabelledBy="designCountLabel"
                             />
                         </div>
                     </div>
@@ -512,10 +798,11 @@ interface SelectOption {
                             icon="pi pi-copy"
                             severity="secondary"
                             [text]="true"
+                            ariaLabel="Copiar los diseños"
                             (onClick)="copyText(p.designs!, 'Los diseños')"
                         />
                     </div>
-                    <textarea pInputTextarea rows="7" class="w-full" readonly [value]="p.designs"></textarea>
+                    <textarea pInputTextarea rows="7" class="w-full" readonly id="outputDesigns" aria-label="Diseños de personajes generados" [value]="p.designs"></textarea>
                 }
 
                 <!-- ═════════ PASO 3: ASSETS ═════════ -->
@@ -532,48 +819,52 @@ interface SelectOption {
                         pasos anteriores.
                     </p>
                     <div class="grid grid-cols-12 gap-4">
-                        <div class="col-span-12 md:col-span-4">
-                            <label class="block text-sm font-medium mb-2">Estilo de animación 3D</label>
-                            <p-select
-                                [options]="animationStyleOptions"
-                                [(ngModel)]="assetsStyle"
-                                optionLabel="label"
-                                optionValue="value"
-                                placeholder="Vacío hereda el del paso 2"
-                                styleClass="w-full"
-                                [showClear]="true"
-                            />
-                        </div>
-                        <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Audiencia destino</label>
-                            <input
-                                pInputText
-                                type="text"
-                                class="w-full"
-                                placeholder="Vacío: se deriva de la historia"
-                                [(ngModel)]="assetsAudience"
-                            />
-                        </div>
-                        <div class="col-span-6 md:col-span-2">
-                            <label class="block text-sm font-medium mb-2">Aspecto</label>
-                            <p-select
+                        <div class="col-span-12 md:col-span-5">
+                            <label id="assetsAspectLabel" class="block text-sm font-medium mb-2">
+                                Relación de aspecto
+                                <span class="text-muted-color text-xs font-normal">
+                                    (sugerida por tu plataforma: {{ platformLabel() }})
+                                </span>
+                            </label>
+                            <p-selectbutton
                                 [options]="aspectRatioOptions"
                                 [(ngModel)]="assetsAspectRatio"
                                 optionLabel="label"
                                 optionValue="value"
-                                styleClass="w-full"
-                                [showClear]="false"
+                                [allowEmpty]="false"
+                                ariaLabelledBy="assetsAspectLabel"
                             />
                         </div>
-                        <div class="col-span-12 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Paleta de colores</label>
-                            <input
-                                pInputText
-                                type="text"
-                                class="w-full"
-                                placeholder="Vacío: se deriva de la historia"
-                                [(ngModel)]="assetsPalette"
+                        <div class="col-span-12 md:col-span-7">
+                            <label id="assetsPaletteLabel" class="block text-sm font-medium mb-2">
+                                Paleta de colores
+                                <span class="text-muted-color text-xs font-normal">(vacío: se deriva de la historia)</span>
+                            </label>
+                            <p-selectbutton
+                                [options]="paletteOptions"
+                                [ngModel]="assetsPalette"
+                                (ngModelChange)="onPaletteChange($event)"
+                                optionLabel="label"
+                                optionValue="value"
+                                [allowEmpty]="true"
+                                ariaLabelledBy="assetsPaletteLabel"
                             />
+                            @if (assetsPalette === '__other__') {
+                                <input
+                                    pInputText
+                                    type="text"
+                                    id="assetsPaletteOther"
+                                    class="w-full mt-2"
+                                    placeholder="Describe tu paleta (p. ej. azules fríos con acentos ámbar)…"
+                                    [(ngModel)]="assetsPaletteOther"
+                                />
+                            }
+                        </div>
+                        <div class="col-span-12">
+                            <small class="text-muted-color text-sm">
+                                El estilo hereda el del paso 2 ({{ designStyleLabel() }}) y la
+                                audiencia se deriva de la historia.
+                            </small>
                         </div>
                     </div>
                     <div class="mt-4">
@@ -594,10 +885,11 @@ interface SelectOption {
                             icon="pi pi-copy"
                             severity="secondary"
                             [text]="true"
+                            ariaLabel="Copiar los assets"
                             (onClick)="copyText(p.assets!, 'Los assets')"
                         />
                     </div>
-                    <textarea pInputTextarea rows="8" class="w-full" readonly [value]="p.assets"></textarea>
+                    <textarea pInputTextarea rows="8" class="w-full" readonly id="outputAssets" aria-label="Biblioteca de assets generada" [value]="p.assets"></textarea>
                 }
 
                 <!-- ═════════ PASO 3: ESCENAS ═════════ -->
@@ -610,18 +902,21 @@ interface SelectOption {
                         la duración del video del paso 1.
                     </p>
                     <div class="grid grid-cols-12 gap-4">
-                        <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Duración media por escena</label>
-                            <p-select
+                        <div class="col-span-12 md:col-span-4">
+                            <label id="sceneAvgLabel" class="block text-sm font-medium mb-2">
+                                Duración media por escena
+                                <span class="text-muted-color text-xs font-normal">(sugerida por la plataforma)</span>
+                            </label>
+                            <p-selectbutton
                                 [options]="sceneAvgOptions"
                                 [(ngModel)]="sceneAvgSeconds"
                                 optionLabel="label"
                                 optionValue="value"
-                                styleClass="w-full"
-                                [showClear]="false"
+                                [allowEmpty]="false"
+                                ariaLabelledBy="sceneAvgLabel"
                             />
                         </div>
-                        <div class="col-span-12 md:col-span-9 flex items-end">
+                        <div class="col-span-12 md:col-span-8 flex items-end">
                             @if (p.videoDurationSeconds) {
                                 <p class="text-muted-color text-sm">
                                     Duración total del video: <b>{{ durationLabel(p.videoDurationSeconds) }}</b>
@@ -636,35 +931,58 @@ interface SelectOption {
                             }
                         </div>
                         <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Habla primero</label>
-                            <input
-                                pInputText
-                                type="text"
-                                class="w-full"
-                                placeholder="Nombre del personaje…"
-                                [(ngModel)]="speakerFirst"
-                            />
+                            <label id="speakerFirstLabel" class="block text-sm font-medium mb-2">Habla primero</label>
+                            @if (speakerOptions.length > 0) {
+                                <p-select
+                                    [options]="speakerOptions"
+                                    [(ngModel)]="speakerFirst"
+                                    optionLabel="label"
+                                    optionValue="value"
+                                    placeholder="La IA decide"
+                                    styleClass="w-full"
+                                    [showClear]="true"
+                                    ariaLabelledBy="speakerFirstLabel"
+                                />
+                            } @else {
+                                <input
+                                    pInputText
+                                    type="text"
+                                    id="speakerFirst"
+                                    class="w-full"
+                                    placeholder="Nombre del personaje…"
+                                    [(ngModel)]="speakerFirst"
+                                />
+                            }
                         </div>
                         <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Habla segundo</label>
-                            <input
-                                pInputText
-                                type="text"
-                                class="w-full"
-                                placeholder="Nombre del personaje…"
-                                [(ngModel)]="speakerSecond"
-                            />
+                            <label id="speakerSecondLabel" class="block text-sm font-medium mb-2">Habla segundo</label>
+                            @if (speakerOptions.length > 0) {
+                                <p-select
+                                    [options]="speakerOptions"
+                                    [(ngModel)]="speakerSecond"
+                                    optionLabel="label"
+                                    optionValue="value"
+                                    placeholder="La IA decide"
+                                    styleClass="w-full"
+                                    [showClear]="true"
+                                    ariaLabelledBy="speakerSecondLabel"
+                                />
+                            } @else {
+                                <input
+                                    pInputText
+                                    type="text"
+                                    id="speakerSecond"
+                                    class="w-full"
+                                    placeholder="Nombre del personaje…"
+                                    [(ngModel)]="speakerSecond"
+                                />
+                            }
                         </div>
-                        <div class="col-span-6 md:col-span-2">
-                            <label class="block text-sm font-medium mb-2">Pronunciación</label>
-                            <p-select
-                                [options]="languageOptions"
-                                [(ngModel)]="sceneLanguage"
-                                optionLabel="label"
-                                optionValue="value"
-                                styleClass="w-full"
-                                [showClear]="false"
-                            />
+                        <div class="col-span-12">
+                            <small class="text-muted-color text-sm">
+                                Los diálogos usarán el idioma del paso 1 ({{ languageLabel() }});
+                                sin hablantes fijados, la IA reparte las líneas sola.
+                            </small>
                         </div>
                     </div>
                     <div class="mt-4">
@@ -685,10 +1003,11 @@ interface SelectOption {
                             icon="pi pi-copy"
                             severity="secondary"
                             [text]="true"
+                            ariaLabel="Copiar las escenas"
                             (onClick)="copyText(p.scenes!, 'Las escenas')"
                         />
                     </div>
-                    <textarea pInputTextarea rows="8" class="w-full" readonly [value]="p.scenes"></textarea>
+                    <textarea pInputTextarea rows="8" class="w-full" readonly id="outputScenes" aria-label="Escenas generadas" [value]="p.scenes"></textarea>
                 }
 
                 <!-- ═══════ PASO 5 (OPCIONAL): PLANTILLA MASTER DE VIDEO ═══════ -->
@@ -704,13 +1023,16 @@ interface SelectOption {
                     </p>
                     <div class="grid grid-cols-12 gap-4">
                         <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Escena objetivo</label>
+                            <label id="videoSceneLabel" class="block text-sm font-medium mb-2">
+                                Escena objetivo
+                            </label>
                             @if (parsedSceneOptions.length > 0) {
                                 <p-select
                                     [options]="parsedSceneOptions"
                                     [(ngModel)]="videoSceneIndex"
                                     optionLabel="label"
                                     optionValue="value"
+                                    ariaLabelledBy="videoSceneLabel"
                                     styleClass="w-full"
                                     [showClear]="false"
                                 />
@@ -719,31 +1041,22 @@ interface SelectOption {
                                     pInputText
                                     type="number"
                                     min="1"
+                                    id="videoSceneNumber"
                                     class="w-full"
                                     placeholder="Nº de escena (1, 2, 3…)"
+                                    aria-label="Escena objetivo (número)"
                                     [(ngModel)]="videoSceneIndex"
                                 />
                             }
                         </div>
                         <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Estilo de animación 3D</label>
-                            <p-select
-                                [options]="animationStyleOptions"
-                                [(ngModel)]="videoStyle"
-                                optionLabel="label"
-                                optionValue="value"
-                                placeholder="Vacío usa el estilo del paso 2"
-                                styleClass="w-full"
-                                [showClear]="true"
-                            />
-                        </div>
-                        <div class="col-span-6 md:col-span-3">
-                            <label class="block text-sm font-medium mb-2">Referencia (opcional)</label>
+                            <label id="referenceModeLabel" class="block text-sm font-medium mb-2">Referencia (opcional)</label>
                             <p-select
                                 [options]="referenceModeOptions"
                                 [(ngModel)]="referenceMode"
                                 optionLabel="label"
                                 optionValue="value"
+                                ariaLabelledBy="referenceModeLabel"
                                 styleClass="w-full"
                                 [showClear]="false"
                             />
@@ -751,9 +1064,12 @@ interface SelectOption {
                         @switch (referenceMode) {
                             @case ('file') {
                                 <div class="col-span-6 md:col-span-3">
-                                    <label class="block text-sm font-medium mb-2">Archivo de referencia</label>
+                                    <label for="referenceFile" class="block text-sm font-medium mb-2">
+                                        Archivo de referencia
+                                    </label>
                                     <input
                                         type="file"
+                                        id="referenceFile"
                                         class="text-sm w-full"
                                         accept=".txt,.md,.markdown,.json,.csv,.xml,.yml,.yaml,.html,.htm,.log,text/plain,text/markdown"
                                         (change)="onReferenceFile($event)"
@@ -765,10 +1081,13 @@ interface SelectOption {
                             }
                             @case ('url') {
                                 <div class="col-span-6 md:col-span-3">
-                                    <label class="block text-sm font-medium mb-2">URL de referencia</label>
+                                    <label for="referenceUrl" class="block text-sm font-medium mb-2">
+                                        URL de referencia
+                                    </label>
                                     <input
                                         pInputText
                                         type="url"
+                                        id="referenceUrl"
                                         class="w-full"
                                         placeholder="https://…"
                                         [(ngModel)]="referenceUrl"
@@ -777,10 +1096,13 @@ interface SelectOption {
                             }
                             @case ('search') {
                                 <div class="col-span-6 md:col-span-3">
-                                    <label class="block text-sm font-medium mb-2">Buscar en la web</label>
+                                    <label for="referenceSearch" class="block text-sm font-medium mb-2">
+                                        Buscar en la web
+                                    </label>
                                     <input
                                         pInputText
                                         type="text"
+                                        id="referenceSearch"
                                         class="w-full"
                                         placeholder="Término a buscar (p. ej. «panaderías de Kioto»)…"
                                         [(ngModel)]="referenceSearch"
@@ -808,6 +1130,7 @@ interface SelectOption {
                             icon="pi pi-copy"
                             severity="secondary"
                             [text]="true"
+                            ariaLabel="Copiar la plantilla MASTER de video"
                             (onClick)="copyText(p.videoPrompt!, 'La plantilla de video')"
                         />
                     </div>
@@ -816,8 +1139,78 @@ interface SelectOption {
                         rows="8"
                         class="w-full"
                         readonly
+                        id="outputVideoPrompt"
+                        aria-label="Plantilla MASTER de video generada"
                         [value]="p.videoPrompt"
                     ></textarea>
+                }
+
+                <!-- ═══════ CRONOLOGÍA DEL PROYECTO (trazas de cada intento de paso) ═══════ -->
+                @if (wizardTimeline.length > 0) {
+                    <div class="flex items-center justify-between mt-6 mb-2">
+                        <div class="font-semibold text-lg">Cronología del proyecto</div>
+                        <div class="flex gap-2">
+                            <p-button
+                                icon="pi pi-list"
+                                severity="secondary"
+                                [text]="true"
+                                ariaLabel="Ver logs en vivo de este proyecto"
+                                pTooltip="Ver logs en vivo de este proyecto (traza = id del proyecto)"
+                                tooltipPosition="top"
+                                (onClick)="viewProjectLogs(p)"
+                            />
+                            <p-button
+                                icon="pi pi-refresh"
+                                severity="secondary"
+                                [text]="true"
+                                ariaLabel="Refrescar la cronología"
+                                [loading]="timelineLoading"
+                                pTooltip="Refresca la cronología"
+                                tooltipPosition="top"
+                                (onClick)="loadTimeline()"
+                            />
+                        </div>
+                    </div>
+                    <p-table
+                        [value]="wizardTimeline"
+                        dataKey="id"
+                        [paginator]="wizardTimeline.length > 8"
+                        [rows]="8"
+                        [tableStyle]="{ 'min-width': '640px' }"
+                    >
+                        <ng-template pTemplate="header">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Paso</th>
+                                <th>Estado</th>
+                                <th class="text-center">Intento</th>
+                                <th>Duración</th>
+                                <th>Detalle</th>
+                            </tr>
+                        </ng-template>
+                        <ng-template pTemplate="body" let-ev>
+                            <tr>
+                                <td>{{ ev.startedAt | date: 'dd/MM HH:mm' }}</td>
+                                <td>{{ traceStepLabel(ev.step) }}</td>
+                                <td>
+                                    <p-tag
+                                        [value]="traceStatusLabel(ev.status)"
+                                        [severity]="traceStatusSeverity(ev.status)"
+                                    />
+                                </td>
+                                <td class="text-center">{{ ev.attempt }}</td>
+                                <td>{{ traceDuration(ev.durationMs) }}</td>
+                                <td
+                                    class="text-sm"
+                                    [class.text-red-500]="!!ev.errorMessage"
+                                    [pTooltip]="ev.errorMessage || ev.details || ''"
+                                    tooltipPosition="top"
+                                >
+                                    {{ ev.errorMessage || ev.details || '' }}
+                                </td>
+                            </tr>
+                        </ng-template>
+                    </p-table>
                 }
             }
         </div>
@@ -831,6 +1224,7 @@ interface SelectOption {
                     severity="secondary"
                     [outlined]="true"
                     [loading]="loading()"
+                    ariaLabel="Recargar la lista de proyectos"
                     (onClick)="loadProjects()"
                 />
             </div>
@@ -865,6 +1259,7 @@ interface SelectOption {
                                 severity="success"
                                 [text]="true"
                                 [rounded]="true"
+                                ariaLabel="Continuar este proyecto"
                                 pTooltip="Continuar este proyecto"
                                 tooltipPosition="left"
                                 (onClick)="continueProject(s)"
@@ -873,12 +1268,14 @@ interface SelectOption {
                                 icon="pi pi-eye"
                                 severity="secondary"
                                 [text]="true"
+                                ariaLabel="Abrir el detalle del proyecto"
                                 (onClick)="openProject(s)"
                             />
                             <p-button
                                 icon="pi pi-download"
                                 severity="secondary"
                                 [text]="true"
+                                ariaLabel="Descargar el storyboard"
                                 pTooltip="Descargar storyboard"
                                 tooltipPosition="left"
                                 (onClick)="downloadStoryboard(s.id, s.title)"
@@ -887,6 +1284,7 @@ interface SelectOption {
                                 icon="pi pi-trash"
                                 severity="danger"
                                 [text]="true"
+                                ariaLabel="Eliminar el proyecto"
                                 (onClick)="confirmDelete(s)"
                             />
                         </td>
@@ -912,23 +1310,23 @@ interface SelectOption {
             @if (detail; as d) {
                 @if (d.story) {
                     <div class="font-semibold mb-2">Historia</div>
-                    <textarea pInputTextarea rows="5" class="w-full mb-3" readonly [value]="d.story"></textarea>
+                    <textarea pInputTextarea rows="5" class="w-full mb-3" readonly id="detailStory" aria-label="Historia generada" [value]="d.story"></textarea>
                 }
                 @if (d.designs) {
                     <div class="font-semibold mb-2">Diseños de personajes</div>
-                    <textarea pInputTextarea rows="5" class="w-full mb-3" readonly [value]="d.designs"></textarea>
+                    <textarea pInputTextarea rows="5" class="w-full mb-3" readonly id="detailDesigns" aria-label="Diseños de personajes generados" [value]="d.designs"></textarea>
                 }
                 @if (d.assets) {
                     <div class="font-semibold mb-2">Biblioteca de assets</div>
-                    <textarea pInputTextarea rows="5" class="w-full mb-3" readonly [value]="d.assets"></textarea>
+                    <textarea pInputTextarea rows="5" class="w-full mb-3" readonly id="detailAssets" aria-label="Biblioteca de assets generada" [value]="d.assets"></textarea>
                 }
                 @if (d.scenes) {
                     <div class="font-semibold mb-2">Escenas</div>
-                    <textarea pInputTextarea rows="6" class="w-full mb-3" readonly [value]="d.scenes"></textarea>
+                    <textarea pInputTextarea rows="6" class="w-full mb-3" readonly id="detailScenes" aria-label="Escenas generadas" [value]="d.scenes"></textarea>
                 }
                 @if (d.videoPrompt) {
                     <div class="font-semibold mb-2">Plantilla de video</div>
-                    <textarea pInputTextarea rows="6" class="w-full" readonly [value]="d.videoPrompt"></textarea>
+                    <textarea pInputTextarea rows="6" class="w-full" readonly id="detailVideoPrompt" aria-label="Plantilla MASTER de video generada" [value]="d.videoPrompt"></textarea>
                 }
             }
         </p-dialog>
@@ -939,6 +1337,7 @@ export class StoryWizard {
     private readonly messageService = inject(MessageService);
     private readonly confirmationService = inject(ConfirmationService);
     private readonly cdr = inject(ChangeDetectorRef);
+    private readonly router = inject(Router);
 
     /** Estado del wizard y biblioteca. */
     readonly project = signal<VideoStoryProject | null>(null);
@@ -954,53 +1353,77 @@ export class StoryWizard {
     generatingScenes = false;
     generatingVideo = false;
 
-    // ── Paso 1: formulario de historia (mismos campos que el Creador). ──
+    // ── Paso 1: vista guiada — todos los campos traen un default editable. ──
+    /** Errores de validación del paso 1 (vacío = sin errores). */
+    storyErrors: string[] = [];
+
     title = '';
+    /** La ÚNICA decisión sin valor por defecto del formulario. */
     genre: string | null = null;
-    subgenre = '';
-    targetAudience: string | null = null;
-    countryCulture = '';
-    location = '';
-    themes = '';
+    /** Tono sugerido según el género (editable). */
     tone: string | null = null;
-    visualStyle: string | null = null;
-    realismLevel: string | null = null;
-    familyFriendly = 'YES';
+    targetAudience = 'Young adults';
+    platform = 'YouTube Shorts';
+    videoDurationSeconds = 60;
+    /** Duración tocada a mano: la plataforma deja de sugerirla. */
+    durationTouched = false;
+    /** Tarjeta de conflicto elegida o '__other__' para texto libre. */
+    conflict: string | null = null;
+    conflictOther = '';
+    /** ¿El usuario eligió conflicto a mano? (si no, se sugiere por género). */
+    conflictTouched = false;
+    endingType: string | null = 'Cliffhanger';
+    /** Ligado al tipo de final (editable en avanzados). */
+    unresolved: string | null = null;
+    unresolvedOther = '';
+    unresolvedTouched = false;
+    /** Idioma del diálogo: recuerda la última elección (localStorage). */
+    dialogueLanguage = StoryWizard.readStoredLanguage();
+    familyFriendly = true;
+
+    // ── Paso 1: ajustes avanzados (todo opcional y colapsado). ──
+    subgenre: string | null = null;
+    subgenreOther = '';
+    /** Ambientación: fusiona país/cultura y ubicación en un solo concepto. */
+    setting: string | null = null;
+    settingOther = '';
+    characterCount = 2;
     character1Requirements = '';
     character2Requirements = '';
     otherCharacterRequirements = '';
-    mainEmotionalConflict = '';
-    unresolvedElement = '';
-    endingType: string | null = null;
-    characterCount = 2;
-    dialogueLanguage = 'Spanish';
-    videoDurationSeconds = 60;
+    /** Formato de animación (vacío = 3D cinematográfico, default del backend). */
+    visualStyle: string | null = null;
+    /** Realismo (vacío = estilizado, default del backend). */
+    realismLevel: string | null = null;
+    /** Estilo de animación global: se hereda a los pasos 2, 3 y 5. */
+    animationStyle: string | null = null;
+    /** Preset de ritmo; 'custom' habilita los tres porcentajes a mano. */
+    pacingPreset: 'balanced' | 'fastStart' | 'slowBurn' | 'custom' = 'balanced';
     pacingFirstPercent = 30;
     pacingMiddlePercent = 50;
     pacingFinalPercent = 20;
-    platform: string | null = null;
 
-    // ── Paso 2: diseños. ──
+    // ── Paso 2: diseños (heredan el estilo global y el nº del paso 1). ──
     designStyle: string | null = null;
-    designCharacterCount = 4;
+    designCharacterCount = 2;
 
-    // ── Paso 3: assets (todo opcional; el estilo hereda el del paso 2). ──
+    // ── Paso 3: assets (aspecto derivado de la plataforma; paleta opcional). ──
     generatingAssets = false;
-    assetsStyle: string | null = null;
-    assetsAudience = '';
-    assetsAspectRatio = '16:9';
-    assetsPalette = '';
+    assetsAspectRatio = '9:16';
+    /** Chip de paleta o '__other__'; null = la IA la deriva de la historia. */
+    assetsPalette: string | null = null;
+    assetsPaletteOther = '';
 
-    // ── Paso 4: escenas (nº derivado de la duración total del video). ──
-    sceneAvgSeconds = 10;
-    speakerFirst = '';
-    speakerSecond = '';
-    sceneLanguage = 'Spanish';
+    // ── Paso 4: escenas (idioma heredado del paso 1). ──
+    sceneAvgSeconds = 5;
+    speakerFirst: string | null = null;
+    speakerSecond: string | null = null;
+    /** Nombres parseados de los diseños/historia para los «habla primero/segundo». */
+    parsedCharacterNames: string[] = [];
 
     // ── Paso 5: plantilla MASTER de video (cero interacción obligatoria). ──
     /** Índice 1-based de la escena objetivo (default: la primera). */
     videoSceneIndex = 1;
-    videoStyle: string | null = null;
     /** Escenas del paso 4 parseadas para el selector (mismo formato que el backend). */
     parsedSceneOptions: { label: string; value: number }[] = [];
     /** Modo de la referencia opcional: ninguna | archivo | url | búsqueda. */
@@ -1015,6 +1438,10 @@ export class StoryWizard {
     autoMode = true;
     autoRunning = false;
     autoStep = '';
+
+    // ── Cronología del proyecto (trazas persistidas de cada intento de paso). ──
+    wizardTimeline: VideoStoryTraceEvent[] = [];
+    timelineLoading = false;
 
     // ── Selectores (etiqueta ES, valor EN). ──
     readonly genreOptions: SelectOption[] = [
@@ -1062,9 +1489,172 @@ export class StoryWizard {
         { label: 'Fantasía', value: 'FANTASY' },
     ];
 
-    readonly familyFriendlyOptions: SelectOption[] = [
-        { label: 'Sí', value: 'YES' },
-        { label: 'No', value: 'NO' },
+    /** Tarjetas de conflicto emocional: el corazón del clímax en UNA selección. */
+    readonly conflictOptions: ConflictCard[] = [
+        {
+            label: 'Decirlo todo antes de perderse',
+            value: 'Saying what they truly feel before losing each other',
+            icon: 'pi pi-heart',
+        },
+        {
+            label: 'Lealtad a la familia frente al corazón',
+            value: 'Loyalty to family versus following their own heart',
+            icon: 'pi pi-users',
+        },
+        {
+            label: 'Rivales por el mismo sueño',
+            value: 'Being rivals for the same dream they both need',
+            icon: 'pi pi-trophy',
+        },
+        {
+            label: 'Un secreto del pasado que lo cambia todo',
+            value: 'A secret from the past that changes everything',
+            icon: 'pi pi-eye-slash',
+        },
+        {
+            label: 'Una promesa que ata a caminos distintos',
+            value: 'A promise that binds them to separate paths',
+            icon: 'pi pi-link',
+        },
+        {
+            label: 'Confiar cuando todo indica lo contrario',
+            value: 'Trusting each other when every sign says otherwise',
+            icon: 'pi pi-shield',
+        },
+        {
+            label: 'Elegir entre la ambición y la persona amada',
+            value: 'Choosing between ambition and the person they love',
+            icon: 'pi pi-star',
+        },
+        {
+            label: 'Perdonar una traición apenas soportable',
+            value: 'Forgiving a betrayal they can barely survive',
+            icon: 'pi pi-gift',
+        },
+    ];
+
+    /** Lo que NO se resuelve: emparejado 1:1 con cada tipo de final. */
+    readonly unresolvedOptions: SelectOption[] = [
+        {
+            label: 'La identidad de quien lo provocó todo',
+            value: 'the true identity of the person behind everything',
+        },
+        { label: 'Toda la verdad tras la revelación', value: 'the full truth behind the revelation' },
+        {
+            label: 'Si los sentimientos confesados serán correspondidos',
+            value: 'whether the confessed feelings will be answered',
+        },
+        { label: 'El verdadero motivo de la traición', value: 'the real motive behind the betrayal' },
+        { label: 'Quién envió el mensaje y por qué', value: 'who sent the message and why' },
+        { label: 'Las intenciones del recién llegado', value: 'the newcomer\'s true intentions' },
+        { label: 'La identidad oculta del personaje', value: 'the character\'s hidden identity' },
+        { label: 'Qué decidirá el protagonista a continuación', value: 'what the protagonist will decide next' },
+    ];
+
+    /** Lo anterior + «Otro…» para el selector de avanzados. */
+    readonly unresolvedSelectOptions: SelectOption[] = [
+        ...this.unresolvedOptions,
+        { label: 'Otro…', value: '__other__' },
+    ];
+
+    /** Premisas del arranque rápido: género + tono + conflicto + final en un clic. */
+    readonly premisePresets: PremisePreset[] = [
+        {
+            label: 'Romance de oficina',
+            hint: 'Slow burn entre compañeros de trabajo',
+            icon: 'pi pi-briefcase',
+            genre: 'Romance',
+            tone: 'Romantic',
+            ending: 'Confession',
+            conflict: 'Choosing between ambition and the person they love',
+        },
+        {
+            label: 'Amor entre rivales',
+            hint: 'Dos rivales, un mismo sueño',
+            icon: 'pi pi-trophy',
+            genre: 'Romantic comedy',
+            tone: 'Comedic',
+            ending: 'Cliffhanger',
+            conflict: 'Being rivals for the same dream they both need',
+        },
+        {
+            label: 'Secreto familiar',
+            hint: 'El pasado vuelve para quedarse',
+            icon: 'pi pi-users',
+            genre: 'Drama',
+            tone: 'Dramatic',
+            ending: 'Shocking revelation',
+            conflict: 'Loyalty to family versus following their own heart',
+        },
+        {
+            label: 'Reencuentro inesperado',
+            hint: 'Un mensaje que reabre la herida',
+            icon: 'pi pi-send',
+            genre: 'Romantic drama',
+            tone: 'Bittersweet',
+            ending: 'Unexpected message',
+            conflict: 'A secret from the past that changes everything',
+        },
+        {
+            label: 'Farsa cómica',
+            hint: 'Equívocos sin parar',
+            icon: 'pi pi-face-smile',
+            genre: 'Comedy',
+            tone: 'Comedic',
+            ending: 'Cliffhanger',
+            conflict: 'Trusting each other when every sign says otherwise',
+        },
+        {
+            label: 'Mundo oculto',
+            hint: 'Fantasía escondida en la ciudad',
+            icon: 'pi pi-globe',
+            genre: 'Fantasy',
+            tone: 'Emotional',
+            ending: 'Hidden identity',
+            conflict: 'A promise that binds them to separate paths',
+        },
+    ];
+
+    /** Ambientación: fusión de país/cultura y ubicación (vacío = la IA decide). */
+    readonly settingOptions: SelectOption[] = [
+        { label: 'Japón', value: 'Japan' },
+        { label: 'Corea', value: 'South Korea' },
+        { label: 'España', value: 'Spain' },
+        { label: 'Estados Unidos', value: 'United States' },
+        { label: 'Latinoamérica', value: 'Latin America' },
+        { label: 'Ciudad ficticia', value: 'A fictional modern city' },
+        { label: 'Mundo de fantasía', value: 'An original fantasy world' },
+        { label: 'Otro…', value: '__other__' },
+    ];
+
+    /** Presets de ritmo narrativo (los tres % siempre suman 100). */
+    readonly pacingOptions: SelectOption[] = [
+        { label: 'Equilibrado', value: 'balanced' },
+        { label: 'Inicio rápido', value: 'fastStart' },
+        { label: 'Desarrollo lento', value: 'slowBurn' },
+        { label: 'Personalizado', value: 'custom' },
+    ];
+
+    /** Paletas sugeridas para la biblioteca de assets (vacío = deriva de la historia). */
+    readonly paletteOptions: SelectOption[] = [
+        {
+            label: 'Cálida y dorada',
+            value: 'Warm golden-hour palette with soft pastel accents',
+        },
+        {
+            label: 'Neones nocturnos',
+            value: 'Vibrant neon night palette with deep blues and magentas',
+        },
+        {
+            label: 'Tonos tierra',
+            value: 'Earthy natural palette with terracotta, sand and olive tones',
+        },
+        {
+            label: 'Fría y tecnológica',
+            value: 'Cool technology palette with teal, silver and soft blue accents',
+        },
+        { label: 'Pastel suave', value: 'Soft pastel palette with muted candy tones' },
+        { label: 'Otro…', value: '__other__' },
     ];
 
     readonly endingTypeOptions: SelectOption[] = [
@@ -1103,13 +1693,14 @@ export class StoryWizard {
         { label: '5 minutos', value: 300 },
     ];
 
-    readonly platformOptions: SelectOption[] = [
-        { label: 'YouTube Shorts', value: 'YouTube Shorts' },
-        { label: 'TikTok', value: 'TikTok' },
-        { label: 'Instagram Reels', value: 'Instagram Reels' },
-        { label: 'YouTube', value: 'YouTube' },
-        { label: 'Cortometraje', value: 'Short film' },
-        { label: 'Demo de animación', value: 'Animation demo' },
+    /** Plataformas con icono: derivan aspecto (vertical/horizontal) y ritmo. */
+    readonly platformOptions: (SelectOption & { icon: string })[] = [
+        { label: 'YouTube Shorts', value: 'YouTube Shorts', icon: 'pi pi-mobile' },
+        { label: 'TikTok', value: 'TikTok', icon: 'pi pi-video' },
+        { label: 'Instagram Reels', value: 'Instagram Reels', icon: 'pi pi-play-circle' },
+        { label: 'YouTube', value: 'YouTube', icon: 'pi pi-globe' },
+        { label: 'Cortometraje', value: 'Short film', icon: 'pi pi-image' },
+        { label: 'Demo de animación', value: 'Animation demo', icon: 'pi pi-sparkles' },
     ];
 
     readonly animationStyleOptions: SelectOption[] = [
@@ -1157,7 +1748,120 @@ export class StoryWizard {
         { label: '1:1 (cuadrado)', value: '1:1' },
     ];
 
+    // ── Defaults inteligentes (estáticos, sin estado). ──
+
+    /** Clave de localStorage del último idioma de diálogo usado. */
+    private static readonly LANGUAGE_KEY = 'wizard.dialogueLanguage';
+
+    /** Plataformas verticales: fuerzan 9:16 y escenas cortas. */
+    private static readonly VERTICAL_PLATFORMS = new Set([
+        'YouTube Shorts',
+        'TikTok',
+        'Instagram Reels',
+    ]);
+
+    /** Perfil por género: tono sugerido, conflicto por defecto y subgéneros. */
+    private static readonly GENRE_PROFILES: Record<string, GenreProfile> = {
+        Romance: {
+            tone: 'Romantic',
+            conflict: 'Saying what they truly feel before losing each other',
+            subgenres: ['Slow burn', 'Office romance', 'Second chance'],
+        },
+        'Romantic drama': {
+            tone: 'Bittersweet',
+            conflict: 'A secret from the past that changes everything',
+            subgenres: ['Class difference', 'Reunion', 'Love against the odds'],
+        },
+        Comedy: {
+            tone: 'Comedic',
+            conflict: 'Trusting each other when every sign says otherwise',
+            subgenres: ['Workplace comedy', 'Mistaken identity', 'Awkward hero'],
+        },
+        'Romantic comedy': {
+            tone: 'Comedic',
+            conflict: 'Trusting each other when every sign says otherwise',
+            subgenres: ['Enemies to lovers', 'Fake dating', 'Forced proximity'],
+        },
+        Drama: {
+            tone: 'Dramatic',
+            conflict: 'Loyalty to family versus following their own heart',
+            subgenres: ['Family secrets', 'Career vs love', 'Redemption'],
+        },
+        Suspense: {
+            tone: 'Suspenseful',
+            conflict: 'A secret from the past that changes everything',
+            subgenres: ['Slow reveal', 'Psychological suspense', 'Techno-thriller'],
+        },
+        Mystery: {
+            tone: 'Suspenseful',
+            conflict: 'A secret from the past that changes everything',
+            subgenres: ['Small town secret', 'Missing person', 'Whodunit'],
+        },
+        Adventure: {
+            tone: 'Heartwarming',
+            conflict: 'Trusting each other when every sign says otherwise',
+            subgenres: ['Road trip', 'Treasure hunt', 'Survival'],
+        },
+        Fantasy: {
+            tone: 'Heartwarming',
+            conflict: 'A promise that binds them to separate paths',
+            subgenres: ['Modern fairy tale', 'Hidden world', 'Chosen one'],
+        },
+        'Science fiction': {
+            tone: 'Suspenseful',
+            conflict: 'Choosing between ambition and the person they love',
+            subgenres: ['Near future', 'Space station', 'Time loop'],
+        },
+        'Slice of life': {
+            tone: 'Heartwarming',
+            conflict: 'Saying what they truly feel before losing each other',
+            subgenres: ['Food and memory', 'Small victories', 'Everyday warmth'],
+        },
+    };
+
+    /** Perfil de reserva para un género desconocido. */
+    private static readonly DEFAULT_PROFILE: GenreProfile = {
+        tone: 'Heartwarming',
+        conflict: 'Saying what they truly feel before losing each other',
+        subgenres: ['Slow burn', 'Found family', 'Second chance'],
+    };
+
+    /** Índice en unresolvedOptions emparejado con cada tipo de final. */
+    private static readonly ENDING_TO_UNRESOLVED: Record<string, number> = {
+        Cliffhanger: 0,
+        'Shocking revelation': 1,
+        Confession: 2,
+        'Sudden betrayal': 3,
+        'Unexpected message': 4,
+        'Arrival of another character': 5,
+        'Hidden identity': 6,
+        'Open ending': 7,
+    };
+
+    private static profileFor(genre: string | null): GenreProfile {
+        if (!genre) return StoryWizard.DEFAULT_PROFILE;
+        return StoryWizard.GENRE_PROFILES[genre] ?? StoryWizard.DEFAULT_PROFILE;
+    }
+
+    private static isVerticalPlatform(platform: string | null): boolean {
+        return !!platform && StoryWizard.VERTICAL_PLATFORMS.has(platform);
+    }
+
+    /** Último idioma usado (localStorage); 'Spanish' si no hay nada guardado. */
+    private static readStoredLanguage(): string {
+        try {
+            return localStorage.getItem(StoryWizard.LANGUAGE_KEY) ?? 'Spanish';
+        } catch {
+            return 'Spanish';
+        }
+    }
+
     ngOnInit() {
+        // El estilo de los diseños (y por herencia, de assets y video) empieza
+        // en el primero de la lista; el usuario puede cambiarlo en avanzados.
+        this.designStyle = this.animationStyleOptions[0].value;
+        // «Lo que NO se resuelve» arranca emparejado con el final por defecto.
+        this.syncUnresolved();
         this.loadProjects();
     }
 
@@ -1200,41 +1904,65 @@ export class StoryWizard {
 
     // ═══════════════ PASO 1: historia ═══════════════
 
-    storyFormValid(): boolean {
-        return (
-            this.title.trim().length > 0 &&
-            !!this.genre &&
-            !!this.targetAudience &&
-            !!this.tone &&
-            this.mainEmotionalConflict.trim().length > 0 &&
-            this.unresolvedElement.trim().length > 0 &&
-            !!this.dialogueLanguage &&
-            !!this.videoDurationSeconds &&
-            !!this.platform
-        );
+    /** Errores de validación del paso 1 (vacío = listo para generar). */
+    storyValidationErrors(): string[] {
+        const errors: string[] = [];
+        if (!this.genre) {
+            errors.push('Género (es lo único imprescindible)');
+        }
+        if (this.conflict === '__other__' && !this.conflictOther.trim()) {
+            errors.push('Conflicto: «Otro» necesita tu texto');
+        }
+        if (this.unresolved === '__other__' && !this.unresolvedOther.trim()) {
+            errors.push('Elemento sin resolver: «Otro» necesita tu texto');
+        }
+        if (this.setting === '__other__' && !this.settingOther.trim()) {
+            errors.push('Ambientación: «Otro» necesita tu texto');
+        }
+        if (this.subgenre === '__other__' && !this.subgenreOther.trim()) {
+            errors.push('Subgénero: «Otro» necesita tu texto');
+        }
+        if (
+            this.pacingPreset === 'custom' &&
+            this.pacingFirstPercent + this.pacingMiddlePercent + this.pacingFinalPercent !== 100
+        ) {
+            errors.push('Ritmo personalizado: la suma debe ser 100 %');
+        }
+        return errors;
     }
 
     generateStory() {
-        if (!this.storyFormValid() || this.generatingStory) return;
+        if (this.generatingStory) return;
+        this.storyErrors = this.storyValidationErrors();
+        if (this.storyErrors.length > 0) {
+            this.messageService.add({
+                severity: 'warn',
+                summary: 'Falta poco',
+                detail: this.storyErrors.join(' · '),
+            });
+            this.cdr.markForCheck();
+            return;
+        }
         this.generatingStory = true;
+        this.persistLanguage();
 
         this.client
             .createWithStory({
-                title: this.title.trim(),
+                title: this.resolveTitle(),
                 genre: this.genre!,
-                subgenre: this.subgenre.trim() || null,
-                targetAudience: this.targetAudience!,
-                countryCulture: this.countryCulture.trim() || null,
-                location: this.location.trim() || null,
-                familyFriendly: this.familyFriendly,
+                subgenre: this.resolveSubgenre(),
+                targetAudience: this.targetAudience,
+                countryCulture: this.resolveSetting(),
+                location: null,
+                familyFriendly: this.familyFriendly ? 'YES' : 'NO',
                 visualStyle: this.visualStyle,
                 tone: this.tone!,
                 realismLevel: this.realismLevel,
                 character1Requirements: this.character1Requirements.trim() || null,
                 character2Requirements: this.character2Requirements.trim() || null,
                 otherCharacterRequirements: this.otherCharacterRequirements.trim() || null,
-                mainEmotionalConflict: this.mainEmotionalConflict.trim(),
-                unresolvedElement: this.unresolvedElement.trim(),
+                mainEmotionalConflict: this.resolveConflict(),
+                unresolvedElement: this.resolveUnresolved(),
                 endingType: this.endingType,
                 characterCount: this.characterCount,
                 dialogueLanguage: this.dialogueLanguage,
@@ -1254,6 +1982,7 @@ export class StoryWizard {
                         detail: `«${project.title}» — continúa con el paso 2 cuando quieras.`,
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     // Modo automático: la cadena 2→5 arranca sola (nula
                     // interacción tras el formulario de historia).
@@ -1271,6 +2000,219 @@ export class StoryWizard {
                     this.cdr.markForCheck();
                 },
             });
+    }
+
+    // ═════════ PASO 1: selección guiada (handlers y resolvers) ═════════
+
+    /** Género: sugiere tono y conflicto, y refresca los subgéneros. */
+    onGenreChange(value: string) {
+        this.genre = value;
+        const profile = StoryWizard.profileFor(value);
+        this.tone = profile.tone;
+        if (!this.conflictTouched) {
+            this.conflict = profile.conflict;
+        }
+        this.subgenre = null;
+        this.subgenreOther = '';
+        this.storyErrors = this.storyErrors.filter((e) => !e.startsWith('Género'));
+    }
+
+    /** Conflicto elegido a mano (tarjeta u «Otro»): ya no se sugiere por género. */
+    onConflictChange(value: string) {
+        this.conflict = value;
+        this.conflictTouched = true;
+        this.storyErrors = this.storyErrors.filter((e) => !e.startsWith('Conflicto'));
+    }
+
+    /** Final: mientras el usuario no toque «lo que no se resuelve», van en pareja. */
+    onEndingChange(value: string) {
+        this.endingType = value;
+        if (!this.unresolvedTouched) {
+            this.syncUnresolved();
+        }
+    }
+
+    onUnresolvedChange(value: string) {
+        this.unresolved = value;
+        this.unresolvedTouched = true;
+    }
+
+    private syncUnresolved(): void {
+        const index = StoryWizard.ENDING_TO_UNRESOLVED[this.endingType ?? ''] ?? 0;
+        this.unresolved = this.unresolvedOptions[index]?.value
+            ?? this.unresolvedOptions[0].value;
+    }
+
+    /** Plataforma: deriva aspecto, duración sugerida y ritmo de escenas. */
+    onPlatformChange(value: string) {
+        this.platform = value;
+        const vertical = StoryWizard.isVerticalPlatform(value);
+        this.assetsAspectRatio = vertical ? '9:16' : '16:9';
+        this.sceneAvgSeconds = vertical ? 5 : 10;
+        if (!this.durationTouched) {
+            this.videoDurationSeconds = vertical ? 60 : 120;
+        }
+    }
+
+    onDurationChange(value: number) {
+        this.videoDurationSeconds = value;
+        this.durationTouched = true;
+    }
+
+    /** Audiencia infantil → siempre apto para familias. */
+    onAudienceChange(value: string) {
+        this.targetAudience = value;
+        if (value === 'Children') {
+            this.familyFriendly = true;
+        }
+    }
+
+    onLanguageChange(value: string) {
+        this.dialogueLanguage = value;
+        this.persistLanguage();
+    }
+
+    private persistLanguage(): void {
+        try {
+            localStorage.setItem(StoryWizard.LANGUAGE_KEY, this.dialogueLanguage);
+        } catch {
+            // Sin localStorage (p. ej. modo privado): no es crítico.
+        }
+    }
+
+    /** Mantiene la coherencia: mismos personajes en la historia y los diseños. */
+    onCharacterCountChange(value: number) {
+        this.characterCount = value;
+        this.designCharacterCount = value;
+    }
+
+    /** El estilo global se hereda a los diseños (y de ahí a assets y video). */
+    onAnimationStyleChange(value: string | null) {
+        this.animationStyle = value;
+        this.designStyle = value ?? this.animationStyleOptions[0].value;
+    }
+
+    onPacingPresetChange(value: string) {
+        this.pacingPreset = value as 'balanced' | 'fastStart' | 'slowBurn' | 'custom';
+        switch (this.pacingPreset) {
+            case 'fastStart':
+                this.pacingFirstPercent = 20;
+                this.pacingMiddlePercent = 50;
+                this.pacingFinalPercent = 30;
+                break;
+            case 'slowBurn':
+                this.pacingFirstPercent = 40;
+                this.pacingMiddlePercent = 45;
+                this.pacingFinalPercent = 15;
+                break;
+            case 'balanced':
+            default:
+                this.pacingFirstPercent = 30;
+                this.pacingMiddlePercent = 50;
+                this.pacingFinalPercent = 20;
+                break;
+        }
+    }
+
+    onSubgenreChange(value: string | null) {
+        this.subgenre = value;
+    }
+
+    onSettingChange(value: string | null) {
+        this.setting = value;
+    }
+
+    onPaletteChange(value: string | null) {
+        this.assetsPalette = value;
+    }
+
+    /** Aplica una premisa completa (género, tono, conflicto y final). */
+    applyPreset(preset: PremisePreset) {
+        this.onGenreChange(preset.genre);
+        this.tone = preset.tone;
+        this.conflict = preset.conflict;
+        this.conflictTouched = true;
+        this.endingType = preset.ending;
+        this.unresolvedTouched = false;
+        this.syncUnresolved();
+        this.storyErrors = [];
+        this.messageService.add({
+            severity: 'info',
+            summary: 'Plantilla aplicada',
+            detail: `«${preset.label}» — todos los campos siguen editables.`,
+        });
+    }
+
+    /** Rellena el formulario con una combinación aleatoria coherente. */
+    surpriseMe() {
+        const genre = this.genreOptions[Math.floor(Math.random() * this.genreOptions.length)];
+        const conflict = this.conflictOptions[Math.floor(Math.random() * this.conflictOptions.length)];
+        const ending = this.endingTypeOptions[Math.floor(Math.random() * this.endingTypeOptions.length)];
+        this.onGenreChange(genre.value);
+        this.conflict = conflict.value;
+        this.conflictTouched = true;
+        this.endingType = ending.value;
+        this.unresolvedTouched = false;
+        this.syncUnresolved();
+        this.storyErrors = [];
+        this.messageService.add({
+            severity: 'info',
+            summary: '¡Sorpresa lista!',
+            detail: `Género ${genre.label.toLowerCase()} con final ${ending.label.toLowerCase()} — ajústalo a tu gusto.`,
+        });
+    }
+
+    // ── Resolvers: lo que realmente se envía al backend. ──
+
+    /** Título: si va vacío, se genera uno con la fecha (el backend lo exige). */
+    private resolveTitle(): string {
+        const trimmed = this.title.trim();
+        if (trimmed) {
+            return trimmed;
+        }
+        const date = new Date().toLocaleDateString('es-ES', {
+            day: 'numeric',
+            month: 'short',
+        });
+        return `Historia — ${date}`;
+    }
+
+    private resolveSubgenre(): string | null {
+        if (this.subgenre === '__other__') {
+            return this.subgenreOther.trim() || null;
+        }
+        return this.subgenre;
+    }
+
+    private resolveSetting(): string | null {
+        if (this.setting === '__other__') {
+            return this.settingOther.trim() || null;
+        }
+        return this.setting;
+    }
+
+    private resolveConflict(): string {
+        if (this.conflict === '__other__') {
+            return this.conflictOther.trim();
+        }
+        if (this.conflict) {
+            return this.conflict;
+        }
+        return StoryWizard.profileFor(this.genre).conflict;
+    }
+
+    private resolveUnresolved(): string {
+        if (this.unresolved === '__other__') {
+            return this.unresolvedOther.trim();
+        }
+        return this.unresolved ?? this.unresolvedOptions[0].value;
+    }
+
+    private resolvePalette(): string | null {
+        if (this.assetsPalette === '__other__') {
+            return this.assetsPaletteOther.trim() || null;
+        }
+        return this.assetsPalette;
     }
 
     // ═══════════════ PASO 2: diseños ═══════════════
@@ -1293,14 +2235,16 @@ export class StoryWizard {
                 next: (project) => {
                     this.generatingDesigns = false;
                     this.project.set(project);
-                    // El estilo de los assets (paso 3) por defecto hereda el del paso 2.
-                    this.assetsStyle = project.designStyle ?? this.assetsStyle;
+                    // Los «habla primero/segundo» del paso 4 se alimentan de los
+                    // nombres de los personajes recién diseñados.
+                    this.refreshCharacterNames(project);
                     this.messageService.add({
                         severity: 'success',
                         summary: 'Diseños generados',
                         detail: 'Continúa con el paso 3 cuando quieras.',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1326,10 +2270,12 @@ export class StoryWizard {
 
         this.client
             .generateAssets(p.id, {
-                animationStyle: this.assetsStyle,
-                targetAudience: this.assetsAudience.trim() || null,
+                // El estilo hereda el del paso 2; la audiencia se deriva de
+                // la historia en la propia plantilla MASTER de assets.
+                animationStyle: p.designStyle ?? this.designStyle,
+                targetAudience: null,
                 aspectRatio: this.assetsAspectRatio,
-                colorPalette: this.assetsPalette.trim() || null,
+                colorPalette: this.resolvePalette(),
             })
             .subscribe({
                 next: (project) => {
@@ -1341,6 +2287,7 @@ export class StoryWizard {
                         detail: 'Biblioteca con IDs estables lista para las escenas.',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1367,16 +2314,15 @@ export class StoryWizard {
         this.client
             .generateScenes(p.id, {
                 averageSceneSeconds: this.sceneAvgSeconds,
-                speakerFirst: this.speakerFirst.trim() || null,
-                speakerSecond: this.speakerSecond.trim() || null,
-                language: this.sceneLanguage,
+                speakerFirst: this.speakerFirst?.trim() || null,
+                speakerSecond: this.speakerSecond?.trim() || null,
+                // El idioma de los diálogos hereda el del paso 1.
+                language: this.dialogueLanguage,
             })
             .subscribe({
                 next: (project) => {
                     this.generatingScenes = false;
                     this.project.set(project);
-                    // El estilo del paso 5 por defecto es el del paso 2.
-                    this.videoStyle = project.designStyle ?? this.videoStyle;
                     this.refreshSceneOptions(project.scenes);
                     this.messageService.add({
                         severity: 'success',
@@ -1384,6 +2330,7 @@ export class StoryWizard {
                         detail: 'El paso 5 (plantilla MASTER de video) ya está disponible.',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1407,12 +2354,13 @@ export class StoryWizard {
         if (!p || this.generatingVideo) return;
         this.generatingVideo = true;
 
-        // Cero interacción: sin escena elegida el backend usa la PRIMERA; la
-        // referencia solo se envía en el modo activo (el backend admite UNA).
+        // Cero interacción: sin escena elegida el backend usa la PRIMERA; el
+        // estilo hereda el del paso 2; la referencia solo se envía en el modo
+        // activo (el backend admite UNA).
         this.client
             .generateVideo(p.id, {
                 sceneIndex: this.videoSceneIndex,
-                animationStyle: this.videoStyle,
+                animationStyle: p.designStyle ?? this.designStyle,
                 referenceFileContent:
                     this.referenceMode === 'file' ? this.referenceFileContent : null,
                 referenceUrl:
@@ -1430,6 +2378,7 @@ export class StoryWizard {
                         detail: 'Cópiala a tu herramienta de video (Sora, Veo, Runway, Kling…).',
                     });
                     this.loadProjects();
+                    this.loadTimeline();
                     this.cdr.markForCheck();
                     onDone?.();
                 },
@@ -1509,6 +2458,87 @@ export class StoryWizard {
             label: `Escena ${Number(match[1])} (SCENE ${match[1]})`,
             value: i + 1,
         }));
+    }
+
+    /**
+     * Nombres de personaje para los «habla primero/segundo» del paso 4,
+     * parseados de los diseños (bloques «**Character N:**») o, como
+     * alternativa, de la lista de personajes de la historia. Si no hay
+     * nombres reconocibles, los campos vuelven a ser texto libre.
+     */
+    private refreshCharacterNames(project: VideoStoryProject): void {
+        const fromDesigns = StoryWizard.parseCharacterNames(project.designs);
+        this.parsedCharacterNames = fromDesigns.length > 0
+            ? fromDesigns
+            : StoryWizard.parseCharacterNamesFromStory(project.story);
+    }
+
+    /** «**Character N:**» abre cada bloque; el nombre abre la línea siguiente. */
+    private static parseCharacterNames(designs: string | null | undefined): string[] {
+        if (!designs) {
+            return [];
+        }
+        const names: string[] = [];
+        const re = /\*\*\s*Character\s+\d+\s*:\s*\*\*\s*[\r\n]+([^\r\n–—-]*)/g;
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(designs)) !== null) {
+            const name = match[1].replace(/[*_]/g, '').trim();
+            if (name && name.length <= 48 && !names.includes(name)) {
+                names.push(name);
+            }
+        }
+        return names.slice(0, 8);
+    }
+
+    /** Fallback: viñetas «- **Nombre**» de la sección CHARACTER LIST. */
+    private static parseCharacterNamesFromStory(story: string | null | undefined): string[] {
+        if (!story) {
+            return [];
+        }
+        const section = /CHARACTER LIST([\s\S]*)$/.exec(story)?.[1];
+        if (!section) {
+            return [];
+        }
+        const names: string[] = [];
+        const re = /-\s*\*\*([^*\n]+)\*\*/g;
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(section)) !== null) {
+            const name = match[1].trim();
+            if (name && name.length <= 48 && !names.includes(name)) {
+                names.push(name);
+            }
+        }
+        return names.slice(0, 8);
+    }
+
+    // ── Opciones y etiquetas derivadas para la vista. ──
+
+    /** Subgéneros sugeridos según el género + «Otro…». */
+    get subgenreOptions(): SelectOption[] {
+        const profile = StoryWizard.profileFor(this.genre);
+        const chips = profile.subgenres.map((s) => ({ label: s, value: s }));
+        return [...chips, { label: 'Otro…', value: '__other__' }];
+    }
+
+    /** Nombres parseados → opciones de los «habla primero/segundo». */
+    get speakerOptions(): SelectOption[] {
+        return this.parsedCharacterNames.map((name) => ({ label: name, value: name }));
+    }
+
+    /** Etiqueta legible del idioma de diálogo actual. */
+    languageLabel(): string {
+        return this.languageOptions.find((o) => o.value === this.dialogueLanguage)?.label
+            ?? this.dialogueLanguage;
+    }
+
+    /** Etiqueta ES de la plataforma elegida (para las pistas de los pasos 3-4). */
+    platformLabel(): string {
+        return this.platformOptions.find((o) => o.value === this.platform)?.label ?? '';
+    }
+
+    /** Etiqueta corta del estilo de animación activo. */
+    designStyleLabel(): string {
+        return this.animationStyleOptions.find((o) => o.value === this.designStyle)?.label ?? '';
     }
 
     // ═══════════════ Cadena automática (mínima/nula interacción) ═══════════════
@@ -1591,6 +2621,7 @@ export class StoryWizard {
             });
         }
         this.loadProjects();
+        this.loadTimeline();
         this.cdr.markForCheck();
     }
 
@@ -1598,43 +2629,49 @@ export class StoryWizard {
 
     resetWizard() {
         this.project.set(null);
+        this.storyErrors = [];
         this.title = '';
         this.genre = null;
-        this.subgenre = '';
-        this.targetAudience = null;
-        this.countryCulture = '';
-        this.location = '';
-        this.themes = '';
         this.tone = null;
-        this.visualStyle = null;
-        this.realismLevel = null;
-        this.familyFriendly = 'YES';
+        this.targetAudience = 'Young adults';
+        this.platform = 'YouTube Shorts';
+        this.videoDurationSeconds = 60;
+        this.durationTouched = false;
+        this.conflict = null;
+        this.conflictOther = '';
+        this.conflictTouched = false;
+        this.endingType = 'Cliffhanger';
+        this.unresolved = null;
+        this.unresolvedOther = '';
+        this.unresolvedTouched = false;
+        // El idioma NO se resetea: se conserva la última elección del usuario.
+        this.familyFriendly = true;
+        this.subgenre = null;
+        this.subgenreOther = '';
+        this.setting = null;
+        this.settingOther = '';
+        this.characterCount = 2;
         this.character1Requirements = '';
         this.character2Requirements = '';
         this.otherCharacterRequirements = '';
-        this.mainEmotionalConflict = '';
-        this.unresolvedElement = '';
-        this.endingType = null;
-        this.characterCount = 2;
-        this.dialogueLanguage = 'Spanish';
-        this.videoDurationSeconds = 60;
+        this.visualStyle = null;
+        this.realismLevel = null;
+        this.animationStyle = null;
+        this.pacingPreset = 'balanced';
         this.pacingFirstPercent = 30;
         this.pacingMiddlePercent = 50;
         this.pacingFinalPercent = 20;
-        this.platform = null;
-        this.designStyle = null;
-        this.designCharacterCount = 4;
-        this.assetsStyle = null;
-        this.assetsAudience = '';
-        this.assetsAspectRatio = '16:9';
-        this.assetsPalette = '';
-        this.sceneAvgSeconds = 10;
-        this.speakerFirst = '';
-        this.speakerSecond = '';
-        this.sceneLanguage = 'Spanish';
+        this.designStyle = this.animationStyleOptions[0].value;
+        this.designCharacterCount = 2;
+        this.assetsAspectRatio = '9:16';
+        this.assetsPalette = null;
+        this.assetsPaletteOther = '';
+        this.sceneAvgSeconds = 5;
+        this.speakerFirst = null;
+        this.speakerSecond = null;
+        this.parsedCharacterNames = [];
         this.videoSceneIndex = 1;
         this.parsedSceneOptions = [];
-        this.videoStyle = null;
         this.referenceMode = 'none';
         this.referenceUrl = '';
         this.referenceSearch = '';
@@ -1642,6 +2679,8 @@ export class StoryWizard {
         this.referenceFileName = null;
         this.autoRunning = false;
         this.autoStep = '';
+        this.wizardTimeline = [];
+        this.timelineLoading = false;
     }
 
     openProject(summary: VideoStoryProjectSummary) {
@@ -1731,6 +2770,107 @@ export class StoryWizard {
         });
     }
 
+    // ═══════════════ Cronología del proyecto (trazas) ═══════════════
+
+    /** Cronología del proyecto activo: un evento por intento de paso. */
+    loadTimeline(): void {
+        const p = this.project();
+        if (!p) {
+            this.wizardTimeline = [];
+            return;
+        }
+        this.timelineLoading = true;
+        this.client.timeline(p.id).subscribe({
+            next: (events) => {
+                this.wizardTimeline = events;
+                this.timelineLoading = false;
+                this.cdr.markForCheck();
+            },
+            error: () => {
+                // La cronología es un extra de monitoreo: degrada en silencio.
+                this.timelineLoading = false;
+            },
+        });
+    }
+
+    traceStepLabel(step: string): string {
+        switch (step) {
+            case 'STORY':
+                return '1. Historia';
+            case 'DESIGNS':
+                return '2. Diseños';
+            case 'ASSETS':
+                return '3. Assets';
+            case 'SCENES':
+                return '4. Escenas';
+            case 'VIDEO':
+                return '5. Plantilla MASTER';
+            default:
+                return step;
+        }
+    }
+
+    traceStatusLabel(status: string): string {
+        switch (status) {
+            case 'STARTED':
+                return 'En curso';
+            case 'COMPLETED':
+                return 'Completado';
+            case 'FAILED':
+                return 'Fallido';
+            case 'SKIPPED':
+                return 'Omitido';
+            case 'CANCELLED':
+                return 'Cancelado';
+            default:
+                return status;
+        }
+    }
+
+    traceStatusSeverity(
+        status: string,
+    ): 'info' | 'success' | 'danger' | 'warn' | 'secondary' {
+        switch (status) {
+            case 'STARTED':
+                return 'info';
+            case 'COMPLETED':
+                return 'success';
+            case 'FAILED':
+                return 'danger';
+            case 'SKIPPED':
+                return 'secondary';
+            case 'CANCELLED':
+                return 'warn';
+            default:
+                return 'secondary';
+        }
+    }
+
+    /** Duración legible de un intento: 45 s / 2.3 min. */
+    traceDuration(ms: number | null): string {
+        if (ms == null) {
+            return '—';
+        }
+        if (ms < 60_000) {
+            return (ms / 1000).toFixed(1) + ' s';
+        }
+        return (ms / 60_000).toFixed(1) + ' min';
+    }
+
+    /**
+     * Logs en vivo del proyecto: su traza MDC ES el id del proyecto, así
+     * que ?trace= separa TODOS los pasos de este proyecto (incluida la
+     * llamada del paso 1) de cualquier otro proceso.
+     */
+    viewProjectLogs(project: VideoStoryProject): void {
+        this.router.navigate(['/logs'], {
+            queryParams: {
+                trace: project.id,
+                name: `Asistente — ${project.title}`,
+            },
+        });
+    }
+
     /**
      * REANUDA un proyecto de la biblioteca: lo carga en el asistente con
      * los formularios pre-rellenos para continuar los pasos pendientes.
@@ -1739,16 +2879,16 @@ export class StoryWizard {
         this.client.get(summary.id).subscribe({
             next: (project) => {
                 this.project.set(project);
+                this.loadTimeline();
                 // Prefill de los formularios de los pasos con lo ya configurado.
                 this.designStyle = project.designStyle ?? this.designStyle;
-                this.assetsStyle = project.designStyle ?? null;
-                this.assetsAspectRatio = project.assetsAspectRatio ?? '16:9';
-                this.sceneLanguage = project.sceneLanguage ?? 'Spanish';
-                this.speakerFirst = project.sceneSpeaker1 ?? '';
-                this.speakerSecond = project.sceneSpeaker2 ?? '';
-                this.sceneAvgSeconds = project.sceneAvgSeconds ?? 10;
-                this.videoStyle = project.designStyle ?? null;
+                this.designCharacterCount = project.designCharacterCount ?? this.designCharacterCount;
+                this.assetsAspectRatio = project.assetsAspectRatio ?? this.assetsAspectRatio;
+                this.speakerFirst = project.sceneSpeaker1 ?? null;
+                this.speakerSecond = project.sceneSpeaker2 ?? null;
+                this.sceneAvgSeconds = project.sceneAvgSeconds ?? this.sceneAvgSeconds;
                 this.refreshSceneOptions(project.scenes);
+                this.refreshCharacterNames(project);
                 this.referenceMode = 'none';
                 this.referenceUrl = '';
                 this.referenceSearch = '';
