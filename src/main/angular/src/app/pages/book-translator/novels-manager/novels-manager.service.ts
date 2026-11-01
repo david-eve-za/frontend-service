@@ -1,6 +1,7 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable, timer, switchMap, takeWhile } from 'rxjs';
+import { map } from 'rxjs/operators';
 
 export interface NovelSummary {
   id: string;
@@ -26,10 +27,13 @@ export interface NovelSummary {
 /** Shape of a serialized Spring Data page (GET /api/novels-manager/catalog). */
 export interface NovelCatalogPage {
   content: NovelSummary[];
-  totalElements: number;
-  totalPages: number;
-  number: number;
-  size: number;
+  page: {
+    number: number;
+    size: number;
+    totalElements: number;
+    totalPages: number;
+  };
+  links: any[];
 }
 
 export interface VolumeFile {
@@ -102,7 +106,18 @@ export class NovelsManagerService {
     if (search && search.trim()) {
       params = params.set('search', search.trim());
     }
-    return this.http.get<NovelCatalogPage>(`${this.API_URL}/catalog`, { params });
+    return this.http.get<any>(`${this.API_URL}/catalog`, { params }).pipe(
+      map(response => ({
+        content: response.content,
+        page: response.page || {
+          number: response.number ?? 0,
+          size: response.size ?? 0,
+          totalElements: response.totalElements ?? 0,
+          totalPages: response.totalPages ?? 0
+        },
+        links: response.links || []
+      }))
+    );
   }
 
   /** Obtiene una novela individual por ID (con campos AniList). */
