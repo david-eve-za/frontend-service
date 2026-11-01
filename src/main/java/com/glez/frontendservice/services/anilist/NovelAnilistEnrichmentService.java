@@ -4,6 +4,7 @@ import com.glez.frontendservice.dtos.NovelSummaryDto;
 import com.glez.frontendservice.dtos.anilist.AniListMedia;
 import com.glez.frontendservice.model.Novel;
 import com.glez.frontendservice.repository.NovelRepository;
+import com.glez.frontendservice.services.NvidiaAiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -170,6 +171,45 @@ public class NovelAnilistEnrichmentService {
             int errors,
             List<String> errorDetails
     ) {}
+
+    /**
+     * Traduce todas las descripciones/sinopsis de AniList al español.
+     * Devuelve una lista de objetos con el título de la obra y la sinopsis traducida.
+     */
+    @Transactional(readOnly = true)
+    public List<TranslatedSynopsis> translateAllSynopsesToSpanish() {
+        List<Novel> novels = novelRepository.findAllByAnilistDescriptionIsNotNull();
+
+        List<TranslatedSynopsis> results = novels.stream()
+                .map(novel -> {
+                    String originalDescription = novel.getAnilistDescription();
+                    String translatedDescription = null;
+
+                    if (originalDescription != null && !originalDescription.isBlank()) {
+                        try {
+                            // Limpiar HTML si existe
+                            String cleanDescription = originalDescription
+                                    .replaceAll("<[^>]+>", "")
+                                    .replaceAll("&nbsp;", " ")
+                                    .trim();
+
+                            // Traducir al español usando NVIDIA AI
+                            translatedDescription = nvidiaAiService.translateChunk(
+                                    cleanDescription, "en", "es", List.of());
+                        } catch (Exception e) {
+                            log.warn("Error traduciendo sinopsis de la novela {}: {}", novel.getTitle(), e.getMessage());
+                            translatedDescription = cleanDescription; // Fallback: usar original limpio
+                        }
+                    }
+
+                    return new TranslatedSynopsis(novel.getTitle(), translatedDescription);
+                })
+                .collect(Collectors.toList());
+
+        return results;
+    }
+
+    public record TranslatedSynopsis(String obra, String sinopsis) {}
 
     public record AniListSearchPreview(
             Integer id,

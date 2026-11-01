@@ -99,6 +99,14 @@ interface NovelRow extends NovelSummary {
             (click)="enrichAllNovels()"
             pTooltip="Busca en AniList y enriquece todas las obras de la página actual">
           </p-button>
+          <p-button
+            label="Traducir sinopsis (ES)"
+            icon="pi pi-language"
+            styleClass="p-button-secondary p-button-outlined"
+            [loading]="translatingAll"
+            (click)="translateAllSynopses()"
+            pTooltip="Traduce todas las sinopsis/descripciones de AniList al español">
+          </p-button>
         </div>
       </div>
 
@@ -344,6 +352,7 @@ export class NovelsManager implements OnInit, OnDestroy {
   searchTerm = '';
   syncStarting = false;
   enrichingAll = false;
+  translatingAll = false;
   syncStatus: CatalogSyncStatus | null = null;
 
   /** Modo infinite scroll (cuando true, usa scroll infinito; cuando false, paginación tradicional) */
@@ -651,6 +660,29 @@ export class NovelsManager implements OnInit, OnDestroy {
       this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
     } finally {
       this.enrichingAll = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  async translateAllSynopses(): Promise<void> {
+    if (this.translatingAll) return;
+    this.translatingAll = true;
+    this.cdr.markForCheck();
+
+    try {
+      const result = await firstValueFrom(this.novelsService.translateAllSynopses());
+      this.messageService.add({
+        severity: 'success',
+        summary: 'Traducción completada',
+        detail: `${result.length} sinopsis traducidas al español.`
+      });
+      // Optionally log or handle the result
+      console.log('Translated synopses:', result);
+    } catch (err: any) {
+      const detail = err?.error?.error || 'Error traduciendo sinopsis.';
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
+    } finally {
+      this.translatingAll = false;
       this.cdr.markForCheck();
     }
   }
