@@ -135,7 +135,7 @@ export class NovelsManagerService {
 
   /** Enriquecimiento en lote de múltiples novelas. */
   enrichBatchAnilist(novelIds: string[]): Observable<BatchAnilistEnrichmentResult> {
-    return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-batch-anilist`, { novelIds });
+    return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-batch-anilist`, novelIds);
   }
 
   /**
