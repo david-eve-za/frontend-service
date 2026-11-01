@@ -1,4 +1,4 @@
-import { ViewChild, signal } from '@angular/core';
+import { ViewChild, signal, computed } from '@angular/core';
 import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
@@ -17,6 +17,7 @@ import { RippleModule } from 'primeng/ripple';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { PaginatorModule } from 'primeng/paginator'
 import { DrawerModule } from 'primeng/drawer';
+import { SelectModule } from 'primeng/select';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom, Subscription, timer, switchMap, takeWhile } from 'rxjs';
 import {
@@ -55,6 +56,7 @@ interface NovelRow extends NovelSummary {
     ProgressSpinnerModule,
     PaginatorModule,
     DrawerModule,
+    SelectModule,
     NovelCardComponent,
     NovelCardSkeletonComponent,
     NovelDetailDrawerComponent
@@ -183,17 +185,59 @@ interface NovelRow extends NovelSummary {
         <p class="text-sm mt-1">Ejecuta una sincronización para poblarlo o ajusta el filtro de búsqueda.</p>
       </div>
 
-      <!-- Paginación -->
-      <div class="flex justify-center mt-4" *ngIf="totalRecords > pageSize">
+      <!-- Controles de paginación / infinite scroll -->
+      <div class="flex flex-col md:flex-row items-center justify-between gap-3 mb-4">
+        <div class="flex items-center gap-3">
+          <label class="text-sm text-gray-600">Obras por página:</label>
+          <p-select
+            [options]="[
+              { label: '20', value: 20 },
+              { label: '50', value: 50 },
+              { label: '100', value: 100 },
+              { label: '200', value: 200 }
+            ]"
+            [(ngModel)]="pageSize"
+            [style]="{ width: '80px' }"
+            (onChange)="onPageSizeChange()">
+          </p-select>
+          <p-button
+            icon="pi"
+            [ngClass]="{ 'pi-infinity': !infiniteScroll(), 'pi-list': infiniteScroll() }"
+            [outlined]="!infiniteScroll()"
+            (click)="infiniteScroll.set(!infiniteScroll())"
+            [pTooltip]="infiniteScroll() ? 'Cambiar a paginación' : 'Cambiar a scroll infinito'">
+          </p-button>
+        </div>
+      </div>
+
+      <!-- Paginación tradicional -->
+      <div class="flex justify-center mt-4" *ngIf="!infiniteScroll() && totalRecords > pageSize">
         <p-paginator
           [rows]="pageSize"
           [totalRecords]="totalRecords"
           [first]="currentPage * pageSize"
-          [rowsPerPageOptions]="[20, 50, 100]"
+          [rowsPerPageOptions]="[20, 50, 100, 200]"
           (onPageChange)="onPageChange($event)"
           [showCurrentPageReport]="true"
           currentPageReportTemplate="Mostrando {first} a {last} de {totalRecords} obras">
         </p-paginator>
+      </div>
+
+      <!-- Infinite Scroll - Botón "Cargar más" -->
+      <div class="flex justify-center mt-4" *ngIf="infiniteScroll() && hasMore()">
+        <p-button
+          label="Cargar más"
+          icon="pi pi-chevron-down"
+          [loading]="loadingMore()"
+          (click)="loadMore()"
+          [disabled]="!hasMore() || loadingMore()">
+        </p-button>
+      </div>
+
+      <!-- Mensaje cuando se cargaron todos los elementos en infinite scroll -->
+      <div *ngIf="infiniteScroll() && !hasMore() && novels.length > 0" class="text-center text-gray-500 py-4">
+        <i class="pi pi-check-circle text-2xl mb-2 block text-green-500"></i>
+        <p>Se han cargado todas las {{ totalRecords }} obras</p>
       </div>
     </div>
 
@@ -302,6 +346,11 @@ export class NovelsManager implements OnInit, OnDestroy {
   enrichingAll = false;
   syncStatus: CatalogSyncStatus | null = null;
 
+  /** Modo infinite scroll (cuando true, usa scroll infinito; cuando false, paginación tradicional) */
+  infiniteScroll = signal(false);
+  loadingMore = signal(false);
+  hasMore = computed(() => this.novels.length < this.totalRecords);
+
   /** Control de visibilidad del drawer de detalle. */
   drawerVisible = signal(false);
   drawerNovelId: string | null = null;
@@ -382,6 +431,42 @@ export class NovelsManager implements OnInit, OnDestroy {
 
   onPageChange(event: { first?: number; rows?: number }): void {
     this.loadCatalog({ first: event.first ?? this.currentPage * this.pageSize, rows: event.rows ?? this.pageSize });
+  }
+
+  /** Cambia el tamaño de página y recarga el catálogo. */
+  onPageSizeChange(): void {
+    this.currentPage = 0;
+    this.loadCatalog({ first: 0, rows: this.pageSize });
+  }
+
+  /** Carga la siguiente página en modo infinite scroll. */
+  async loadMore(): Promise<void> {
+    if (this.loadingMore() || !this.hasMore()) return;
+    this.loadingMore.set(true);
+    const nextPage = this.currentPage + 1;
+    try {
+      const result = await firstValueFrom(
+        this.novelsService.getCatalog(this.searchTerm, nextPage, this.pageSize));
+      const newNovels = result.content.map(n => ({
+        ...n,
+        volumesLoaded: false,
+        anilistEnriching: false,
+        anilistError: undefined
+      }));
+      // Append new novels to existing list
+      this.novels = [...this.novels, ...newNovels];
+      this.totalRecords = result.totalElements;
+      this.currentPage = nextPage;
+    } catch {
+      this.messageService.add({
+        sticky: true, severity: 'error',
+        summary: 'Error',
+        detail: 'No se pudieron cargar más obras.'
+      });
+    } finally {
+      this.loadingMore.set(false);
+      this.cdr.markForCheck();
+    }
   }
 
   /**
