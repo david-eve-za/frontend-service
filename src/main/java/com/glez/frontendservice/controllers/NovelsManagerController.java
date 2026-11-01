@@ -90,6 +90,14 @@ public class NovelsManagerController {
         return ResponseEntity.ok(result);
     }
 
+    @Operation(summary = "Traduce todas las sinopsis/descripciones de AniList al español")
+    @ApiResponses(@ApiResponse(responseCode = "200", description = "Lista de sinopsis traducidas"))
+    @GetMapping("/novels/translate-synopses")
+    public ResponseEntity<List<NovelAnilistEnrichmentService.TranslatedSynopsis>> translateAllSynopses() {
+        var result = anilistEnrichmentService.translateAllSynopsesToSpanish();
+        return ResponseEntity.ok(result);
+    }
+
     @Operation(summary = "Previsualiza resultados de búsqueda en AniList sin guardar")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Lista de previews de AniList"))
     @GetMapping("/novels/{novelId}/anilist-preview")

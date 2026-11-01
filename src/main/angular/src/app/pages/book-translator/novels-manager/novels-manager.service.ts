@@ -36,6 +36,11 @@ export interface NovelCatalogPage {
   links: any[];
 }
 
+export interface TranslatedSynopsis {
+  obra: string;
+  sinopsis: string | null;
+}
+
 export interface VolumeFile {
   id: string;
   format: 'EPUB' | 'PDF' | 'ZIP' | 'TXT' | 'OTHER';
@@ -151,6 +156,11 @@ export class NovelsManagerService {
   /** Enriquecimiento en lote de múltiples novelas. */
   enrichBatchAnilist(novelIds: string[]): Observable<BatchAnilistEnrichmentResult> {
     return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-batch-anilist`, novelIds);
+  }
+
+  /** Traduce todas las sinopsis/descripciones de AniList al español. */
+  translateAllSynopses(): Observable<TranslatedSynopsis[]> {
+    return this.http.get<TranslatedSynopsis[]>(`${this.API_URL}/novels/translate-synopses`);
   }
 
   /**
