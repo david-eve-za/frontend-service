@@ -3,10 +3,7 @@ package com.glez.frontendservice.services.anilist;
 import com.glez.frontendservice.dtos.anilist.*;
 import com.glez.frontendservice.dtos.anilist.AniListGraphQLResponse;
 import com.glez.frontendservice.dtos.anilist.AniListMedia;
-import com.glez.frontendservice.dtos.anilist.AniListGraphQLResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -133,9 +130,9 @@ public class AniListGraphQLClient {
                   day
                 }
                 endDate {
-                    year
-                    month
-                    day
+                  year
+                  month
+                  day
                 }
                 season
                 seasonYear
@@ -143,11 +140,10 @@ public class AniListGraphQLClient {
             }
             """;
 
-    public AniListGraphQLClient(RestTemplateBuilder builder) {
-        this.restTemplate = builder
-                .setConnectTimeout(java.time.Duration.ofSeconds(10))
-                .setReadTimeout(java.time.Duration.ofSeconds(30))
-                .build();
+    public AniListGraphQLClient() {
+        this.restTemplate = new RestTemplate();
+        // Configure timeouts using a custom factory or just use defaults
+        // For simplicity, we'll use the default RestTemplate
     }
 
     /**
@@ -199,18 +195,9 @@ public class AniListGraphQLClient {
             return Optional.empty();
         }
 
-        // El query GET_MEDIA_BY_ID_QUERY devuelve directamente Media, no Page
-        // Necesitamos parsearlo manualmente ya que la estructura es diferente
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> mediaMap = (Map<String, Object>) response.getData();
-            // Convertir el mapa a AniListMedia usando Jackson
-            // Por simplicidad, reutilizamos la deserialización
-            return Optional.empty(); // TODO: implementar deserialización directa
-        } catch (Exception e) {
-            log.warn("Error parseando Media por ID {}", anilistId, e);
-            return Optional.empty();
-        }
+        // El query GET_MEDIA_BY_ID_QUERY devuelve directamente Media (no Page)
+        // Usamos el helper getSingleMedia() que maneja ambos casos
+        return Optional.ofNullable(response.getData().getSingleMedia());
     }
 
     private AniListGraphQLResponse executeQuery(String query, Map<String, Object> variables) {

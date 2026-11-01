@@ -16,6 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.cache.CacheManager;
+import org.springframework.orm.jpa.JpaTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -57,15 +60,21 @@ class NovelsCatalogSyncServiceTest {
     @TempDir
     Path tempDir;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     private ElscioneApiClient apiClient;
     private NovelsCatalogSyncService service;
+
 
     @BeforeEach
     void setUp() {
         apiClient = mock(ElscioneApiClient.class);
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
         service = new NovelsCatalogSyncService(apiClient, novelRepository, volumeRepository,
                 fileRepository, new NovelFileNameParser(),
                 new org.springframework.cache.concurrent.ConcurrentMapCacheManager(),
+                transactionTemplate,
                 "https://server.elscione.com" + BASE, 3, true, false, 0, 10);
     }
 
@@ -220,6 +229,7 @@ class NovelsCatalogSyncServiceTest {
         });
         NovelsCatalogSyncService enabled = new NovelsCatalogSyncService(apiClient, novelRepository,
                 volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
+                new TransactionTemplate(transactionManager),
                 "https://server.elscione.com" + BASE, 3, true, true, 0, 10d);
 
         enabled.syncOnStartup();
@@ -251,10 +261,10 @@ class NovelsCatalogSyncServiceTest {
         when(apiClient.listContents(BASE)).thenReturn(List.of(
                 dir(BASE + "NovelA/"), dir(BASE + "NovelB/")));
         when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
-        when(apiClient.listContents(BASE + "NovelB/")).thenReturn(List.of());
         NovelsCatalogSyncService batched = new NovelsCatalogSyncService(apiClient, novelRepository,
                 volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
-                "https://server.elscione.com" + BASE, 3, true, false, 2, 0.02); // pausa de 1.2s
+                new TransactionTemplate(transactionManager),
+                "https://server.elscione.com" + BASE, 3, true, false, 2, 0.02);
 
         long start = System.currentTimeMillis();
         batched.startSync();
@@ -274,6 +284,7 @@ class NovelsCatalogSyncServiceTest {
         when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
         NovelsCatalogSyncService slow = new NovelsCatalogSyncService(apiClient, novelRepository,
                 volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
+                new TransactionTemplate(transactionManager),
                 "https://server.elscione.com" + BASE, 3, true, false, 1, 10d);
 
         long start = System.currentTimeMillis();
@@ -292,10 +303,10 @@ class NovelsCatalogSyncServiceTest {
     void batchedSync_noTrailingPauseAtExactBoundary() throws Exception {
         // Exactamente 2 listados y lote de 2: el sync termina sin pausa final.
         when(apiClient.listContents(BASE)).thenReturn(List.of(dir(BASE + "NovelA/")));
-        when(apiClient.listContents(BASE + "NovelA/")).thenReturn(List.of());
         NovelsCatalogSyncService boundary = new NovelsCatalogSyncService(apiClient, novelRepository,
                 volumeRepository, fileRepository, new NovelFileNameParser(), mock(CacheManager.class),
-                "https://server.elscione.com" + BASE, 3, true, false, 2, 10d); // pausa de 10 min reales
+                new TransactionTemplate(transactionManager),
+                "https://server.elscione.com" + BASE, 3, true, false, 2, 10d);
 
         long start = System.currentTimeMillis();
         boundary.startSync();

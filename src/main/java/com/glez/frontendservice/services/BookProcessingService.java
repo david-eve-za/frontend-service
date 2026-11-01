@@ -101,12 +101,16 @@ public class BookProcessingService {
                         .map(Chunks::getTranslatedText)
                         .collect(Collectors.joining("\n\n"));
 
-                audioGeneratorService.processTextToAudio(fullTranslatedText, Path.of(finalBook.getName()));
+                boolean audioSuccess = audioGeneratorService.processTextToAudio(fullTranslatedText, Path.of(finalBook.getName()));
 
-                finalBook.setStatus(ProcessingStatus.COMPLETED);
+                if (!audioSuccess) {
+                    log.warn("Audio generation failed for book {}", bookId);
+                    finalBook.setStatus(ProcessingStatus.FAILED);
+                } else {
+                    finalBook.setStatus(ProcessingStatus.COMPLETED);
+                }
             } catch (Exception e) {
-                System.err.println("Failed during audio generation for book " + bookId);
-                e.printStackTrace();
+                log.error("Exception during audio generation for book {}", bookId, e);
                 finalBook.setStatus(ProcessingStatus.FAILED);
             }
         } else {

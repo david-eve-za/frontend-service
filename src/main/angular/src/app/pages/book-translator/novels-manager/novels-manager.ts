@@ -1,3 +1,4 @@
+import { ViewChild, signal } from '@angular/core';
 import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
@@ -8,6 +9,14 @@ import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
 import { ToastModule } from 'primeng/toast';
 import { TableModule } from 'primeng/table';
+import { CardModule } from 'primeng/card';
+import { SkeletonModule } from 'primeng/skeleton';
+import { ImageModule } from 'primeng/image';
+import { AccordionModule } from 'primeng/accordion';
+import { RippleModule } from 'primeng/ripple';
+import { ProgressSpinnerModule } from 'primeng/progressspinner';
+import { PaginatorModule } from 'primeng/paginator'
+import { DrawerModule } from 'primeng/drawer';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom, Subscription, timer, switchMap, takeWhile } from 'rxjs';
 import {
@@ -16,15 +25,40 @@ import {
   NovelSummary,
   NovelsManagerService
 } from './novels-manager.service';
+import { NovelCardComponent } from './novel-card.component';
+import { NovelCardSkeletonComponent } from './novel-card-skeleton.component';
+import { NovelDetailDrawerComponent } from './novel-detail-drawer.component';
 
 interface NovelRow extends NovelSummary {
   volumesLoaded: boolean;
+  anilistEnriching?: boolean;
+  anilistError?: string;
 }
 
 @Component({
   selector: 'app-novels-manager',
   standalone: true,
-  imports: [CommonModule, FormsModule, ButtonModule, InputTextModule, TagModule, TooltipModule, ToastModule, TableModule],
+  imports: [
+    CommonModule,
+    FormsModule,
+    ButtonModule,
+    InputTextModule,
+    TagModule,
+    TooltipModule,
+    ToastModule,
+    TableModule,
+    CardModule,
+    SkeletonModule,
+    ImageModule,
+    AccordionModule,
+    RippleModule,
+    ProgressSpinnerModule,
+    PaginatorModule,
+    DrawerModule,
+    NovelCardComponent,
+    NovelCardSkeletonComponent,
+    NovelDetailDrawerComponent
+  ],
   providers: [MessageService],
   template: `
     <p-toast [life]="12000"></p-toast>
@@ -35,11 +69,11 @@ interface NovelRow extends NovelSummary {
         <div>
           <h2 class="text-xl font-bold text-gray-800">Gestor de Novelas</h2>
           <p class="text-sm text-gray-600 mt-1">
-            Catálogo sincronizado desde elscione (solo metadatos) con el estado del pipeline por volumen:
-            split, traducción y audio.
+            Catálogo sincronizado desde elscione con enriquecimiento AniList (carátula, descripción, géneros, puntuación).
+            Estado del pipeline por volumen: split, traducción y audio.
           </p>
         </div>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
           <p-button
             label="Sincronizar ahora"
             icon="pi pi-refresh"
@@ -54,6 +88,14 @@ interface NovelRow extends NovelSummary {
             icon="pi pi-times"
             styleClass="p-button-danger p-button-outlined"
             (click)="cancelSync()">
+          </p-button>
+          <p-button
+            label="Enriquecer todo (AniList)"
+            icon="pi pi-sparkles"
+            styleClass="p-button-info p-button-outlined"
+            [loading]="enrichingAll"
+            (click)="enrichAllNovels()"
+            pTooltip="Busca en AniList y enriquece todas las obras de la página actual">
           </p-button>
         </div>
       </div>
@@ -83,11 +125,11 @@ interface NovelRow extends NovelSummary {
       </div>
     </div>
 
-    <!-- Nivel 1: obras -->
-    <div class="card">
+    <!-- Toolbar de búsqueda y acciones -->
+    <div class="card mb-4">
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <h3 class="text-lg font-bold text-gray-800">Obras del catálogo</h3>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
           <input
             pInputText
             type="text"
@@ -96,184 +138,156 @@ interface NovelRow extends NovelSummary {
             (keyup.enter)="reloadCatalog()"
             class="sm:w-64" />
           <p-button icon="pi pi-search" styleClass="p-button-outlined" (click)="reloadCatalog()"></p-button>
+          <p-button
+            label="Limpiar filtro"
+            icon="pi pi-filter-slash"
+            styleClass="p-button-text"
+            (click)="clearSearch()"
+            *ngIf="searchTerm">
+          </p-button>
         </div>
       </div>
 
-      <p-table
-        [value]="novels"
-        [lazy]="true"
-        [paginator]="true"
-        [rows]="pageSize"
-        [totalRecords]="totalRecords"
-        [loading]="loading"
-        dataKey="id"
-        (onLazyLoad)="loadCatalog($event)"
-        (onRowExpand)="onNovelExpand($event)"
-        (onRowCollapse)="onNovelCollapse($event)">
-        <ng-template pTemplate="header">
-          <tr>
-            <th style="width: 3rem"></th>
-            <th>Obra</th>
-            <th>Categoría</th>
-            <th>Volúmenes</th>
-            <th>Último sync</th>
-          </tr>
-        </ng-template>
-        <ng-template pTemplate="body" let-novel let-expanded="expanded">
-          <tr>
-            <td>
-              <button
-                type="button"
-                pButton
-                class="p-button-text p-row-toggler"
-                [pRowToggler]="novel">
-                <i class="pi" [class]="expanded ? 'pi-chevron-down' : 'pi-chevron-right'"></i>
-              </button>
-            </td>
-            <td>
-              <div class="font-medium">{{ novel.title }}</div>
-              <div class="text-xs text-gray-400">{{ novel.id }}</div>
-            </td>
-            <td>
-              <p-tag *ngIf="novel.category" [value]="novel.category" severity="secondary"></p-tag>
-              <span *ngIf="!novel.category" class="text-xs text-gray-400">—</span>
-            </td>
-            <td>{{ novel.volumeCount }}</td>
-            <td>{{ novel.lastSyncedAt ? (novel.lastSyncedAt | date: 'dd/MM/yy HH:mm') : '—' }}</td>
-          </tr>
-        </ng-template>
+      <!-- Grid de tarjetas de novelas (estilo expositor) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" *ngIf="!loading && novels.length > 0">
+        @for (novel of novels; track novel.id) {
+          <novel-card
+            [novel]="novel"
+            [volumeLoading]="volumeLoading"
+            [volumes]="volumes"
+            [actionBusy]="actionBusy"
+            (enrich)="enrichNovel($any($event))"
+            (prepareSplit)="prepareSplit($any($event))"
+            (translateVolume)="translateVolume($any($event))"
+            (createAudio)="createAudio($any($event))"
+            (downloadAudio)="downloadAudio($any($event))"
+            (viewDetail)="openNovelDetail(novel.id)"
+            [volumeLoading]="volumeLoading"
+            [volumes]="volumes"
+            [actionBusy]="actionBusy">
+          </novel-card>
+        }
+      </div>
 
-        <!-- Nivel 2: volúmenes de la obra -->
-        <ng-template pTemplate="expandedrow" let-novel>
-          <tr class="bg-gray-50">
-            <td colspan="5" class="p-0">
-              <div *ngIf="volumeLoading[novel.id]" class="text-center text-gray-500 py-4">
-                <i class="pi pi-spin pi-spinner mr-2"></i>Cargando volúmenes...
-              </div>
-              <p-table
-                *ngIf="volumes[novel.id]"
-                [value]="volumes[novel.id]"
-                styleClass="p-table-nested">
-                <ng-template pTemplate="header">
-                  <tr>
-                    <th>Volumen</th>
-                    <th>Grupo</th>
-                    <th>Formatos</th>
-                    <th>Estado</th>
-                    <th>Acciones</th>
-                  </tr>
-                </ng-template>
-                <ng-template pTemplate="body" let-volume>
-                  <tr>
-                    <td>
-                      <div class="font-medium">
-                        {{ volumeLabel(volume) }}
-                      </div>
-                    </td>
-                    <td>{{ volume.translatorGroup || '—' }}</td>
-                    <td>
-                      <div class="flex flex-wrap gap-1">
-                        <p-tag
-                          *ngFor="let file of volume.files"
-                          [value]="file.format + (file.presentLocally ? ' ✓' : '')"
-                          [severity]="file.presentLocally ? 'success' : 'info'"
-                          [pTooltip]="file.fileName + ' — ' + formatSize(file.sizeBytes)">
-                        </p-tag>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="flex flex-wrap gap-1 items-center">
-                        <p-tag
-                          [value]="volume.translated ? 'Traducido' : 'No Traducido'"
-                          [severity]="volume.translated ? 'success' : 'danger'">
-                        </p-tag>
-                        <p-tag
-                          [value]="volume.audioCreated ? 'Audio' : 'No Audio'"
-                          [severity]="volume.audioCreated ? 'success' : 'danger'">
-                        </p-tag>
-                        <p-tag *ngIf="volume.removedFromSource" value="Retirado de la fuente" severity="warn"></p-tag>
-                        <p-tag *ngIf="volume.bookId && !volume.splitDone && !volume.running"
-                               [value]="'Texto listo (sin split)'" severity="info"></p-tag>
-                        <span *ngIf="volume.running" class="text-sm text-blue-600">
-                          <i class="pi pi-spin pi-spinner mr-1"></i>Procesando...
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="flex flex-wrap gap-1">
-                        <!-- 1. Hacer Split del Volumen -->
-                        <p-button
-                          label="Hacer Split del Volumen"
-                          icon="pi pi-minus"
-                          styleClass="p-button-sm"
-                          [disabled]="!volume.canPrepareText || actionBusy[volume.id]"
-                          [loading]="actionBusy[volume.id]"
-                          (click)="prepareSplit(volume, novel)">
-                        </p-button>
-                        <!-- 2. Traducir Volumen (depende del split) -->
-                        <p-button
-                          label="Traducir Volumen"
-                          icon="pi pi-language"
-                          styleClass="p-button-sm p-button-outlined"
-                          [disabled]="!volume.canTranslate"
-                          (click)="translateVolume(volume, novel)">
-                        </p-button>
-                        <!-- 3. Crear Audio (depende de la traducción) -->
-                        <p-button
-                          label="Crear Audio"
-                          icon="pi pi-volume-up"
-                          styleClass="p-button-sm p-button-outlined"
-                          [disabled]="!volume.canCreateAudio"
-                          (click)="createAudio(volume, novel)">
-                        </p-button>
-                        <!-- 4. Descargar Audio (habilitado cuando ya existe) -->
-                        <p-button
-                          label="Descargar Audio"
-                          icon="pi pi-download"
-                          styleClass="p-button-sm p-button-outlined p-button-success"
-                          [disabled]="!volume.audioCreated"
-                          (click)="downloadAudio(volume)"
-                          title="Descarga el mp3 (audio legado) o un ZIP con los mp3 de todos los bloques"
-                        >
-                        </p-button>
-                      </div>
-                    </td>
-                  </tr>
-                </ng-template>
-                <ng-template pTemplate="emptymessage">
-                  <tr>
-                    <td colspan="5" class="text-center text-gray-500 py-4">
-                      Esta obra no tiene volúmenes registrados.
-                    </td>
-                  </tr>
-                </ng-template>
-              </p-table>
-            </td>
-          </tr>
-        </ng-template>
+      <!-- Skeletons mientras carga -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" *ngIf="loading">
+        @for (i of [1,2,3,4,5,6,7,8]; track i) {
+          <novel-card-skeleton></novel-card-skeleton>
+        }
+      </div>
 
-        <ng-template pTemplate="emptymessage">
-          <tr>
-            <td colspan="5" class="text-center text-gray-500 py-4">
-              No hay obras en el catálogo. Ejecuta una sincronización para poblarlo.
-            </td>
-          </tr>
-        </ng-template>
-      </p-table>
+      <!-- Mensaje vacío -->
+      <div *ngIf="!loading && novels.length === 0" class="text-center text-gray-500 py-12">
+        <i class="pi pi-book text-4xl mb-2 block"></i>
+        <p class="text-lg">No hay obras en el catálogo</p>
+        <p class="text-sm mt-1">Ejecuta una sincronización para poblarlo o ajusta el filtro de búsqueda.</p>
+      </div>
+
+      <!-- Paginación -->
+      <div class="flex justify-center mt-4" *ngIf="totalRecords > pageSize">
+        <p-paginator
+          [rows]="pageSize"
+          [totalRecords]="totalRecords"
+          [first]="currentPage * pageSize"
+          [rowsPerPageOptions]="[20, 50, 100]"
+          (onPageChange)="onPageChange($event)"
+          [showCurrentPageReport]="true"
+          currentPageReportTemplate="Mostrando {first} a {last} de {totalRecords} obras">
+        </p-paginator>
+      </div>
     </div>
+
+    <!-- Drawer de detalle de novela -->
+    <novel-detail-drawer
+      [novel]="getDrawerNovel()"
+      [visible]="drawerVisible()"
+      [volumes]="volumes"
+      [volumeLoading]="volumeLoading"
+      [actionBusy]="actionBusy"
+      (close)="closeNovelDetail()"
+      (prepareSplit)="prepareSplit($any($event))"
+      (translateVolume)="translateVolume($any($event))"
+      (createAudio)="createAudio($any($event))"
+      (downloadAudio)="downloadAudio($any($event))"
+      (enrich)="enrichNovel($any($event))">
+    </novel-detail-drawer>
   `,
   styles: [`
-    :host ::ng-deep .p-table-nested .p-datatable-table {
+    :host ::ng-deep .p-accordion .p-accordion-content {
+      padding: 0.75rem 1rem;
+    }
+    :host ::ng-deep .p-accordion-header {
+      padding: 0.75rem 1rem;
+      background: #f8f9fa;
+      border-bottom: 1px solid #e9ecef;
+    }
+    :host ::ng-deep .p-accordion-header:focus {
+      box-shadow: none;
+    }
+    :host ::ng-deep .p-card {
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    :host ::ng-deep .p-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+    }
+    .novel-cover-img {
+      aspect-ratio: 2/3;
+      object-fit: cover;
+      border-radius: 0.5rem 0.5rem 0 0;
+      width: 100%;
+    }
+    .novel-card-content {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .novel-card-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .novel-description {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      color: #4b5563;
+    }
+    .genre-tag {
+      font-size: 0.625rem;
+      padding: 0.125rem 0.5rem;
+    }
+    .volume-table-container {
+      margin-top: 0.75rem;
+    }
+    :host ::ng-deep .volume-table-container .p-datatable-table {
       background: transparent;
     }
-    :host ::ng-deep .p-table-nested thead tr th {
-      background: #eef2f7;
-      font-size: 0.75rem;
-      padding: 0.5rem 0.75rem;
+    :host ::ng-deep .volume-table-container thead tr th {
+      background: #f8f9fa;
+      font-size: 0.7rem;
+      padding: 0.375rem 0.5rem;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
     }
-    :host ::ng-deep .p-table-nested tbody tr td {
-      padding: 0.5rem 0.75rem;
-      font-size: 0.875rem;
+    :host ::ng-deep .volume-table-container tbody tr td {
+      padding: 0.5rem;
+      font-size: 0.8125rem;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    :host ::ng-deep .volume-table-container tbody tr:last-child td {
+      border-bottom: none;
+    }
+    .line-clamp-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
   `]
 })
@@ -281,21 +295,27 @@ export class NovelsManager implements OnInit, OnDestroy {
   novels: NovelRow[] = [];
   totalRecords = 0;
   loading = false;
-  pageSize = 50;
+  pageSize = 24;
+  currentPage = 0;
   searchTerm = '';
   syncStarting = false;
+  enrichingAll = false;
   syncStatus: CatalogSyncStatus | null = null;
 
-  /** Volúmenes cargados por obra (nivel 2, lazy al expandir). */
+  /** Control de visibilidad del drawer de detalle. */
+  drawerVisible = signal(false);
+  drawerNovelId: string | null = null;
+
+  @ViewChild(NovelDetailDrawerComponent) novelDetailDrawer!: NovelDetailDrawerComponent;
+
+  /** Volúmenes cargados por obra (lazy al expandir). */
   volumes: Record<string, CatalogVolume[]> = {};
   volumeLoading: Record<string, boolean> = {};
   actionBusy: Record<string, boolean> = {};
-  expandedRowKeys: Record<string, boolean> = {};
 
   private volumePollSubscription?: Subscription;
   private syncPollSubscription?: Subscription;
   private catalogSyncSubscription?: Subscription;
-  private currentPage = 0;
   private pollNovelId?: string;
 
   constructor(
@@ -317,17 +337,25 @@ export class NovelsManager implements OnInit, OnDestroy {
 
   // ------- Nivel 1: catálogo de obras -------
 
-  async loadCatalog(event: { first?: number | null; rows?: number | null }): Promise<void> {
+  async loadCatalog(event?: { first?: number | null; rows?: number | null }): Promise<void> {
     this.loading = true;
-    const page = Math.floor((event.first ?? 0) / (event.rows || this.pageSize));
+    const first = event?.first ?? this.currentPage * this.pageSize;
+    const rows = event?.rows ?? this.pageSize;
+    const page = Math.floor(first / rows);
+    this.pageSize = rows;
+    this.currentPage = page;
+
     try {
       const result = await firstValueFrom(
-        this.novelsService.getCatalog(this.searchTerm, page, this.pageSize));
-      this.currentPage = page;
-      this.novels = result.content.map(n => ({ ...n, volumesLoaded: false }));
+        this.novelsService.getCatalog(this.searchTerm, page, rows));
+      this.novels = result.content.map(n => ({
+        ...n,
+        volumesLoaded: false,
+        anilistEnriching: false,
+        anilistError: undefined
+      }));
       this.totalRecords = result.totalElements;
       this.volumes = {};
-      this.expandedRowKeys = {};
     } catch {
       this.messageService.add({
         sticky: true, severity: 'error',
@@ -341,15 +369,23 @@ export class NovelsManager implements OnInit, OnDestroy {
   }
 
   reloadCatalog(resetPage = true): void {
-    const first = resetPage ? 0 : this.currentPage * this.pageSize;
-    this.loadCatalog({ first, rows: this.pageSize });
+    if (resetPage) {
+      this.currentPage = 0;
+    }
+    this.loadCatalog({ first: this.currentPage * this.pageSize, rows: this.pageSize });
+  }
+
+  clearSearch(): void {
+    this.searchTerm = '';
+    this.reloadCatalog(true);
+  }
+
+  onPageChange(event: { first?: number; rows?: number }): void {
+    this.loadCatalog({ first: event.first ?? this.currentPage * this.pageSize, rows: event.rows ?? this.pageSize });
   }
 
   /**
-   * Refresco periódico (10s) mientras la sincronización corre: actualiza la
-   * página actual del catálogo conservando la expansión y el caché de
-   * volúmenes, y recarga los volúmenes de las obras expandidas para que los
-   * nuevos descubiertos por el sync aparezcan sin colapsar la fila.
+   * Refresco periódico (10s) mientras la sincronización corre.
    */
   private startCatalogAutoRefresh(): void {
     this.catalogSyncSubscription?.unsubscribe();
@@ -365,33 +401,47 @@ export class NovelsManager implements OnInit, OnDestroy {
       this.totalRecords = result.totalElements;
       this.novels = result.content.map(n => {
         const previous = this.novels.find(o => o.id === n.id);
-        return { ...n, volumesLoaded: previous?.volumesLoaded ?? false };
+        return {
+          ...n,
+          volumesLoaded: previous?.volumesLoaded ?? false,
+          anilistEnriching: false,
+          anilistError: undefined
+        };
       });
-      for (const novelId of Object.keys(this.expandedRowKeys)) {
-        if (this.volumes[novelId]) {
-          this.volumes[novelId] = await firstValueFrom(this.novelsService.getVolumes(novelId));
-        }
-      }
     } catch {
-      // Refresco transitorio fallido durante el sync: se conserva el último
-      // estado válido hasta el siguiente tick.
+      // Refresco transitorio fallido durante el sync: se conserva el último estado válido.
     } finally {
       this.cdr.markForCheck();
     }
   }
 
-  onNovelExpand(event: { data: NovelRow }): void {
-    // PrimeNG reemplaza su objeto interno de expandedRowKeys (rowExpandMode
-    // 'single') y no lo emite de vuelta, así que la expansión se rastrea en
-    // paralelo para saber qué volúmenes refrescar durante el auto-refresh.
-    this.expandedRowKeys[event.data.id] = true;
-    if (!event.data.volumesLoaded) {
-      this.loadVolumes(event.data.id);
+  /** Abre el drawer de detalle de la novela. */
+  openNovelDetail(novelId: string): void {
+    const novel = this.novels.find(n => n.id === novelId);
+    if (!novel) return;
+    
+    this.drawerNovelId = novelId;
+    this.drawerVisible.set(true);
+    
+    // Cargar volúmenes si no están cargados
+    if (!novel.volumesLoaded && !this.volumeLoading[novelId]) {
+      this.loadVolumes(novelId);
     }
   }
 
-  onNovelCollapse(event: { data: NovelRow }): void {
-    delete this.expandedRowKeys[event.data.id];
+  /** Cierra el drawer de detalle. */
+  closeNovelDetail(): void {
+    this.drawerVisible.set(false);
+    this.drawerNovelId = null;
+  }
+
+  /** Obtiene la novela actual del drawer. */
+  getDrawerNovel(): NovelRow {
+    if (!this.drawerNovelId) {
+      // Return a dummy novel to satisfy the type, but the drawer should not be visible anyway
+      return { id: "" } as NovelRow;
+    }
+    return this.novels.find(n => n.id === this.drawerNovelId)!;
   }
 
   // ------- Nivel 2: volúmenes -------
@@ -418,15 +468,9 @@ export class NovelsManager implements OnInit, OnDestroy {
     }
   }
 
-  /**
-   * Sondea los volúmenes mientras alguno tenga un proceso del pipeline en
-   * curso (traducción/audio) para refrescar los estados dependientes.
-   */
   private watchRunningVolumes(novelId: string): void {
     const anyRunning = (this.volumes[novelId] || []).some(v => v.running);
-    if (!anyRunning) {
-      return;
-    }
+    if (!anyRunning) return;
     this.pollNovelId = novelId;
     this.volumePollSubscription?.unsubscribe();
     this.volumePollSubscription = timer(3000, 3000).pipe(
@@ -458,24 +502,85 @@ export class NovelsManager implements OnInit, OnDestroy {
     });
   }
 
+  // ------- Enriquecimiento AniList -------
+
+  async enrichNovel(event: NovelRow): Promise<void> {
+    const novel = event;
+    if (novel.anilistEnriching) return;
+    novel.anilistEnriching = true;
+    novel.anilistError = undefined;
+    this.cdr.markForCheck();
+
+    try {
+      const result = await firstValueFrom(
+        this.novelsService.enrichNovelAnilist(novel.id)
+      );
+      if (result.success) {
+        // Recargar la novela con datos frescos
+        const refreshed = await firstValueFrom(this.novelsService.getNovel(novel.id));
+        Object.assign(novel, refreshed);
+        this.messageService.add({
+          severity: 'success',
+          summary: 'Enriquecido',
+          detail: `«${novel.title}» enriquecida con datos de AniList.`
+        });
+      } else {
+        novel.anilistError = result.message;
+        this.messageService.add({
+          severity: 'warn',
+          summary: 'No enriquecido',
+          detail: result.message
+        });
+      }
+    } catch (err: any) {
+      const detail = err?.error?.error || 'Error enriqueciendo con AniList.';
+      novel.anilistError = detail;
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
+    } finally {
+      novel.anilistEnriching = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  async enrichAllNovels(): Promise<void> {
+    if (this.enrichingAll) return;
+    this.enrichingAll = true;
+    this.cdr.markForCheck();
+
+    try {
+      const novelIds = this.novels.map(n => n.id);
+      const result = await firstValueFrom(
+        this.novelsService.enrichBatchAnilist(novelIds)
+      );
+      // Recargar la página completa
+      await this.loadCatalog({ first: this.currentPage * this.pageSize, rows: this.pageSize });
+      this.messageService.add({
+        severity: 'success',
+        summary: 'Enriquecimiento masivo completado',
+        detail: `${result.enriched} enriquecidas, ${result.notFound} no encontradas, ${result.errors} errores.`
+      });
+    } catch (err: any) {
+      const detail = err?.error?.error || 'Error en enriquecimiento masivo.';
+      this.messageService.add({ sticky: true, severity: 'error', summary: 'Error', detail });
+    } finally {
+      this.enrichingAll = false;
+      this.cdr.markForCheck();
+    }
+  }
+
   // ------- Acciones con dependencias Split -> Traducir -> Audio -------
 
-  /** Paso 1: prepara el texto del volumen y lleva al wizard para hacer el split. */
-  async prepareSplit(volume: CatalogVolume, novel: NovelRow): Promise<void> {
-    if (!volume.canPrepareText || this.actionBusy[volume.id]) {
-      return;
-    }
+  async prepareSplit(event: { volume: CatalogVolume; novel: NovelRow }): Promise<void> {
+    const { volume, novel } = event;
+    if (!volume.canPrepareText || this.actionBusy[volume.id]) return;
     this.actionBusy[volume.id] = true;
     this.cdr.markForCheck();
     try {
-      const prepared = await firstValueFrom(
-        this.novelsService.prepareVolumeText(volume.id));
+      const prepared = await firstValueFrom(this.novelsService.prepareVolumeText(volume.id));
       this.messageService.add({
-        severity: 'success',
-        summary: 'Texto listo',
+        severity: 'success', summary: 'Texto listo',
         detail: `"${prepared.bookName}" quedó enlazado al volumen; continúa con el split en el editor.`
       });
-      // El split se realiza en la página Dividir Texto (editor blockML).
       this.router.navigate(['/pipeline/split-text'], {
         queryParams: { bookId: prepared.bookId, name: prepared.bookName }
       });
@@ -488,26 +593,18 @@ export class NovelsManager implements OnInit, OnDestroy {
     }
   }
 
-  /** Paso 2: traduce (requiere split hecho; habilitado según canTranslate). */
-  async translateVolume(volume: CatalogVolume, novel: NovelRow): Promise<void> {
+  async translateVolume(event: { volume: CatalogVolume; novel: NovelRow }): Promise<void> {
+    const { volume, novel } = event;
     await this.runVolumeStage(volume, novel, 'TRANSLATE', 'Traducción iniciada');
   }
 
-  /** Paso 3: genera el audio (requiere traducción completa; canCreateAudio). */
-  async createAudio(volume: CatalogVolume, novel: NovelRow): Promise<void> {
+  async createAudio(event: { volume: CatalogVolume; novel: NovelRow }): Promise<void> {
+    const { volume, novel } = event;
     await this.runVolumeStage(volume, novel, 'AUDIO', 'Generación de audio iniciada');
   }
 
-  /**
-   * Paso 4: descarga el audiolibro generado (mp3 directo o ZIP al vuelo con
-   * los mp3 de los bloques). Ancla con target=_blank: una descarga con
-   * Content-Disposition attachment no abandona la página, y un error 404/409
-   * del servidor queda visible en la pestaña nueva en lugar de romper la
-   * tabla — el streaming viaja directo a disco, sin blob en memoria (un
-   * volumen completo puede ocupar cientos de MB).
-   */
-  downloadAudio(volume: CatalogVolume): void {
-    const url = `/api/novels-manager/volumes/${volume.id}/audio/download`;
+  downloadAudio(event: CatalogVolume): void {
+    const url = `/api/novels-manager/volumes/${event.id}/audio/download`;
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.target = '_blank';
@@ -519,9 +616,7 @@ export class NovelsManager implements OnInit, OnDestroy {
 
   private async runVolumeStage(volume: CatalogVolume, novel: NovelRow,
                                target: 'TRANSLATE' | 'AUDIO', okDetail: string): Promise<void> {
-    if (!volume.bookId) {
-      return;
-    }
+    if (!volume.bookId) return;
     this.actionBusy[volume.id] = true;
     this.cdr.markForCheck();
     try {
@@ -559,8 +654,7 @@ export class NovelsManager implements OnInit, OnDestroy {
     try {
       this.syncStatus = await firstValueFrom(this.novelsService.startSync());
       this.messageService.add({
-        severity: 'success',
-        summary: 'Sincronización',
+        severity: 'success', summary: 'Sincronización',
         detail: 'Sincronización de metadatos iniciada.'
       });
       this.pollSync();
@@ -577,9 +671,7 @@ export class NovelsManager implements OnInit, OnDestroy {
   async cancelSync(): Promise<void> {
     try {
       await firstValueFrom(this.novelsService.cancelSync());
-    } catch {
-      // La cancelación es best-effort.
-    }
+    } catch { }
   }
 
   private pollSync(): void {
@@ -590,7 +682,6 @@ export class NovelsManager implements OnInit, OnDestroy {
         this.syncStatus = status;
         if (finished) {
           this.catalogSyncSubscription?.unsubscribe();
-          // Refresco final conservando la página actual del usuario.
           this.reloadCatalog(false);
         }
         this.cdr.markForCheck();
@@ -598,28 +689,7 @@ export class NovelsManager implements OnInit, OnDestroy {
     });
   }
 
-  // ------- Helpers de plantilla -------
-
-  volumeLabel(volume: CatalogVolume): string {
-    if (volume.volumeNumber !== null && volume.volumeNumber !== undefined) {
-      return `Volume ${String(volume.volumeNumber).padStart(2, '0')}`;
-    }
-    return volume.label || '—';
-  }
-
-  formatSize(bytes: number | null | undefined): string {
-    if (!bytes && bytes !== 0) {
-      return 'tamaño desconocido';
-    }
-    if (bytes < 1024 * 1024) {
-      return `${Math.round(bytes / 1024)} KB`;
-    }
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  syncRunning(): boolean {
-    return this.syncStatus?.state === 'RUNNING';
-  }
+  syncRunning(): boolean { return this.syncStatus?.state === 'RUNNING'; }
 
   syncStateLabel(): string {
     switch (this.syncStatus?.state) {
@@ -639,5 +709,20 @@ export class NovelsManager implements OnInit, OnDestroy {
       case 'FAILED': return 'danger';
       default: return 'secondary';
     }
+  }
+
+  // ------- Helpers de plantilla -------
+
+  volumeLabel(volume: CatalogVolume): string {
+    if (volume.volumeNumber !== null && volume.volumeNumber !== undefined) {
+      return `Vol. ${String(volume.volumeNumber).padStart(2, '0')}`;
+    }
+    return volume.label || '—';
+  }
+
+  formatSize(bytes: number | null | undefined): string {
+    if (!bytes && bytes !== 0) return 'tamaño desconocido';
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 }

@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -27,7 +28,8 @@ public class NovelAnilistEnrichmentService {
      */
     @Transactional
     public NovelEnrichmentResult enrichNovel(String novelId) {
-        Novel novel = novelRepository.findById(novelId)
+        UUID uuid = UUID.fromString(novelId);
+        Novel novel = novelRepository.findById(uuid)
                 .orElseThrow(() -> new IllegalArgumentException("Novela no encontrada: " + novelId));
 
         // Si ya tiene anilistId, usar ese directamente
@@ -86,11 +88,11 @@ public class NovelAnilistEnrichmentService {
         for (String novelId : novelIds) {
             try {
                 NovelEnrichmentResult result = enrichNovel(novelId);
-                if (result.isSuccess()) {
+                if (result.success()) {
                     enriched++;
                 } else {
                     notFound++;
-                    errorDetails.add(novelId + ": " + result.getMessage());
+                    errorDetails.add(novelId + ": " + result.message());
                 }
             } catch (Exception e) {
                 errors++;

@@ -8,6 +8,19 @@ export interface NovelSummary {
   category: string | null;
   volumeCount: number;
   lastSyncedAt: string | null;
+  // --- Campos de enriquecimiento AniList ---
+  anilistId: number | null;
+  anilistCoverUrl: string | null;
+  anilistDescription: string | null;
+  anilistGenres: string[] | null;
+  anilistTags: string[] | null;
+  anilistStatus: string | null;
+  anilistAverageScore: number | null;
+  anilistFormat: string | null;
+  anilistSource: string | null;
+  anilistCountryOfOrigin: string | null;
+  anilistVolumes: number | null;
+  anilistChapters: number | null;
 }
 
 /** Shape of a serialized Spring Data page (GET /api/novels-manager/catalog). */
@@ -66,6 +79,18 @@ export interface VolumePrepared {
   bookName: string;
 }
 
+export interface AnilistEnrichmentResult {
+  success: boolean;
+  message: string;
+}
+
+export interface BatchAnilistEnrichmentResult {
+  enriched: number;
+  notFound: number;
+  errors: number;
+  errorDetails: string[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class NovelsManagerService {
   private readonly API_URL = '/api/novels-manager';
@@ -78,6 +103,11 @@ export class NovelsManagerService {
       params = params.set('search', search.trim());
     }
     return this.http.get<NovelCatalogPage>(`${this.API_URL}/catalog`, { params });
+  }
+
+  /** Obtiene una novela individual por ID (con campos AniList). */
+  getNovel(novelId: string): Observable<NovelSummary> {
+    return this.http.get<NovelSummary>(`${this.API_URL}/novels/${novelId}`);
   }
 
   getVolumes(novelId: string): Observable<CatalogVolume[]> {
@@ -94,6 +124,18 @@ export class NovelsManagerService {
 
   cancelSync(): Observable<{ cancelled: boolean }> {
     return this.http.post<{ cancelled: boolean }>(`${this.API_URL}/sync/cancel`, {});
+  }
+
+  /**
+   * Enriquece una novela buscando en AniList por su título.
+   */
+  enrichNovelAnilist(novelId: string): Observable<AnilistEnrichmentResult> {
+    return this.http.post<AnilistEnrichmentResult>(`${this.API_URL}/novels/${novelId}/enrich-anilist`, {});
+  }
+
+  /** Enriquecimiento en lote de múltiples novelas. */
+  enrichBatchAnilist(novelIds: string[]): Observable<BatchAnilistEnrichmentResult> {
+    return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-batch-anilist`, { novelIds });
   }
 
   /**

@@ -259,7 +259,6 @@ class BookProcessingServiceTest {
 
         @Test
         @DisplayName("Should mark book as FAILED when audio generation fails")
-        @Disabled("Mock injection issue with audioGeneratorService")
         void finalizeProcessing_audioGenerationFails_marksBookFailed() {
             book.setStatus(ProcessingStatus.PROCESSING);
             Chunks chunk1 = createChunk(ChunkStatus.COMPLETED, 0, "Translated 1");

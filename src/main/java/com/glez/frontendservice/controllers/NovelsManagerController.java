@@ -4,44 +4,50 @@ import com.glez.frontendservice.dtos.NovelSummaryDto;
 import com.glez.frontendservice.dtos.NovelsCatalogSyncStatus;
 import com.glez.frontendservice.dtos.VolumeDto;
 import com.glez.frontendservice.dtos.VolumePreparedDto;
-import com.glez.frontendservice.dtos.anilist.AniListSearchPreview;
 import com.glez.frontendservice.services.NovelsCatalogQueryService;
 import com.glez.frontendservice.services.NovelsCatalogSyncService;
 import com.glez.frontendservice.services.NovelsVolumeTextService;
 import com.glez.frontendservice.services.VolumeAudioDownloadService;
 import com.glez.frontendservice.services.anilist.NovelAnilistEnrichmentService;
+import com.glez.frontendservice.services.anilist.NovelAnilistEnrichmentService.AniListSearchPreview;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PagedModel;
+import org.springframework.data.web.PagedResourcesAssembler;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 @RestController
-
-@RestController
 @RequestMapping("/api/novels-manager")
 @RequiredArgsConstructor
 @Tag(name = "Novels Manager", description = "Catálogo de novelas sincronizado desde elscione (solo metadatos) "
-        + "y acciones de pipeline por volumen")
+        + "y acciones de pipeline por volumen, con enriquecimiento AniList")
 public class NovelsManagerController {
 
     private final NovelsCatalogQueryService catalogQueryService;
     private final NovelsCatalogSyncService catalogSyncService;
     private final NovelsVolumeTextService volumeTextService;
     private final VolumeAudioDownloadService audioDownloadService;
+    private final NovelAnilistEnrichmentService anilistEnrichmentService;
 
     @Operation(summary = "Página de obras del catálogo (nivel 1 de la tabla anidada)")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Página de obras con número de volúmenes"))
     @GetMapping("/catalog")
-    public ResponseEntity<Page<NovelSummaryDto>> getCatalog(
+    public ResponseEntity<PagedModel<NovelSummaryDto>> getCatalog(
             @Parameter(description = "Filtro por título (ignora mayúsculas)")
             @RequestParam(name = "search", required = false) String search,
             @RequestParam(name = "page", defaultValue = "0") int page,
@@ -49,11 +55,48 @@ public class NovelsManagerController {
         return ResponseEntity.ok(catalogQueryService.findNovels(search, page, size));
     }
 
+    @Operation(summary = "Obtiene una novela individual por ID (con campos AniList)")
+    @ApiResponses(@ApiResponse(responseCode = "200", description = "Novela con campos de enriquecimiento AniList"))
+    @GetMapping("/novels/{novelId}")
+    public ResponseEntity<NovelSummaryDto> getNovel(@PathVariable UUID novelId) {
+        return catalogQueryService.findByIdAsSummary(novelId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     @Operation(summary = "Volúmenes de una obra con estados derivados y botones habilitados (nivel 2)")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Lista de volúmenes de la obra"))
     @GetMapping("/novels/{novelId}/volumes")
     public ResponseEntity<List<VolumeDto>> getNovelVolumes(@PathVariable UUID novelId) {
         return ResponseEntity.ok(catalogQueryService.findVolumes(novelId));
+    }
+
+    @Operation(summary = "Enriquece una novela buscando en AniList por su título")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Resultado del enriquecimiento"),
+            @ApiResponse(responseCode = "404", description = "Novela no encontrada")
+    })
+    @PostMapping("/novels/{novelId}/enrich-anilist")
+    public ResponseEntity<NovelAnilistEnrichmentService.NovelEnrichmentResult> enrichNovelAnilist(@PathVariable UUID novelId) {
+        var result = anilistEnrichmentService.enrichNovel(novelId.toString());
+        return ResponseEntity.ok(result);
+    }
+
+    @Operation(summary = "Enriquecimiento en lote: busca y enriquece múltiples novelas en AniList")
+    @ApiResponses(@ApiResponse(responseCode = "200", description = "Resultado del enriquecimiento en lote"))
+    @PostMapping("/novels/enrich-batch-anilist")
+    public ResponseEntity<NovelAnilistEnrichmentService.BatchEnrichmentResult> enrichBatchAnilist(@RequestBody List<String> novelIds) {
+        var result = anilistEnrichmentService.enrichBatch(novelIds);
+        return ResponseEntity.ok(result);
+    }
+
+    @Operation(summary = "Previsualiza resultados de búsqueda en AniList sin guardar")
+    @ApiResponses(@ApiResponse(responseCode = "200", description = "Lista de previews de AniList"))
+    @GetMapping("/novels/{novelId}/anilist-preview")
+    public ResponseEntity<List<NovelAnilistEnrichmentService.AniListSearchPreview>> previewAnilist(@PathVariable UUID novelId) {
+        return catalogQueryService.findById(novelId)
+                .map(novel -> ResponseEntity.ok(anilistEnrichmentService.previewSearch(novel.getTitle())))
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @Operation(summary = "Dispara manualmente la sincronización de metadatos del catálogo")
@@ -135,6 +178,17 @@ public class NovelsManagerController {
         } catch (IllegalStateException e) {
             return ResponseEntity.status(409).header(HttpHeaders.CONTENT_TYPE, "application/json")
                     .body(out -> out.write(("{\"error\":\"" + e.getMessage() + "\"}").getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    @Operation(summary = "Ejecuta manualmente la limpieza de novelas contenedoras y duplicados sueltos")
+    @PostMapping("/cleanup")
+    public ResponseEntity<Map<String, Object>> runCleanup() {
+        try {
+            catalogSyncService.runManualCleanup();
+            return ResponseEntity.ok(Map.of("success", true, "message", "Limpieza completada"));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("success", false, "error", e.getMessage()));
         }
     }
 }
