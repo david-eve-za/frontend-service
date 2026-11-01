@@ -403,7 +403,9 @@ export class NovelsManager implements OnInit, OnDestroy {
         anilistEnriching: false,
         anilistError: undefined
       }));
-      this.totalRecords = result.totalElements;
+      this.totalRecords = result.page.totalElements;
+      this.currentPage = result.page.number;
+      this.pageSize = result.page.size;
       this.volumes = {};
     } catch {
       this.messageService.add({
@@ -455,7 +457,7 @@ export class NovelsManager implements OnInit, OnDestroy {
       }));
       // Append new novels to existing list
       this.novels = [...this.novels, ...newNovels];
-      this.totalRecords = result.totalElements;
+      this.totalRecords = result.page.totalElements;
       this.currentPage = nextPage;
     } catch {
       this.messageService.add({
@@ -483,7 +485,7 @@ export class NovelsManager implements OnInit, OnDestroy {
     try {
       const result = await firstValueFrom(
         this.novelsService.getCatalog(this.searchTerm, this.currentPage, this.pageSize));
-      this.totalRecords = result.totalElements;
+      this.totalRecords = result.page.totalElements;
       this.novels = result.content.map(n => {
         const previous = this.novels.find(o => o.id === n.id);
         return {
