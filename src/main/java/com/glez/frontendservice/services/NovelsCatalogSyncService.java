@@ -18,6 +18,8 @@ import org.springframework.cache.CacheManager;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
 import java.net.URLDecoder;
@@ -25,6 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +93,7 @@ public class NovelsCatalogSyncService {
         thread.setDaemon(true);
         return thread;
     });
+    private final TransactionTemplate transactionTemplate;
 
     public NovelsCatalogSyncService(ElscioneApiClient apiClient,
                                      NovelRepository novelRepository,
@@ -97,6 +101,7 @@ public class NovelsCatalogSyncService {
                                      NovelVolumeFileRepository fileRepository,
                                      NovelFileNameParser fileNameParser,
                                      CacheManager cacheManager,
+                                     TransactionTemplate transactionTemplate,
                                      @Value("${app.novels.base-url}") String baseUrl,
                                      @Value("${app.novels-manager.sync-max-depth:3}") int maxDepth,
                                      @Value("${app.novels-manager.auto-sync-enabled:true}") boolean autoSyncEnabled,
@@ -109,6 +114,7 @@ public class NovelsCatalogSyncService {
         this.fileRepository = fileRepository;
         this.fileNameParser = fileNameParser;
         this.cacheManager = cacheManager;
+        this.transactionTemplate = transactionTemplate;
         this.startPath = URI.create(baseUrl).getRawPath();
         this.decodedStartPath = URLDecoder.decode(startPath, StandardCharsets.UTF_8);
         this.maxDepth = maxDepth;
@@ -182,6 +188,47 @@ public class NovelsCatalogSyncService {
         return true;
     }
 
+    /**
+     * Ejecuta manualmente la limpieza de novelas contenedoras y duplicados sueltos.
+     * Útil para limpiar datos existentes sin esperar a una sincronización completa.
+     */
+    public void runManualCleanup() {
+        transactionTemplate.executeWithoutResult(status -> {
+            log.info("[sync-catálogo] Iniciando limpieza manual de novelas contenedoras y duplicados sueltos");
+            
+            // 1. Limpiar novelas contenedoras (remotePath != null con subdirectorios que tienen volúmenes)
+            List<Novel> allNovels = novelRepository.findAll().stream()
+                    .filter(n -> n.getRemotePath() != null)
+                    .toList();
+            int deletedContainerCount = 0;
+            for (Novel novel : allNovels) {
+                String remotePath = novel.getRemotePath();
+                if (remotePath == null) {
+                    continue;
+                }
+                if (hasSubdirectoryNovelsWithVolumes(remotePath)) {
+                    log.info("[sync-catálogo] Eliminando novela contenedora: '{}' ({})", novel.getTitle(), remotePath);
+                    volumeRepository.markRemovedFromSource(List.of(novel.getId()), java.time.Instant.now());
+                    novelRepository.delete(novel);
+                    deletedContainerCount++;
+                }
+            }
+            if (deletedContainerCount > 0) {
+                log.info("[sync-catálogo] Limpieza de contenedoras completada: {} eliminadas", deletedContainerCount);
+            }
+            
+            // 2. Eliminar TODAS las novelas sueltas (remotePath == null) con títulos que empiezan por "!"
+            // (marcadores de categoría como "!Side Stories", "!Balamiere", etc.)
+            int deletedCategoryCount = novelRepository.deleteLooseCategoryNovels();
+            if (deletedCategoryCount > 0) {
+                log.info("[sync-catálogo] Limpieza de categorías sueltas completada: {} eliminadas (bulk delete)", deletedCategoryCount);
+            }
+            
+            // 3. Limpiar duplicados de novelas sueltas restantes (remotePath == null con mismo título)
+            cleanupDuplicateLooseFileNovels();
+        });
+    }
+
     @Scheduled(cron = "${app.novels-manager.sync-cron:0 0 */3 * * *}")
     void scheduledSync() {
         if (!autoSyncEnabled) {
@@ -230,7 +277,10 @@ public class NovelsCatalogSyncService {
             // de ir a la BD por cada directorio hijo.
             run.completeFolders.addAll(novelRepository.findRemotePathsByListingCompleteTrue());
             Set<String> visitedNovelPaths = new HashSet<>();
-            walk(run, startPath, null, 0, visitedNovelPaths);
+            walk(run, startPath, null, 0, visitedNovelPaths, null);
+            // Cleanup: eliminar novelas contenedoras que tienen subdirectorios con archivos de libro
+            // (novelas "contenedoras" como "!Side Stories" que solo agrupan otras novelas)
+            cleanupContainerNovels(run, visitedNovelPaths);
             markUnvisitedNovelsRemoved(run, visitedNovelPaths);
             if (run.cancelled) {
                 run.state = NovelsCatalogSyncStatus.State.CANCELLED;
@@ -286,7 +336,7 @@ public class NovelsCatalogSyncService {
      * reintenta — una corrida cancelada retoma exactamente donde se quedó.</p>
      */
     private void walk(SyncRun run, String remotePath, String category, int depth,
-                      Set<String> visitedNovelPaths) {
+                      Set<String> visitedNovelPaths, List<ElscioneApiClient.ApiItem> cachedContents) {
         if (run.cancelled || depth > maxDepth) {
             return;
         }
@@ -302,13 +352,18 @@ public class NovelsCatalogSyncService {
         }
         run.currentPath = remotePath;
         List<ElscioneApiClient.ApiItem> contents;
-        try {
-            contents = apiClient.listContents(remotePath);
+        if (cachedContents != null) {
+            contents = cachedContents;
             run.listingsProcessed.incrementAndGet();
-        } catch (Exception e) {
-            run.lastError = remotePath + ": " + e.getMessage();
-            log.warn("Could not list {}: {}", remotePath, e.getMessage());
-            return;
+        } else {
+            try {
+                contents = apiClient.listContents(remotePath);
+                run.listingsProcessed.incrementAndGet();
+            } catch (Exception e) {
+                run.lastError = remotePath + ": " + e.getMessage();
+                log.warn("Could not list {}: {}", remotePath, e.getMessage());
+                return;
+            }
         }
 
         List<ElscioneApiClient.ApiItem> files = new ArrayList<>();
@@ -330,13 +385,46 @@ public class NovelsCatalogSyncService {
                         != NovelVolumeFile.Format.OTHER)
                 .toList();
 
-        if (!bookFiles.isEmpty()) {
-            if (depth == 0) {
-                upsertLooseFileNovels(run, bookFiles);
-            } else {
-                upsertNovel(run, remotePath, category, bookFiles);
-                visitedNovelPaths.add(remotePath);
+        // Determinar si esta carpeta debe crear una novela:
+        // Solo crea novela si TIENE archivos de libro Y (no tiene subdirectorios O
+        // ninguno de sus subdirectorios tiene archivos de libro).
+        // Esto evita crear "novelas contenedor" como "!Side Stories" que solo
+        // agrupan otras novelas reales en subdirectorios.
+        boolean hasSubdirsWithBookFiles = false;
+        // Cache de contenidos de subdirectorios para evitar listar dos veces
+        Map<String, List<ElscioneApiClient.ApiItem>> subDirContentsCache = new HashMap<>();
+        if (!directories.isEmpty()) {
+            for (ElscioneApiClient.ApiItem dir : directories) {
+                // Saltar la comprobación de archivos de libro para subdirectorios ya completados
+                // (pasadas incrementales): ya sabemos si tienen libros o no.
+                if (run.completeFolders.contains(dir.href())) {
+                    continue;
+                }
+                try {
+                    List<ElscioneApiClient.ApiItem> subContents = apiClient.listContents(dir.href());
+                    subDirContentsCache.put(dir.href(), subContents);
+                    boolean hasBookFiles = subContents.stream()
+                            .filter(item -> item.size() != null)
+                            .anyMatch(item -> fileNameParser.formatOf(lastSegment(item.href()))
+                                    != NovelVolumeFile.Format.OTHER);
+                    if (hasBookFiles) {
+                        hasSubdirsWithBookFiles = true;
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.debug("No se pudo listar subdirectorio {} para verificar archivos: {}", dir.href(), e.getMessage());
+                }
             }
+        }
+
+        boolean shouldCreateNovel = !bookFiles.isEmpty() && depth > 0 && !hasSubdirsWithBookFiles;
+
+        if (shouldCreateNovel) {
+            upsertNovel(run, remotePath, category, bookFiles);
+            visitedNovelPaths.add(remotePath);
+        } else if (!bookFiles.isEmpty() && depth == 0) {
+            // Archivos sueltos en la raíz
+            upsertLooseFileNovels(run, bookFiles);
         }
 
         for (ElscioneApiClient.ApiItem directory : directories) {
@@ -360,7 +448,9 @@ public class NovelsCatalogSyncService {
             String childCategory = depth == 0
                     ? null
                     : (category != null ? category : lastDecodedSegment(remotePath));
-            walk(run, directory.href(), childCategory, depth + 1, visitedNovelPaths);
+            // Pasar los contenidos ya obtenidos para evitar listar dos veces
+            List<ElscioneApiClient.ApiItem> subDirCachedContents = subDirContentsCache.get(directory.href());
+            walk(run, directory.href(), childCategory, depth + 1, visitedNovelPaths, subDirCachedContents);
         }
     }
 
@@ -402,6 +492,12 @@ public class NovelsCatalogSyncService {
             String fileName = lastDecodedSegment(item.href());
             String title = fileNameParser.novelTitleFromLooseFile(fileName)
                     .orElseGet(() -> fileName);
+            // Filtrar títulos que empiezan con "!" (marcadores de categoría como "!Side Stories", "!Balamiere", etc.)
+            // Estos no son novelas reales, sino contenedores de categorías que no deben crear novelas sueltas.
+            if (title != null && title.startsWith("!")) {
+                log.info("[sync-catálogo] Ignorando archivo suelto con título de categoría: {}", title);
+                continue;
+            }
             byTitle.computeIfAbsent(title, t -> new ArrayList<>()).add(item);
         }
         for (Map.Entry<String, List<ElscioneApiClient.ApiItem>> entry : byTitle.entrySet()) {
@@ -565,6 +661,105 @@ public class NovelsCatalogSyncService {
         }
         run.removedVolumes.addAndGet(
                 volumeRepository.markRemovedFromSource(unvisitedIds, java.time.Instant.now()));
+    }
+
+    /**
+     * Limpia novelas contenedoras: elimina novelas que tienen subdirectorios con archivos de libro.
+     * Estas son "novelas contenedoras" (ej. "!Side Stories") que solo agrupan otras novelas reales
+     * en subdirectorios, pero que fueron creadas incorrectamente como novelas durante el sync.
+     * <p>
+     * Verifica localmente en la BD si la novela tiene "hijas" (novelas cuyo remotePath
+     * empieza con el remotePath de esta novela + "/") que tengan volúmenes.
+     * También elimina duplicados de novelas de archivos sueltos (remotePath == null) con el mismo título.
+     */
+    private void cleanupContainerNovels(SyncRun run, Set<String> visitedNovelPaths) {
+        transactionTemplate.executeWithoutResult(status -> {
+            log.info("[sync-catálogo] Iniciando limpieza de novelas contenedoras y duplicados sueltos");
+            List<Novel> allNovels = novelRepository.findAll().stream()
+                    .filter(n -> n.getRemotePath() != null)
+                    .toList();
+            int deletedCount = 0;
+            for (Novel novel : allNovels) {
+                String remotePath = novel.getRemotePath();
+                if (remotePath == null) {
+                    continue;
+                }
+                
+                // Verificar si esta novela tiene subdirectorios que son novelas con volúmenes
+                // comprobando en la BD local si hay novelas hijas con volúmenes
+                if (hasSubdirectoryNovelsWithVolumes(remotePath)) {
+                    log.info("[sync-catálogo] Eliminando novela contenedora: '{}' ({})", novel.getTitle(), remotePath);
+                    // Marcar volúmenes como eliminados de la fuente
+                    volumeRepository.markRemovedFromSource(List.of(novel.getId()), java.time.Instant.now());
+                    // Eliminar la novela
+                    novelRepository.delete(novel);
+                    deletedCount++;
+                }
+            }
+            if (deletedCount > 0) {
+                log.info("[sync-catálogo] Limpieza completada: {} novelas contenedoras eliminadas", deletedCount);
+            }
+    
+            // También limpiar duplicados de novelas de archivos sueltos (remotePath == null)
+            cleanupDuplicateLooseFileNovels();
+        });
+    }
+
+    /**
+     * Elimina duplicados de novelas de archivos sueltos (remotePath == null) que tengan el mismo título.
+     * Mantiene solo la primera (la más antigua por createdAt).
+     * Debe llamarse dentro de una transacción (usar transactionTemplate en el caller).
+     */
+    private void cleanupDuplicateLooseFileNovels() {
+            log.info("[sync-catálogo] Iniciando limpieza de duplicados de novelas sueltas");
+            List<Novel> looseNovels = novelRepository.findByRemotePathIsNull();
+            log.info("[sync-catálogo] Encontradas {} novelas sueltas", looseNovels.size());
+            if (looseNovels.isEmpty()) {
+                return;
+            }
+            
+            // Agrupar por título
+            Map<String, List<Novel>> byTitle = new HashMap<>();
+            for (Novel novel : looseNovels) {
+                byTitle.computeIfAbsent(novel.getTitle(), k -> new ArrayList<>()).add(novel);
+            }
+            
+            int deletedCount = 0;
+            for (Map.Entry<String, List<Novel>> entry : byTitle.entrySet()) {
+                List<Novel> duplicates = entry.getValue();
+                if (duplicates.size() > 1) {
+                    // Ordenar por createdAt (mantener la más antigua), nulls first
+                    duplicates.sort(Comparator.comparing(Novel::getCreatedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+                            .thenComparing(Novel::getId));
+                    Novel toKeep = duplicates.get(0);
+                    for (int i = 1; i < duplicates.size(); i++) {
+                        Novel duplicate = duplicates.get(i);
+                        log.info("[sync-catálogo] Eliminando novela suelta duplicada: '{}' (id: {})", duplicate.getTitle(), duplicate.getId());
+                        volumeRepository.markRemovedFromSource(List.of(duplicate.getId()), java.time.Instant.now());
+                        novelRepository.delete(duplicate);
+                        deletedCount++;
+                    }
+                }
+            }
+            if (deletedCount > 0) {
+                log.info("[sync-catálogo] Limpieza de duplicados sueltos completada: {} eliminados", deletedCount);
+            }
+    }
+
+    /**
+     * Verifica si una carpeta remota tiene subdirectorios que son novelas con volúmenes.
+     * Comprueba en la BD local si hay novelas cuyo remotePath empieza con
+     * el remotePath de esta novela + "/".
+     */
+    private boolean hasSubdirectoryNovelsWithVolumes(String remotePath) {
+        String prefix = remotePath + "/";
+        List<Novel> subNovels = novelRepository.findByRemotePathStartingWith(prefix);
+        for (Novel subNovel : subNovels) {
+            if (volumeRepository.countByNovel(subNovel) > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String lastSegment(String href) {

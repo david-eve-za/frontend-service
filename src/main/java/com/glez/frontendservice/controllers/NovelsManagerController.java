@@ -16,7 +16,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PagedModel;
+import org.springframework.data.web.PagedResourcesAssembler;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -45,7 +47,7 @@ public class NovelsManagerController {
     @Operation(summary = "Página de obras del catálogo (nivel 1 de la tabla anidada)")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Página de obras con número de volúmenes"))
     @GetMapping("/catalog")
-    public ResponseEntity<Page<NovelSummaryDto>> getCatalog(
+    public ResponseEntity<PagedModel<NovelSummaryDto>> getCatalog(
             @Parameter(description = "Filtro por título (ignora mayúsculas)")
             @RequestParam(name = "search", required = false) String search,
             @RequestParam(name = "page", defaultValue = "0") int page,
@@ -57,12 +59,7 @@ public class NovelsManagerController {
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Novela con campos de enriquecimiento AniList"))
     @GetMapping("/novels/{novelId}")
     public ResponseEntity<NovelSummaryDto> getNovel(@PathVariable UUID novelId) {
-        return catalogQueryService.findById(novelId)
-                .map(novel -> {
-                    // Reutilizar toSummary para obtener el DTO con volúmenes y campos AniList
-                    var volumes = catalogQueryService.findVolumes(novelId);
-                    return catalogQueryService.toSummary(novel, volumes.size());
-                })
+        return catalogQueryService.findByIdAsSummary(novelId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -181,6 +178,17 @@ public class NovelsManagerController {
         } catch (IllegalStateException e) {
             return ResponseEntity.status(409).header(HttpHeaders.CONTENT_TYPE, "application/json")
                     .body(out -> out.write(("{\"error\":\"" + e.getMessage() + "\"}").getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    @Operation(summary = "Ejecuta manualmente la limpieza de novelas contenedoras y duplicados sueltos")
+    @PostMapping("/cleanup")
+    public ResponseEntity<Map<String, Object>> runCleanup() {
+        try {
+            catalogSyncService.runManualCleanup();
+            return ResponseEntity.ok(Map.of("success", true, "message", "Limpieza completada"));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("success", false, "error", e.getMessage()));
         }
     }
 }

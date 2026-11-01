@@ -1,3 +1,4 @@
+import { ViewChild, signal } from '@angular/core';
 import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
@@ -14,7 +15,8 @@ import { ImageModule } from 'primeng/image';
 import { AccordionModule } from 'primeng/accordion';
 import { RippleModule } from 'primeng/ripple';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
-import { PaginatorModule } from 'primeng/paginator';
+import { PaginatorModule } from 'primeng/paginator'
+import { DrawerModule } from 'primeng/drawer';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom, Subscription, timer, switchMap, takeWhile } from 'rxjs';
 import {
@@ -25,6 +27,7 @@ import {
 } from './novels-manager.service';
 import { NovelCardComponent } from './novel-card.component';
 import { NovelCardSkeletonComponent } from './novel-card-skeleton.component';
+import { NovelDetailDrawerComponent } from './novel-detail-drawer.component';
 
 interface NovelRow extends NovelSummary {
   volumesLoaded: boolean;
@@ -51,8 +54,10 @@ interface NovelRow extends NovelSummary {
     RippleModule,
     ProgressSpinnerModule,
     PaginatorModule,
+    DrawerModule,
     NovelCardComponent,
-    NovelCardSkeletonComponent
+    NovelCardSkeletonComponent,
+    NovelDetailDrawerComponent
   ],
   providers: [MessageService],
   template: `
@@ -148,16 +153,15 @@ interface NovelRow extends NovelSummary {
         @for (novel of novels; track novel.id) {
           <novel-card
             [novel]="novel"
-            [expanded]="expandedNovelIds[novel.id]"
             [volumeLoading]="volumeLoading"
             [volumes]="volumes"
             [actionBusy]="actionBusy"
-            (toggleExpand)="toggleNovelExpand($any($event))"
             (enrich)="enrichNovel($any($event))"
             (prepareSplit)="prepareSplit($any($event))"
             (translateVolume)="translateVolume($any($event))"
             (createAudio)="createAudio($any($event))"
             (downloadAudio)="downloadAudio($any($event))"
+            (viewDetail)="openNovelDetail(novel.id)"
             [volumeLoading]="volumeLoading"
             [volumes]="volumes"
             [actionBusy]="actionBusy">
@@ -192,6 +196,21 @@ interface NovelRow extends NovelSummary {
         </p-paginator>
       </div>
     </div>
+
+    <!-- Drawer de detalle de novela -->
+    <novel-detail-drawer
+      [novel]="getDrawerNovel()"
+      [visible]="drawerVisible()"
+      [volumes]="volumes"
+      [volumeLoading]="volumeLoading"
+      [actionBusy]="actionBusy"
+      (close)="closeNovelDetail()"
+      (prepareSplit)="prepareSplit($any($event))"
+      (translateVolume)="translateVolume($any($event))"
+      (createAudio)="createAudio($any($event))"
+      (downloadAudio)="downloadAudio($any($event))"
+      (enrich)="enrichNovel($any($event))">
+    </novel-detail-drawer>
   `,
   styles: [`
     :host ::ng-deep .p-accordion .p-accordion-content {
@@ -283,8 +302,11 @@ export class NovelsManager implements OnInit, OnDestroy {
   enrichingAll = false;
   syncStatus: CatalogSyncStatus | null = null;
 
-  /** IDs de novelas expandidas para mostrar volúmenes. */
-  expandedNovelIds: Record<string, boolean> = {};
+  /** Control de visibilidad del drawer de detalle. */
+  drawerVisible = signal(false);
+  drawerNovelId: string | null = null;
+
+  @ViewChild(NovelDetailDrawerComponent) novelDetailDrawer!: NovelDetailDrawerComponent;
 
   /** Volúmenes cargados por obra (lazy al expandir). */
   volumes: Record<string, CatalogVolume[]> = {};
@@ -334,7 +356,6 @@ export class NovelsManager implements OnInit, OnDestroy {
       }));
       this.totalRecords = result.totalElements;
       this.volumes = {};
-      this.expandedNovelIds = {};
     } catch {
       this.messageService.add({
         sticky: true, severity: 'error',
@@ -387,11 +408,6 @@ export class NovelsManager implements OnInit, OnDestroy {
           anilistError: undefined
         };
       });
-      for (const novelId of Object.keys(this.expandedNovelIds)) {
-        if (this.expandedNovelIds[novelId] && this.volumes[novelId]) {
-          this.volumes[novelId] = await firstValueFrom(this.novelsService.getVolumes(novelId));
-        }
-      }
     } catch {
       // Refresco transitorio fallido durante el sync: se conserva el último estado válido.
     } finally {
@@ -399,14 +415,33 @@ export class NovelsManager implements OnInit, OnDestroy {
     }
   }
 
-  toggleNovelExpand(novelId: string): void {
-    this.expandedNovelIds[novelId] = !this.expandedNovelIds[novelId];
-    if (this.expandedNovelIds[novelId]) {
-      const novel = this.novels.find(n => n.id === novelId);
-      if (novel && !novel.volumesLoaded) {
-        this.loadVolumes(novelId);
-      }
+  /** Abre el drawer de detalle de la novela. */
+  openNovelDetail(novelId: string): void {
+    const novel = this.novels.find(n => n.id === novelId);
+    if (!novel) return;
+    
+    this.drawerNovelId = novelId;
+    this.drawerVisible.set(true);
+    
+    // Cargar volúmenes si no están cargados
+    if (!novel.volumesLoaded && !this.volumeLoading[novelId]) {
+      this.loadVolumes(novelId);
     }
+  }
+
+  /** Cierra el drawer de detalle. */
+  closeNovelDetail(): void {
+    this.drawerVisible.set(false);
+    this.drawerNovelId = null;
+  }
+
+  /** Obtiene la novela actual del drawer. */
+  getDrawerNovel(): NovelRow {
+    if (!this.drawerNovelId) {
+      // Return a dummy novel to satisfy the type, but the drawer should not be visible anyway
+      return { id: "" } as NovelRow;
+    }
+    return this.novels.find(n => n.id === this.drawerNovelId)!;
   }
 
   // ------- Nivel 2: volúmenes -------

@@ -58,4 +58,17 @@ public interface NovelRepository extends JpaRepository<Novel, UUID> {
     @Transactional
     @Query("update Novel n set n.listingComplete = false where n.remotePath is not null")
     int resetListingComplete();
+
+    /** Novelas cuyo remotePath empieza con el prefijo dado (para detectar subdirectorios). */
+    @Query("select n from Novel n where n.remotePath like :prefix%")
+    List<Novel> findByRemotePathStartingWith(String prefix);
+
+    /** Novelas sin remotePath (archivos sueltos en la raíz). */
+    List<Novel> findByRemotePathIsNull();
+
+    /** Elimina todas las novelas sueltas (remotePath == null) con títulos que empiezan por "!". */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("delete from Novel n where n.remotePath is null and n.title like '!%'")
+    int deleteLooseCategoryNovels();
 }

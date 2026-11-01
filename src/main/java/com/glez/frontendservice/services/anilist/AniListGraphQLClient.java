@@ -195,10 +195,9 @@ public class AniListGraphQLClient {
             return Optional.empty();
         }
 
-        // El query GET_MEDIA_BY_ID_QUERY devuelve directamente Media, no Page
-        // La estructura de respuesta es diferente, por ahora devolvemos empty
-        // TODO: implementar deserialización directa cuando sea necesario
-        return Optional.empty();
+        // El query GET_MEDIA_BY_ID_QUERY devuelve directamente Media (no Page)
+        // Usamos el helper getSingleMedia() que maneja ambos casos
+        return Optional.ofNullable(response.getData().getSingleMedia());
     }
 
     private AniListGraphQLResponse executeQuery(String query, Map<String, Object> variables) {

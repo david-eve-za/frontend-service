@@ -21,7 +21,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PagedModel;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -57,8 +59,8 @@ public class NovelsCatalogQueryService {
 
     /** Página de obras (nivel 1) para la tabla principal del gestor. */
     @Transactional(readOnly = true)
-    public Page<NovelSummaryDto> findNovels(String search, int page, int size) {
-        PageRequest pageRequest = PageRequest.of(page, Math.min(size, 200),
+    public PagedModel<NovelSummaryDto> findNovels(String search, int page, int size) {
+        Pageable pageRequest = PageRequest.of(page, Math.min(size, 200),
                 Sort.by(Sort.Order.asc("title")));
         Page<Novel> novels = (search == null || search.isBlank())
                 ? novelRepository.findAll(pageRequest)
@@ -77,13 +79,23 @@ public class NovelsCatalogQueryService {
                 .map(novel -> toSummary(novel, volumeCounts.getOrDefault(novel.getId(), 0L)))
                 .collect(Collectors.toList());
 
-        return new PageImpl<>(content, novels.getPageable(), novels.getTotalElements());
+        return new PagedModel<>(new PageImpl<>(content, novels.getPageable(), novels.getTotalElements()));
     }
 
     /** Busca una novela por ID (para endpoint de detalle). */
     @Transactional(readOnly = true)
     public Optional<Novel> findById(UUID novelId) {
         return novelRepository.findById(novelId);
+    }
+
+    /** Busca una novela por ID y devuelve el DTO con campos AniList y volúmenes. */
+    @Transactional(readOnly = true)
+    public Optional<NovelSummaryDto> findByIdAsSummary(UUID novelId) {
+        return novelRepository.findById(novelId)
+                .map(novel -> {
+                    var volumes = findVolumes(novelId);
+                    return toSummary(novel, volumes.size());
+                });
     }
 
     /** Volúmenes (nivel 2) de una obra con estados derivados y acciones habilitadas. */
