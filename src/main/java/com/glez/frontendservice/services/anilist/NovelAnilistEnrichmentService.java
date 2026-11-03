@@ -22,6 +22,7 @@ public class NovelAnilistEnrichmentService {
 
     private final AniListGraphQLClient anilistClient;
     private final NovelRepository novelRepository;
+    private final NvidiaAiService nvidiaAiService;
 
     /**
      * Enriquece una novela buscando en AniList por su título.
@@ -186,13 +187,12 @@ public class NovelAnilistEnrichmentService {
                     String translatedDescription = null;
 
                     if (originalDescription != null && !originalDescription.isBlank()) {
-                        try {
-                            // Limpiar HTML si existe
-                            String cleanDescription = originalDescription
-                                    .replaceAll("<[^>]+>", "")
-                                    .replaceAll("&nbsp;", " ")
-                                    .trim();
+                        String cleanDescription = originalDescription
+                                .replaceAll("<[^>]+>", "")
+                                .replaceAll("&nbsp;", " ")
+                                .trim();
 
+                        try {
                             // Traducir al español usando NVIDIA AI
                             translatedDescription = nvidiaAiService.translateChunk(
                                     cleanDescription, "en", "es", List.of());

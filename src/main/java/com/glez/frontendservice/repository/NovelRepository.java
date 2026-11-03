@@ -35,6 +35,9 @@ public interface NovelRepository extends JpaRepository<Novel, UUID> {
         String getRemotePath();
     }
 
+    /** Novelas con descripción de AniList no nula (para traducción). */
+    List<Novel> findAllByAnilistDescriptionIsNotNull();
+
     // ------------------------------------------------------------------
     // Pass-completion flags: each catalog-sync pass flags the novel folders
     // it fully lists, later incremental runs skip them, and a new cycle
