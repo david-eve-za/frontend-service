@@ -82,6 +82,30 @@ public class NovelsCatalogQueryService {
         return new PagedModel<>(new PageImpl<>(content, novels.getPageable(), novels.getTotalElements()));
     }
 
+    /** Obtiene todas las novelas sin paginación (para enriquecimiento masivo). */
+    @Transactional(readOnly = true)
+    public List<NovelSummaryDto> findAllNovels() {
+        List<Novel> novels = novelRepository.findAll(Sort.by(Sort.Order.asc("title")));
+
+        // Conteo de volúmenes en una sola consulta agrupada
+        Map<UUID, Long> volumeCounts = volumeRepository
+                .countByNovelIds(novels.stream().map(Novel::getId).toList()).stream()
+                .collect(Collectors.toMap(NovelVolumeCount::getNovelId,
+                        NovelVolumeCount::getVolumeCount));
+
+        return novels.stream()
+                .map(novel -> toSummary(novel, volumeCounts.getOrDefault(novel.getId(), 0L)))
+                .collect(Collectors.toList());
+    }
+
+    /** Obtiene todos los IDs de novelas (para enriquecimiento masivo). */
+    @Transactional(readOnly = true)
+    public List<UUID> findAllNovelIds() {
+        return novelRepository.findAllByOrderByTitleAsc().stream()
+                .map(Novel::getId)
+                .collect(Collectors.toList());
+    }
+
     /** Busca una novela por ID (para endpoint de detalle). */
     @Transactional(readOnly = true)
     public Optional<Novel> findById(UUID novelId) {

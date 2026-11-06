@@ -158,9 +158,19 @@ export class NovelsManagerService {
     return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-batch-anilist`, novelIds);
   }
 
-  /** Traduce todas las sinopsis/descripciones de AniList al español. */
+  /*** Traduce todas las sinopsis/descripciones de AniList al español. */
   translateAllSynopses(): Observable<TranslatedSynopsis[]> {
     return this.http.get<TranslatedSynopsis[]>(`${this.API_URL}/novels/translate-synopses`);
+  }
+
+  /** Obtiene todos los IDs de novelas. */
+  getAllNovelIds(): Observable<string[]> {
+    return this.http.get<string[]>(`${this.API_URL}/novels/ids`);
+  }
+
+  /** Enriquece todas las novelas con AniList. */
+  enrichAllNovels(): Observable<BatchAnilistEnrichmentResult> {
+    return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-all-anilist`, {});
   }
 
   /**
