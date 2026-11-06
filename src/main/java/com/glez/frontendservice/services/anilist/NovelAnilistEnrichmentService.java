@@ -107,6 +107,19 @@ public class NovelAnilistEnrichmentService {
     }
 
     /**
+     * Enriquece TODAS las novelas que no tengan datos de AniList.
+     * Útil para botón "Enriquecer todo".
+     */
+    @Transactional
+    public BatchEnrichmentResult enrichAll() {
+        List<String> allNovelIds = novelRepository.findAllByOrderByTitleAsc().stream()
+                .map(Novel::getId)
+                .map(UUID::toString)
+                .collect(Collectors.toList());
+        return enrichBatch(allNovelIds);
+    }
+
+    /**
      * Busca en AniList sin guardar, solo para preview.
      */
     public List<AniListSearchPreview> previewSearch(String title) {

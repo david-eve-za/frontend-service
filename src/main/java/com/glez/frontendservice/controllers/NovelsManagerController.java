@@ -55,6 +55,18 @@ public class NovelsManagerController {
         return ResponseEntity.ok(catalogQueryService.findNovels(search, page, size));
     }
 
+    @Operation(summary = "Obtiene todas las novelas sin paginación (para enriquecimiento masivo)")
+    @GetMapping("/catalog/all")
+    public ResponseEntity<List<NovelSummaryDto>> getAllNovels() {
+        return ResponseEntity.ok(catalogQueryService.findAllNovels());
+    }
+
+    @Operation(summary = "Obtiene todos los IDs de novelas (para enriquecimiento masivo)")
+    @GetMapping("/novels/ids")
+    public ResponseEntity<List<UUID>> getAllNovelIds() {
+        return ResponseEntity.ok(catalogQueryService.findAllNovelIds());
+    }
+
     @Operation(summary = "Obtiene una novela individual por ID (con campos AniList)")
     @ApiResponses(@ApiResponse(responseCode = "200", description = "Novela con campos de enriquecimiento AniList"))
     @GetMapping("/novels/{novelId}")
@@ -87,6 +99,14 @@ public class NovelsManagerController {
     @PostMapping("/novels/enrich-batch-anilist")
     public ResponseEntity<NovelAnilistEnrichmentService.BatchEnrichmentResult> enrichBatchAnilist(@RequestBody List<String> novelIds) {
         var result = anilistEnrichmentService.enrichBatch(novelIds);
+        return ResponseEntity.ok(result);
+    }
+
+    @Operation(summary = "Enriquece TODAS las novelas con AniList")
+    @ApiResponses(@ApiResponse(responseCode = "200", description = "Resultado del enriquecimiento masivo"))
+    @PostMapping("/novels/enrich-all-anilist")
+    public ResponseEntity<NovelAnilistEnrichmentService.BatchEnrichmentResult> enrichAllAnilist() {
+        var result = anilistEnrichmentService.enrichAll();
         return ResponseEntity.ok(result);
     }
 

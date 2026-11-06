@@ -644,9 +644,10 @@ export class NovelsManager implements OnInit, OnDestroy {
     this.cdr.markForCheck();
 
     try {
-      const novelIds = this.novels.map(n => n.id);
+      // Obtener TODOS los IDs de novelas (no solo la página actual)
+      const allNovelIds = await firstValueFrom(this.novelsService.getAllNovelIds());
       const result = await firstValueFrom(
-        this.novelsService.enrichBatchAnilist(novelIds)
+        this.novelsService.enrichAllNovels()
       );
       // Recargar la página completa
       await this.loadCatalog({ first: this.currentPage * this.pageSize, rows: this.pageSize });
