@@ -3,6 +3,7 @@ package com.glez.frontendservice.crawler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.glez.frontendservice.config.CrawlerProperties;
+import com.glez.frontendservice.config.RateLimiterConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -10,6 +11,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -22,6 +24,7 @@ import java.util.regex.Pattern;
  * Source: https://novelaenespanol.com/
  * Pattern: WordPress category-based novel site using REST API.
  * Uses WebClient for HTTP, Jackson for JSON parsing.
+ * Respects per-source rate limits via shared TokenBucketRateLimiter.
  */
 @Slf4j
 @Component
@@ -35,17 +38,30 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
     private final CrawlerProperties.SourceConfig config;
-    private final int rateLimitRpm;
+    private final RateLimiter rateLimiter;
 
-    public NovelaEnEspanolCrawler(WebClient.Builder webClientBuilder, ObjectMapper objectMapper, CrawlerProperties properties) {
+    public NovelaEnEspanolCrawler(WebClient.Builder webClientBuilder, 
+                                   ObjectMapper objectMapper,
+                                   CrawlerProperties properties,
+                                   RateLimiterConfig.RateLimiterProvider rateLimiterProvider) {
         this.objectMapper = objectMapper;
         this.config = properties.getSources().get("novelaenespanol");
-        this.rateLimitRpm = config != null ? config.getRateLimitRpm() : 60;
+        this.rateLimiter = rateLimiterProvider.getLimiter("novelaenespanol");
         
         this.webClient = webClientBuilder
                 .baseUrl("https://novelaenespanol.com")
                 .defaultHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 .build();
+    }
+
+    /**
+     * Acquire rate limiter permit before making an HTTP request.
+     * Blocks until permit available or timeout (5 min).
+     */
+    private void acquirePermit() {
+        if (!rateLimiter.acquire(Duration.ofMinutes(5))) {
+            log.warn("Rate limiter timeout for {}", getSourceId());
+        }
     }
 
     @Override
@@ -75,7 +91,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
 
     @Override
     public int getRateLimitRpm() {
-        return rateLimitRpm;
+        return rateLimiter.getRateLimitRpm();
     }
 
     @Override
@@ -88,6 +104,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         log.debug("Searching NovelaEnEspanol for: {}", query);
         
         try {
+            acquirePermit();
             String searchUrl = UriComponentsBuilder.fromPath(API_ROOT + "/categories")
                     .queryParam("search", query)
                     .queryParam("per_page", 20)
@@ -138,6 +155,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         log.debug("Getting novel details from NovelaEnEspanol: {}", novelUrl);
         
         try {
+            acquirePermit();
             String slug = extractSlug(novelUrl);
             if (slug == null) {
                 throw new CrawlerException(getSourceId(), "getNovelDetails", "Invalid novel URL: " + novelUrl);
@@ -165,6 +183,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
             int categoryId = category.hasNonNull("id") ? category.get("id").asInt() : 0;
             
             // Also get the HTML page for cover and additional tags
+            acquirePermit();
             String html = webClient.get()
                     .uri(novelUrl)
                     .retrieve()
@@ -237,6 +256,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         log.debug("Getting chapters for novel: {}", novelUrl);
         
         try {
+            acquirePermit();
             String slug = extractSlug(novelUrl);
             if (slug == null) {
                 throw new CrawlerException(getSourceId(), "getChapters", "Invalid novel URL: " + novelUrl);
@@ -274,6 +294,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         log.debug("Getting chapter content: {}", chapterUrl);
         
         try {
+            acquirePermit();
             String html = webClient.get()
                     .uri(chapterUrl)
                     .retrieve()
@@ -319,6 +340,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
     @Override
     public boolean isHealthy() {
         try {
+            acquirePermit();
             String html = webClient.get()
                     .uri("/")
                     .retrieve()
@@ -354,6 +376,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         
         try {
             while (true) {
+                acquirePermit();
                 String postsUrl = UriComponentsBuilder.fromPath(API_ROOT + "/posts")
                         .queryParam("categories", categoryId)
                         .queryParam("per_page", POSTS_PER_PAGE)

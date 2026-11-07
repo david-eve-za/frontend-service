@@ -19,6 +19,8 @@
         <java.version>21</java.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.compilerArgs>--enable-preview</maven.compiler.compilerArgs>
         <lombok.version>1.18.48</lombok.version>
         <spring-ai.version>2.0.1</spring-ai.version>
         <springdoc.version>2.7.0</springdoc.version>
@@ -56,12 +58,6 @@
             <artifactId>spring-boot-devtools</artifactId>
             <scope>runtime</scope>
             <optional>true</optional>
-        </dependency>
-
-        <!-- Spring security -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
         <!-- Spring Boot Test starter for unit and integration testing -->
@@ -169,6 +165,13 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-text</artifactId>
             <version>1.13.0</version>
+        </dependency>
+
+        <!-- Apache Commons Compress for ZIP/EPUB handling (explicit version to avoid conflicts with Tika) -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-compress</artifactId>
+            <version>1.26.1</version>
         </dependency>
 
         <!-- Jackson JSON processing (explicit for crawlers) -->
@@ -344,7 +347,28 @@
                     </filesets>
                 </configuration>
             </plugin>
-        <!-- Flyway Migration Plugin -->
+        <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.15.0</version>
+                <configuration>
+                    <release>21</release>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/*IntegrationTest.java</exclude>
+                        <exclude>**/*WireMockTest.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <!-- Flyway Migration Plugin -->
             <plugin>
                 <groupId>org.flywaydb</groupId>
                 <artifactId>flyway-maven-plugin</artifactId>

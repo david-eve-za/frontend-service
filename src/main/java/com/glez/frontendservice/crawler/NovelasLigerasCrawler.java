@@ -1,6 +1,7 @@
 package com.glez.frontendservice.crawler;
 
 import com.glez.frontendservice.config.CrawlerProperties;
+import com.glez.frontendservice.config.RateLimiterConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -12,6 +13,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -25,6 +27,7 @@ import java.util.regex.Pattern;
  * Source: https://novelasligeras.net/
  * Pattern: WooCommerce product catalog with custom chapter listing.
  * Uses Jsoup for HTML parsing, WebClient for HTTP.
+ * Respects per-source rate limits via shared TokenBucketRateLimiter.
  */
 @Slf4j
 @Component
@@ -41,16 +44,28 @@ public class NovelasLigerasCrawler implements SourceCrawler {
 
     private final WebClient webClient;
     private final CrawlerProperties.SourceConfig config;
-    private final int rateLimitRpm;
+    private final RateLimiter rateLimiter;
 
-    public NovelasLigerasCrawler(WebClient.Builder webClientBuilder, CrawlerProperties properties) {
+    public NovelasLigerasCrawler(WebClient.Builder webClientBuilder, 
+                                  CrawlerProperties properties,
+                                  RateLimiterConfig.RateLimiterProvider rateLimiterProvider) {
         this.config = properties.getSources().get("novelasligeras");
-        this.rateLimitRpm = config != null ? config.getRateLimitRpm() : 30;
+        this.rateLimiter = rateLimiterProvider.getLimiter("novelasligeras");
         
         this.webClient = webClientBuilder
                 .baseUrl("https://novelasligeras.net")
                 .defaultHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 .build();
+    }
+
+    /**
+     * Acquire rate limiter permit before making an HTTP request.
+     * Blocks until permit available or timeout (5 min).
+     */
+    private void acquirePermit() {
+        if (!rateLimiter.acquire(Duration.ofMinutes(5))) {
+            log.warn("Rate limiter timeout for {}", getSourceId());
+        }
     }
 
     @Override
@@ -80,7 +95,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
 
     @Override
     public int getRateLimitRpm() {
-        return rateLimitRpm;
+        return rateLimiter.getRateLimitRpm();
     }
 
     @Override
@@ -95,6 +110,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         String searchUrl = String.format(SEARCH_URL_TEMPLATE, encodedQuery);
         
         try {
+            acquirePermit();
             String html = webClient.get()
                     .uri(searchUrl)
                     .retrieve()
@@ -143,6 +159,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         log.debug("Getting novel details from NovelasLigeras: {}", novelUrl);
         
         try {
+            acquirePermit();
             String html = webClient.get()
                     .uri(novelUrl)
                     .retrieve()
@@ -217,6 +234,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         log.debug("Getting chapters for novel: {}", novelUrl);
         
         try {
+            acquirePermit();
             String html = webClient.get()
                     .uri(novelUrl)
                     .retrieve()
@@ -237,6 +255,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         log.debug("Getting chapter content: {}", chapterUrl);
         
         try {
+            acquirePermit();
             String html = webClient.get()
                     .uri(chapterUrl)
                     .retrieve()
@@ -283,6 +302,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
     @Override
     public boolean isHealthy() {
         try {
+            acquirePermit();
             String html = webClient.get()
                     .uri("/")
                     .retrieve()

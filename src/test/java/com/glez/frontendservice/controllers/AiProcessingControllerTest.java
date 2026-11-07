@@ -2,26 +2,35 @@ package com.glez.frontendservice.controllers;
 
 import com.glez.frontendservice.dtos.AiProcessRequest;
 import com.glez.frontendservice.dtos.AiProcessResponse;
+import com.glez.frontendservice.services.AiProcessingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("AiProcessingController Tests")
 class AiProcessingControllerTest {
 
+    @Mock
+    private AiProcessingService aiProcessingService;
+
+    @InjectMocks
     private AiProcessingController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new AiProcessingController();
+        // Controller is initialized via @InjectMocks
     }
 
     @Nested
@@ -68,12 +77,19 @@ class AiProcessingControllerTest {
             request.setText("Test input text");
             request.setParameters(java.util.Map.of("model", "test-model"));
 
+            AiProcessResponse mockResponse = new AiProcessResponse(
+                    "Test input text",
+                    "AI processed result",
+                    "test-model"
+            );
+            when(aiProcessingService.processData(any(AiProcessRequest.class))).thenReturn(mockResponse);
+
             ResponseEntity<AiProcessResponse> response = controller.processData(request);
 
             assertEquals(HttpStatus.OK, response.getStatusCode());
             assertNotNull(response.getBody());
             assertEquals("Test input text", response.getBody().getOriginalText());
-            assertEquals("Processed: Test input text", response.getBody().getProcessedResult());
+            assertEquals("AI processed result", response.getBody().getProcessedResult());
             assertEquals("test-model", response.getBody().getModelUsed());
         }
 
@@ -83,6 +99,13 @@ class AiProcessingControllerTest {
             AiProcessRequest request = new AiProcessRequest();
             request.setText("Test input text");
             request.setParameters(null);
+
+            AiProcessResponse mockResponse = new AiProcessResponse(
+                    "Test input text",
+                    "AI processed result",
+                    "default-model"
+            );
+            when(aiProcessingService.processData(any(AiProcessRequest.class))).thenReturn(mockResponse);
 
             ResponseEntity<AiProcessResponse> response = controller.processData(request);
 
@@ -98,6 +121,13 @@ class AiProcessingControllerTest {
             request.setText("Test input text");
             request.setParameters(java.util.Map.of("other", "value"));
 
+            AiProcessResponse mockResponse = new AiProcessResponse(
+                    "Test input text",
+                    "AI processed result",
+                    null
+            );
+            when(aiProcessingService.processData(any(AiProcessRequest.class))).thenReturn(mockResponse);
+
             ResponseEntity<AiProcessResponse> response = controller.processData(request);
 
             assertEquals(HttpStatus.OK, response.getStatusCode());
@@ -110,6 +140,13 @@ class AiProcessingControllerTest {
         void processData_withWhitespaceText_processesText() {
             AiProcessRequest request = new AiProcessRequest();
             request.setText("   ");
+
+            AiProcessResponse mockResponse = new AiProcessResponse(
+                    "   ",
+                    "AI processed result",
+                    "default-model"
+            );
+            when(aiProcessingService.processData(any(AiProcessRequest.class))).thenReturn(mockResponse);
 
             ResponseEntity<AiProcessResponse> response = controller.processData(request);
 

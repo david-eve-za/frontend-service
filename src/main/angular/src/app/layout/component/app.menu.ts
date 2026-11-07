@@ -5,15 +5,32 @@ import { MenuItem } from 'primeng/api';
 import { Subject, takeUntil } from 'rxjs';
 import { AppMenuitem } from './app.menuitem';
 import { SourcesService, SourceMetadata } from '../../pages/book-translator/novels-manager/sources.service';
+import { SourceSubmenu } from './source-submenu';
 
 @Component({
     selector: 'app-menu',
     standalone: true,
-    imports: [CommonModule, AppMenuitem, RouterModule],
-    template: `<ul class="layout-menu">
+    imports: [CommonModule, AppMenuitem, RouterModule, SourceSubmenu],
+    template: `
+    <ul class="layout-menu">
         @for (item of model; track item.label) {
             @if (!item.separator) {
-                <li app-menuitem [item]="item" [root]="true"></li>
+                <!-- Special handling for "Gestor de Novelas" with dynamic source submenu -->
+                @if (item.label === 'Gestor de Novelas' && sourcesLoaded && availableSources.length > 0) {
+                    <li class="layout-root-menuitem">
+                        <app-source-submenu
+                            [sources]="availableSources"
+                            [selectedSourceId]="selectedSourceId"
+                            [loading]="loadingSources"
+                            [error]="sourcesError"
+                            [healthStatus]="healthStatus"
+                            (sourceSelected)="onSourceSelected($event)"
+                            (retryLoad)="loadDynamicSources()">
+                        </app-source-submenu>
+                    </li>
+                } @else {
+                    <li app-menuitem [item]="item" [root]="true"></li>
+                }
             } @else {
                 <li class="menu-separator"></li>
             }
@@ -23,6 +40,14 @@ import { SourcesService, SourceMetadata } from '../../pages/book-translator/nove
 export class AppMenu implements OnInit, OnDestroy {
     model: MenuItem[] = [];
     private destroy$ = new Subject<void>();
+
+    // Source submenu state
+    availableSources: SourceMetadata[] = [];
+    selectedSourceId = 'elscione';
+    sourcesLoaded = false;
+    loadingSources = false;
+    sourcesError: string | null = null;
+    healthStatus: { healthy: boolean; details: string } = { healthy: true, details: 'Todas saludables' };
 
     constructor(private sourcesService: SourcesService) {}
 
@@ -113,6 +138,11 @@ export class AppMenu implements OnInit, OnDestroy {
                 ],
             },
             {
+                label: 'Procesador IA',
+                icon: 'pi pi-fw pi-cpu',
+                routerLink: ['/ai-processor'],
+            },
+            {
                 label: 'Primeros Pasos',
                 items: [
                     {
@@ -131,53 +161,61 @@ export class AppMenu implements OnInit, OnDestroy {
         ];
     }
 
-    private loadDynamicSources() {
+    loadDynamicSources(): void {
+        this.loadingSources = true;
+        this.sourcesError = null;
+        
         this.sourcesService.getAllSources()
             .pipe(takeUntil(this.destroy$))
             .subscribe({
                 next: (sources) => {
-                    this.updateSourcesSubmenu(sources);
+                    this.availableSources = sources;
+                    this.sourcesLoaded = true;
+                    this.loadingSources = false;
+                    this.loadHealthStatus();
                 },
                 error: (err) => {
                     console.warn('Failed to load sources for menu:', err);
-                    // Keep static elscione as fallback
+                    this.sourcesError = 'No se pudieron cargar las fuentes';
+                    this.loadingSources = false;
+                    // Fallback to elscione
+                    this.availableSources = [{ 
+                        id: 'elscione', 
+                        displayName: 'Elscione', 
+                        icon: 'pi pi-book', 
+                        language: 'es', 
+                        baseUrl: '', 
+                        rateLimitRpm: 20, 
+                        requiresLogin: false, 
+                        enabled: true, 
+                        tags: [] 
+                    }];
+                    this.sourcesLoaded = true;
+                    this.loadHealthStatus();
                 }
             });
     }
 
-    private updateSourcesSubmenu(sources: SourceMetadata[]) {
-        const bookTranslatorMenu = this.model.find(m => m.label === 'Traductor de Libros');
-        if (!bookTranslatorMenu || !bookTranslatorMenu.items) {
-            return;
-        }
+    private loadHealthStatus() {
+        this.sourcesService.healthCheckAll()
+            .pipe(takeUntil(this.destroy$))
+            .subscribe({
+                next: (status) => {
+                    const healthy = Object.values(status).every(v => v === true);
+                    const unhealthy = Object.entries(status).filter(([, v]) => !v).map(([k]) => k);
+                    this.healthStatus = {
+                        healthy,
+                        details: healthy ? 'Todas saludables' : `${unhealthy.length} con problemas: ${unhealthy.join(', ')}`
+                    };
+                },
+                error: () => {
+                    this.healthStatus = { healthy: false, details: 'Error al verificar salud' };
+                }
+            });
+    }
 
-        // Find the "Gestor de Novelas" item
-        const novelsManagerIndex = bookTranslatorMenu.items.findIndex(
-            item => item.label === 'Gestor de Novelas'
-        );
-
-        if (novelsManagerIndex === -1) {
-            return;
-        }
-
-        // Create source submenu items
-        const sourceItems: MenuItem[] = sources
-            .filter(s => s.enabled)
-            .map(source => ({
-                label: source.displayName,
-                icon: source.icon,
-                routerLink: ['/book-translator/novels'],
-                queryParams: { source: source.id },
-                // Add language flag as tooltip/badge
-                title: `${source.displayName} (${source.language.toUpperCase()})`
-            }));
-
-        // If we have sources, replace the simple routerLink with a submenu
-        if (sourceItems.length > 0) {
-            const novelsManagerItem = bookTranslatorMenu.items[novelsManagerIndex];
-            novelsManagerItem.items = sourceItems;
-            // Remove direct routerLink since it's now a submenu
-            delete novelsManagerItem.routerLink;
-        }
+    onSourceSelected(source: SourceMetadata) {
+        this.selectedSourceId = source.id;
+        // Navigation is handled by the SourceSubmenu component via router
     }
 }

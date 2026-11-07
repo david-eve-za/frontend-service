@@ -9,7 +9,6 @@ import java.util.Map;
  * Configuration properties for crawler system.
  * Bound to {@code app.crawler} in application.yml.
  */
-@Component
 @ConfigurationProperties(prefix = "app.crawler")
 public class CrawlerProperties {
 
