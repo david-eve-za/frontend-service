@@ -1,8 +1,10 @@
-import { Component } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { MenuItem } from 'primeng/api';
+import { Subject, takeUntil } from 'rxjs';
 import { AppMenuitem } from './app.menuitem';
+import { SourcesService, SourceMetadata } from '../../pages/book-translator/novels-manager/sources.service';
 
 @Component({
     selector: 'app-menu',
@@ -18,10 +20,23 @@ import { AppMenuitem } from './app.menuitem';
         }
     </ul> `,
 })
-export class AppMenu {
+export class AppMenu implements OnInit, OnDestroy {
     model: MenuItem[] = [];
+    private destroy$ = new Subject<void>();
+
+    constructor(private sourcesService: SourcesService) {}
 
     ngOnInit() {
+        this.initializeStaticMenu();
+        this.loadDynamicSources();
+    }
+
+    ngOnDestroy() {
+        this.destroy$.next();
+        this.destroy$.complete();
+    }
+
+    private initializeStaticMenu() {
         this.model = [
             {
                 label: 'Inicio',
@@ -32,7 +47,6 @@ export class AppMenu {
                         routerLink: ['/'],
                     },
                     {
-                        // Visor de logs en tiempo real (stream SSE del backend).
                         label: 'Visor de Logs',
                         icon: 'pi pi-fw pi-eye',
                         routerLink: ['/logs'],
@@ -50,19 +64,16 @@ export class AppMenu {
                         routerLink: ['/book-translator/upload'],
                     },
                     {
-                        // Editor de bloques semánticos del pipeline.
                         label: 'Dividir Texto',
                         icon: 'pi pi-fw pi-list',
                         routerLink: ['/pipeline/split-text'],
                     },
                     {
-                        // Comparación en paralelo original/traducción por chunk.
                         label: 'Traducir Libro',
                         icon: 'pi pi-fw pi-language',
                         routerLink: ['/pipeline/translate-book'],
                     },
                     {
-                        // Opciones de generación de audio del pipeline.
                         label: 'Generar Audiolibro',
                         icon: 'pi pi-fw pi-volume-up',
                         routerLink: ['/pipeline/generate-audiobook'],
@@ -78,7 +89,6 @@ export class AppMenu {
                         routerLink: ['/book-translator/history'],
                     },
                     {
-                        // Curación de términos con traducción establecida.
                         label: 'Glosario de Traducción',
                         icon: 'pi pi-fw pi-spell-check',
                         routerLink: ['/book-translator/glossary'],
@@ -96,9 +106,6 @@ export class AppMenu {
                 path: '/video-stories',
                 items: [
                     {
-                        // Única herramienta de la sección: la timeline completa
-                        // encadenada por la IA (1 historia → 2 diseños →
-                        // 3 assets → 4 escenas → 5 video opcional).
                         label: 'Asistente de Historias',
                         icon: 'pi pi-fw pi-magic',
                         routerLink: ['/video-stories/wizard'],
@@ -122,5 +129,55 @@ export class AppMenu {
                 ],
             },
         ];
+    }
+
+    private loadDynamicSources() {
+        this.sourcesService.getAllSources()
+            .pipe(takeUntil(this.destroy$))
+            .subscribe({
+                next: (sources) => {
+                    this.updateSourcesSubmenu(sources);
+                },
+                error: (err) => {
+                    console.warn('Failed to load sources for menu:', err);
+                    // Keep static elscione as fallback
+                }
+            });
+    }
+
+    private updateSourcesSubmenu(sources: SourceMetadata[]) {
+        const bookTranslatorMenu = this.model.find(m => m.label === 'Traductor de Libros');
+        if (!bookTranslatorMenu || !bookTranslatorMenu.items) {
+            return;
+        }
+
+        // Find the "Gestor de Novelas" item
+        const novelsManagerIndex = bookTranslatorMenu.items.findIndex(
+            item => item.label === 'Gestor de Novelas'
+        );
+
+        if (novelsManagerIndex === -1) {
+            return;
+        }
+
+        // Create source submenu items
+        const sourceItems: MenuItem[] = sources
+            .filter(s => s.enabled)
+            .map(source => ({
+                label: source.displayName,
+                icon: source.icon,
+                routerLink: ['/book-translator/novels'],
+                queryParams: { source: source.id },
+                // Add language flag as tooltip/badge
+                title: `${source.displayName} (${source.language.toUpperCase()})`
+            }));
+
+        // If we have sources, replace the simple routerLink with a submenu
+        if (sourceItems.length > 0) {
+            const novelsManagerItem = bookTranslatorMenu.items[novelsManagerIndex];
+            novelsManagerItem.items = sourceItems;
+            // Remove direct routerLink since it's now a submenu
+            delete novelsManagerItem.routerLink;
+        }
     }
 }
