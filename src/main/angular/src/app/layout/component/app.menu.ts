@@ -5,28 +5,28 @@ import { MenuItem } from 'primeng/api';
 import { Subject, takeUntil } from 'rxjs';
 import { AppMenuitem } from './app.menuitem';
 import { SourcesService, SourceMetadata } from '../../pages/book-translator/novels-manager/sources.service';
-import { SourceSubmenu } from './source-submenu';
+import { SourceSelectorComponent } from './source-selector';
 
 @Component({
     selector: 'app-menu',
     standalone: true,
-    imports: [CommonModule, AppMenuitem, RouterModule, SourceSubmenu],
+    imports: [CommonModule, AppMenuitem, RouterModule, SourceSelectorComponent],
     template: `
     <ul class="layout-menu">
         @for (item of model; track item.label) {
             @if (!item.separator) {
-                <!-- Special handling for "Gestor de Novelas" with dynamic source submenu -->
+                <!-- Special handling for "Gestor de Novelas" with dynamic source selector -->
                 @if (item.label === 'Gestor de Novelas' && sourcesLoaded && availableSources.length > 0) {
                     <li class="layout-root-menuitem">
-                        <app-source-submenu
+                        <app-source-selector
                             [sources]="availableSources"
                             [selectedSourceId]="selectedSourceId"
                             [loading]="loadingSources"
                             [error]="sourcesError"
                             [healthStatus]="healthStatus"
                             (sourceSelected)="onSourceSelected($event)"
-                            (retryLoad)="loadDynamicSources()">
-                        </app-source-submenu>
+                            (retry)="loadDynamicSources()">
+                        </app-source-selector>
                     </li>
                 } @else {
                     <li app-menuitem [item]="item" [root]="true"></li>
@@ -41,7 +41,7 @@ export class AppMenu implements OnInit, OnDestroy {
     model: MenuItem[] = [];
     private destroy$ = new Subject<void>();
 
-    // Source submenu state
+    // Source selector state
     availableSources: SourceMetadata[] = [];
     selectedSourceId = 'elscione';
     sourcesLoaded = false;

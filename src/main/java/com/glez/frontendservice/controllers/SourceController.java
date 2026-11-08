@@ -62,10 +62,10 @@ public class SourceController {
     }
 
     /**
-     * Search novels in a specific source.
+     * Search novels in a specific source with pagination.
      */
     @Operation(summary = "Search novels in a source",
-            description = "Search for novels by query string in the specified source.")
+            description = "Search for novels by query string in the specified source with pagination support.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Search results",
                     content = @Content(mediaType = "application/json",
@@ -74,14 +74,28 @@ public class SourceController {
             @ApiResponse(responseCode = "500", description = "Search failed")
     })
     @GetMapping("/{sourceId}/search")
-    public ResponseEntity<List<NovelSearchResult>> search(
+    public ResponseEntity<PageResponse<NovelSearchResult>> search(
             @Parameter(description = "Source identifier") @PathVariable String sourceId,
-            @Parameter(description = "Search query") @RequestParam String q) {
+            @Parameter(description = "Search query") @RequestParam String q,
+            @Parameter(description = "Page number (0-based)") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "50") int size) {
         
         SourceCrawler crawler = sourceRegistry.requireSource(sourceId);
         try {
-            List<NovelSearchResult> results = crawler.search(q);
-            return ResponseEntity.ok(results);
+            List<NovelSearchResult> allResults = crawler.search(q);
+            
+            // Apply pagination
+            int start = page * size;
+            int end = Math.min(start + size, allResults.size());
+            
+            if (start >= allResults.size()) {
+                return ResponseEntity.ok(new PageResponse<>(List.of(), page, size, allResults.size(), 0));
+            }
+            
+            List<NovelSearchResult> pagedResults = allResults.subList(start, end);
+            int totalPages = (int) Math.ceil((double) allResults.size() / size);
+            
+            return ResponseEntity.ok(new PageResponse<>(pagedResults, page, size, allResults.size(), totalPages));
         } catch (CrawlerException e) {
             log.error("Search failed for source {}: {}", sourceId, e.getMessage());
             return ResponseEntity.internalServerError().build();
@@ -171,6 +185,36 @@ public class SourceController {
         SourceCrawler crawler = sourceRegistry.requireSource(sourceId);
         try {
             String chapterUrl = chapterId.startsWith("http") ? chapterId : crawler.getBaseUrl() + chapterId;
+            ChapterContent content = crawler.getChapterContent(chapterUrl);
+            return ResponseEntity.ok(content);
+        } catch (CrawlerException e) {
+            if (e.getMessage().contains("not found") || e.getMessage().contains("404")) {
+                return ResponseEntity.notFound().build();
+            }
+            log.error("Get chapter content failed for source {}: {}", sourceId, e.getMessage());
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    /**
+     * Get chapter content from a specific source (query param version to avoid path matching issues).
+     */
+    @Operation(summary = "Get chapter content from a source (query param)",
+            description = "Retrieve full chapter HTML content and images using query parameter for chapter URL.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Chapter content",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ChapterContent.class))),
+            @ApiResponse(responseCode = "404", description = "Source or chapter not found"),
+            @ApiResponse(responseCode = "500", description = "Retrieval failed")
+    })
+    @GetMapping("/{sourceId}/chapter-content")
+    public ResponseEntity<ChapterContent> getChapterContent(
+            @Parameter(description = "Source identifier") @PathVariable String sourceId,
+            @Parameter(description = "Chapter URL") @RequestParam String chapterUrl) {
+
+        SourceCrawler crawler = sourceRegistry.requireSource(sourceId);
+        try {
             ChapterContent content = crawler.getChapterContent(chapterUrl);
             return ResponseEntity.ok(content);
         } catch (CrawlerException e) {

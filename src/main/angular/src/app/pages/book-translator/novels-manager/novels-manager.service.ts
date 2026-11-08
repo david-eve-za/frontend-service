@@ -117,16 +117,16 @@ export class NovelsManagerService {
       // Use new multi-source API
       let params = new HttpParams().set('page', page).set('size', size);
       if (search && search.trim()) {
-        params = params.set('search', search.trim());
+        params = params.set('q', search.trim());
       }
       return this.http.get<any>(`${this.SOURCES_API_URL}/${sourceId}/search`, { params }).pipe(
         map(response => ({
           content: response.content || response,
           page: {
-            number: page,
-            size: size,
-            totalElements: response.totalElements || response.length || 0,
-            totalPages: response.totalPages || 1
+            number: response.page ?? page,
+            size: response.size ?? size,
+            totalElements: response.totalElements ?? 0,
+            totalPages: response.totalPages ?? 1
           },
           links: response.links || []
         }))
