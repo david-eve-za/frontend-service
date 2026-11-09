@@ -1,11 +1,11 @@
 package com.glez.frontendservice.model.source;
 
+import com.glez.frontendservice.model.source.converter.ChapterImageInfoListToStringConverter;
+import com.glez.frontendservice.model.source.converter.MapToStringConverter;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -51,8 +51,8 @@ public class SourceChapterContent {
     @Column(name = "compression", nullable = false, length = 10)
     private String compression = "gzip";
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb", nullable = false)
+    @Column(columnDefinition = "TEXT", nullable = false)
+    @Convert(converter = ChapterImageInfoListToStringConverter.class)
     private List<ChapterImageInfo> images = new ArrayList<>();
 
     @Column(length = 50)
@@ -64,8 +64,8 @@ public class SourceChapterContent {
     @Column(name = "crawler_tier", length = 20)
     private String crawlerTier;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb", nullable = false)
+    @Column(columnDefinition = "TEXT", nullable = false)
+    @Convert(converter = MapToStringConverter.class)
     private Map<String, Object> extra = new HashMap<>();
 
     @Column(name = "created_at", nullable = false, updatable = false)

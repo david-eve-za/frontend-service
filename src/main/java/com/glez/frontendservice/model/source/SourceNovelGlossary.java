@@ -1,11 +1,10 @@
 package com.glez.frontendservice.model.source;
 
+import com.glez.frontendservice.model.source.converter.MapToStringConverter;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -36,8 +35,8 @@ public class SourceNovelGlossary {
     @Column(name = "language", nullable = false, length = 2)
     private String language;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb", nullable = false)
+    @Column(columnDefinition = "TEXT", nullable = false)
+    @Convert(converter = MapToStringConverter.class)
     private Map<String, String> terms = new HashMap<>();
 
     @Column(nullable = false)
