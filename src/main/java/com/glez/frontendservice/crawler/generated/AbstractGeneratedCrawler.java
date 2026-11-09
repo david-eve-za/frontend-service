@@ -10,11 +10,22 @@ import com.glez.frontendservice.crawler.SourceCrawler;
 import com.glez.frontendservice.crawler.VolumeInfo;
 import com.glez.frontendservice.config.CrawlerProperties;
 import com.glez.frontendservice.config.RateLimiterConfig;
+import com.glez.frontendservice.model.source.SourceChapter;
+import com.glez.frontendservice.model.source.SourceChapterContent;
+import com.glez.frontendservice.model.source.SourceNovel;
+import com.glez.frontendservice.model.source.SourceVolume;
+import com.glez.frontendservice.model.source.dto.CrawlerChapterModel;
+import com.glez.frontendservice.model.source.dto.CrawlerNovelModel;
+import com.glez.frontendservice.model.source.dto.CrawlerVolumeModel;
+import com.glez.frontendservice.services.source.LanguageDetectionService;
+import com.glez.frontendservice.services.source.SourceCrawlerPersistenceService;
+import com.glez.frontendservice.services.source.SourceFileStorageService;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.net.URI;
@@ -88,6 +99,17 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
         // Sobrescribir en subclase para añadir reglas específicas
     }
 
+    // ─── Persistence Integration ───
+
+    @Autowired
+    protected SourceCrawlerPersistenceService persistence;
+
+    @Autowired
+    protected SourceFileStorageService fileStorage;
+
+    @Autowired
+    protected LanguageDetectionService langDetector;
+
     // ─── SourceCrawler interface ───
 
     @Override
@@ -127,8 +149,21 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
 
     @Override
     public List<NovelSearchResult> search(String query) {
-        log.debug("Searching {} for: {}", getSourceId(), query);
-        
+        // 1. Si query vacío o null → listar de BD (paginado, primeras 50)
+        if (query == null || query.isBlank()) {
+            return persistence.findAllBySource(getSourceId(), 0, 50)
+                    .stream().map(this::toSearchResult).toList();
+        }
+
+        // 2. Buscar en BD primero (full-text en title/author/synopsis)
+        List<SourceNovel> cached = persistence.searchBySource(getSourceId(), query, 0, 50);
+        if (!cached.isEmpty()) {
+            log.debug("Found {} cached results for query '{}' in {}", cached.size(), query, getSourceId());
+            return cached.stream().map(this::toSearchResult).toList();
+        }
+
+        // 3. Fallback: HTTP crawl + persistir
+        log.debug("Cache miss for query '{}', falling back to HTTP crawl", query);
         String searchUrl = buildSearchUrl(query);
         if (searchUrl == null) {
             log.warn("No search URL template for {}", getSourceId());
@@ -148,7 +183,14 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
             }
 
             Document doc = Jsoup.parse(html);
-            return parseSearchResults(doc, query);
+            List<NovelSearchResult> results = parseSearchResults(doc, query);
+
+            // 4. Para cada resultado, obtener/persistir detalle completo (async en background)
+            return results.stream().map(r -> {
+                SourceNovel novel = persistence.getOrFetchNovel(getSourceId(), r.url(), 
+                        url -> parseNovelDetailsToModel(Jsoup.parse(fetchHtml(url)), url));
+                return toSearchResult(novel);
+            }).toList();
 
         } catch (Exception e) {
             log.error("Search failed for query '{}': {}", query, e.getMessage());
@@ -232,8 +274,15 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
 
     @Override
     public NovelDetail getNovelDetails(String novelUrl) {
-        log.debug("Getting novel details from {}: {}", getSourceId(), novelUrl);
+        // 1. Buscar en BD por URL hash
+        SourceNovel cached = persistence.findBySourceIdAndNovelUrl(getSourceId(), novelUrl).orElse(null);
+        if (cached != null) {
+            log.debug("Cache hit for novel details: {}", novelUrl);
+            return toNovelDetail(cached);
+        }
 
+        // 2. Fallback: HTTP crawl + persist
+        log.debug("Cache miss for novel details: {}, crawling...", novelUrl);
         try {
             acquirePermit();
             String html = webClient.get()
@@ -243,7 +292,11 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
                     .block();
 
             Document doc = Jsoup.parse(html);
-            return parseNovelDetails(doc, novelUrl);
+            CrawlerNovelModel model = parseNovelDetailsToModel(doc, novelUrl);
+
+            // Persistir con upsert
+            SourceNovel novel = persistence.upsertNovel(getSourceId(), model, getVersion(), getTier());
+            return toNovelDetail(novel);
 
         } catch (Exception e) {
             log.error("Get novel details failed for {}: {}", novelUrl, e.getMessage());
@@ -251,28 +304,49 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
         }
     }
 
-    protected NovelDetail parseNovelDetails(Document doc, String novelUrl) {
+    /**
+     * Extrae detalles de novela y retorna modelo para persistencia.
+     * Sobrescribe parseNovelDetails para devolver modelo en lugar de DTO.
+     */
+    protected CrawlerNovelModel parseNovelDetailsToModel(Document doc, String novelUrl) {
         String title = extractNovelTitle(doc);
         String author = extractNovelAuthor(doc);
         String cover = extractNovelCover(doc);
         String synopsis = extractNovelSynopsis(doc);
         List<String> tags = extractNovelTags(doc);
-        List<VolumeInfo> volumes = extractVolumesAndChapters(doc, novelUrl);
+        List<VolumeInfo> volumeInfos = extractVolumesAndChapters(doc, novelUrl);
 
-        return new NovelDetail(
-                title,
-                author,
-                cover,
-                synopsis,
-                tags,
-                volumes,
-                language,
-                false, // isMtl
-                false, // isManga
-                novelUrl,
-                "Ongoing",
-                ""
-        );
+        // Convertir VolumeInfo a CrawlerVolumeModel (using builder pattern)
+        List<CrawlerVolumeModel> volumes = new ArrayList<>();
+        int chapterSerial = 0;
+        for (VolumeInfo vi : volumeInfos) {
+            List<CrawlerChapterModel> chapters = new ArrayList<>();
+            for (ChapterInfo ci : vi.chapters()) {
+                chapterSerial++;
+                chapters.add(CrawlerChapterModel.builder()
+                        .id(chapterSerial)
+                        .title(ci.title())
+                        .url(ci.url())
+                        .volume(vi.id())
+                        .build());
+            }
+            volumes.add(CrawlerVolumeModel.builder()
+                    .id(vi.id())
+                    .title(vi.title())
+                    .chapters(chapters)
+                    .build());
+        }
+
+        return CrawlerNovelModel.builder()
+                .url(novelUrl)
+                .title(title)
+                .author(author)
+                .coverUrl(cover)
+                .synopsis(synopsis)
+                .language(language)
+                .tags(tags)
+                .volumes(volumes)
+                .build();
     }
 
     protected String extractNovelTitle(Document doc) {
@@ -338,8 +412,18 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
 
     @Override
     public List<ChapterInfo> getChapters(String novelUrl) {
-        log.debug("Getting chapters for novel: {}", novelUrl);
+        // 1. Buscar novela en BD
+        SourceNovel novel = persistence.findBySourceIdAndNovelUrl(getSourceId(), novelUrl).orElse(null);
+        if (novel != null) {
+            log.debug("Cache hit for chapters: {}", novelUrl);
+            return novel.getVolumes().stream()
+                    .flatMap(v -> v.getChapters().stream()
+                            .map(c -> new ChapterInfo(c.getSerial(), c.getTitle(), c.getUrl(), v.getSerial())))
+                    .toList();
+        }
 
+        // 2. Fallback: HTTP crawl (para compatibilidad con novelas no persistidas aún)
+        log.debug("Cache miss for chapters: {}, crawling...", novelUrl);
         try {
             acquirePermit();
             String html = webClient.get()
@@ -391,8 +475,29 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
 
     @Override
     public ChapterContent getChapterContent(String chapterUrl) {
-        log.debug("Getting chapter content: {}", chapterUrl);
+        // 1. Buscar capítulo por URL en BD
+        SourceChapter chapter = persistence.findChapterByUrl(getSourceId(), chapterUrl).orElse(null);
+        if (chapter != null) {
+            // Verificar caché de contenido en filesystem
+            SourceChapterContent content = persistence.findChapterContentById(chapter.getId()).orElse(null);
+            boolean stale = content == null || persistence.isStale(content, getVersion(), getTier());
 
+            if (!stale && fileStorage.exists(content.getContentFile())) {
+                log.debug("Cache hit for chapter content: {}", chapterUrl);
+                String html = fileStorage.loadText(content.getContentFile());
+                List<String> images = content.getImages().stream()
+                        .map(SourceChapterContent.ChapterImageInfo::getUrl)
+                        .toList();
+                return ChapterContent.success(html, images);
+            }
+
+            // 3. Cache miss o stale: re-crawl + persistir
+            log.debug("Cache miss/stale for chapter content: {}, re-crawling...", chapterUrl);
+            return crawlAndSaveChapterContent(chapter);
+        }
+
+        // 4. Capítulo no en BD: HTTP crawl + persistir (para compatibilidad)
+        log.debug("Chapter not in DB: {}, crawling...", chapterUrl);
         try {
             acquirePermit();
             String html = webClient.get()
@@ -410,6 +515,45 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
         }
     }
 
+    /**
+     * Crawlea y guarda contenido de capítulo en filesystem + BD.
+     */
+    protected ChapterContent crawlAndSaveChapterContent(SourceChapter chapter) {
+        try {
+            acquirePermit();
+            String html = webClient.get()
+                    .uri(chapter.getUrl())
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+
+            Document doc = Jsoup.parse(html);
+            ChapterContent result = parseChapterContent(doc, chapter.getUrl());
+
+            if (result.success()) {
+                // Guardar en filesystem + BD
+                persistence.saveChapterContent(
+                        chapter.getId(),
+                        result.html(),
+                        result.images(),
+                        "jsoup",
+                        getVersion(),
+                        getTier()
+                );
+            }
+
+            return result;
+
+        } catch (Exception e) {
+            log.error("Crawl and save chapter failed for {}: {}", chapter.getUrl(), e.getMessage());
+            return ChapterContent.failure("Failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Parsea el contenido del capítulo desde el documento HTML.
+     * Método protegido para ser sobrescrito por subclases.
+     */
     protected ChapterContent parseChapterContent(Document doc, String chapterUrl) {
         String contentSel = getChapterContentSelector();
         Element contentEl = contentSel != null ? doc.selectFirst(contentSel) : null;
@@ -485,6 +629,23 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
         }
     }
 
+    /**
+     * Obtiene HTML de una URL (para uso interno en persistencia).
+     */
+    protected String fetchHtml(String url) {
+        try {
+            acquirePermit();
+            return webClient.get()
+                    .uri(url)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+        } catch (Exception e) {
+            log.error("Failed to fetch HTML from {}: {}", url, e.getMessage());
+            throw new CrawlerException(getSourceId(), "fetchHtml", "Failed: " + e.getMessage(), e);
+        }
+    }
+
     // ─── Helpers ───
 
     protected void acquirePermit() {
@@ -517,5 +678,75 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
         }
 
         return volumes;
+    }
+
+    // ─── Persistence DTO Conversion Helpers ───
+
+    /**
+     * Convierte SourceNovel persistido a NovelSearchResult para API.
+     */
+    protected NovelSearchResult toSearchResult(SourceNovel novel) {
+        String info = String.format("%d vols · %d chs · %s",
+                novel.getVolumeCount(),
+                novel.getChapterCount(),
+                novel.getStatus() != null ? novel.getStatus() : "Unknown");
+        return new NovelSearchResult(
+                novel.getTitle(),
+                novel.getNovelUrl(),
+                info,
+                novel.getCoverUrl() != null ? novel.getCoverUrl() : "",
+                novel.getNovelUrl()
+        );
+    }
+
+    /**
+     * Convierte SourceNovel persistido a NovelDetail para API.
+     */
+    protected NovelDetail toNovelDetail(SourceNovel novel) {
+        List<VolumeInfo> volumes = novel.getVolumes().stream()
+                .map(v -> new VolumeInfo(
+                        v.getSerial(),
+                        v.getTitle(),
+                        v.getChapters().stream()
+                                .map(c -> new ChapterInfo(
+                                        c.getSerial(),
+                                        c.getTitle(),
+                                        c.getUrl(),
+                                        v.getSerial()
+                                ))
+                                .toList()
+                ))
+                .toList();
+
+        return new NovelDetail(
+                novel.getTitle(),
+                novel.getAuthor() != null ? novel.getAuthor() : "",
+                novel.getCoverUrl() != null ? novel.getCoverUrl() : "",
+                novel.getSynopsis() != null ? novel.getSynopsis() : "",
+                novel.getTags() != null ? novel.getTags() : List.of(),
+                volumes,
+                novel.getLanguage() != null ? novel.getLanguage() : "en",
+                novel.isMtl(),
+                novel.isManga(),
+                novel.getNovelUrl(),
+                novel.getStatus() != null ? novel.getStatus() : "Unknown",
+                novel.getLastUpdate() != null ? novel.getLastUpdate() : ""
+        );
+    }
+
+    /**
+     * Obtiene versión del crawler para versionado de caché.
+     * Sobrescribir en subclase si se tiene versión específica.
+     */
+    protected String getVersion() {
+        return "1.0.0";
+    }
+
+    /**
+     * Obtiene tier del crawler para versionado de caché.
+     * Sobrescribir en subclase si se tiene tier específico.
+     */
+    protected String getTier() {
+        return "generated";
     }
 }

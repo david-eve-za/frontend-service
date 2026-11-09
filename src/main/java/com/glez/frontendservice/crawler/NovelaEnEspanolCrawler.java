@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.glez.frontendservice.config.CrawlerProperties;
 import com.glez.frontendservice.config.RateLimiterConfig;
+import com.glez.frontendservice.crawler.CloudflareBypassService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -36,22 +37,100 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
     private static final int POSTS_PER_PAGE = 100;
 
     private final WebClient webClient;
+    private final CloudflareBypassService cloudflareBypassService;
     private final ObjectMapper objectMapper;
     private final CrawlerProperties.SourceConfig config;
     private final RateLimiter rateLimiter;
 
-    public NovelaEnEspanolCrawler(WebClient.Builder webClientBuilder, 
+    public NovelaEnEspanolCrawler(WebClient.Builder webClientBuilder,
                                    ObjectMapper objectMapper,
                                    CrawlerProperties properties,
-                                   RateLimiterConfig.RateLimiterProvider rateLimiterProvider) {
+                                   RateLimiterConfig.RateLimiterProvider rateLimiterProvider,
+                                   CloudflareBypassService cloudflareBypassService) {
         this.objectMapper = objectMapper;
         this.config = properties.getSources().get("novelaenespanol");
         this.rateLimiter = rateLimiterProvider.getLimiter("novelaenespanol");
+        this.cloudflareBypassService = cloudflareBypassService;
         
         this.webClient = webClientBuilder
                 .baseUrl("https://novelaenespanol.com")
                 .defaultHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(10 * 1024 * 1024))
                 .build();
+    }
+
+    // ==================== Cloudflare Bypass Helpers ====================
+
+    /**
+     * Fetch HTML using Cloudflare bypass service if enabled for this source.
+     */
+    private String fetchWithCloudflareBypass(String url) {
+        // Check if Cloudflare bypass is configured for this source
+        if (config != null && config.isCloudflareBypass()) {
+            String baseUrl = getBaseUrl();
+            CloudflareBypassService.CloudflareSession session = cloudflareBypassService.getSession(baseUrl);
+            if (session != null) {
+                log.debug("Using Cloudflare bypass session for {}", baseUrl);
+                String clearanceCookie = extractClearanceCookie(session.cookies());
+                try {
+                    acquirePermit();
+                    return webClient.get()
+                            .uri(url)
+                            .header("User-Agent", session.userAgent())
+                            .cookie("cf_clearance", clearanceCookie)
+                            .retrieve()
+                            .bodyToMono(String.class)
+                            .block();
+                } catch (Exception e) {
+                    log.warn("Cloudflare bypass request failed, invalidating session: {}", e.getMessage());
+                    cloudflareBypassService.invalidateSession(baseUrl);
+                    throw e;
+                }
+            }
+        }
+        
+        // Fallback to direct request
+        acquirePermit();
+        return webClient.get()
+                .uri(url)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+    }
+
+    /**
+     * Extract cf_clearance cookie from cookie string.
+     */
+    private String extractClearanceCookie(String cookies) {
+        if (cookies == null || cookies.isBlank()) {
+            return null;
+        }
+        
+        // Try to parse as JSON array first (FlareSolverr returns array of cookie objects)
+        if (cookies.trim().startsWith("[")) {
+            try {
+                com.fasterxml.jackson.databind.JsonNode cookiesArray = objectMapper.readTree(cookies);
+                if (cookiesArray.isArray()) {
+                    for (com.fasterxml.jackson.databind.JsonNode cookie : cookiesArray) {
+                        if (cookie.has("name") && "cf_clearance".equals(cookie.get("name").asText()) 
+                                && cookie.has("value")) {
+                            return cookie.get("value").asText();
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Failed to parse cookies as JSON array: {}", e.getMessage());
+            }
+        }
+        
+        // Fallback: try semicolon-separated format
+        for (String cookie : cookies.split(";")) {
+            cookie = cookie.trim();
+            if (cookie.startsWith("cf_clearance=")) {
+                return cookie.substring("cf_clearance=".length());
+            }
+        }
+        return null;
     }
 
     /**
@@ -101,10 +180,14 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
 
     @Override
     public List<NovelSearchResult> search(String query) {
+        // Handle null or empty query - return empty results
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        
         log.debug("Searching NovelaEnEspanol for: {}", query);
         
         try {
-            acquirePermit();
             String searchUrl = UriComponentsBuilder.fromPath(API_ROOT + "/categories")
                     .queryParam("search", query)
                     .queryParam("per_page", 20)
@@ -112,11 +195,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
                     .build()
                     .toUriString();
             
-            String json = webClient.get()
-                    .uri(searchUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String json = fetchWithCloudflareBypass(searchUrl);
             
             JsonNode results = objectMapper.readTree(json);
             List<NovelSearchResult> searchResults = new ArrayList<>();
@@ -155,7 +234,6 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         log.debug("Getting novel details from NovelaEnEspanol: {}", novelUrl);
         
         try {
-            acquirePermit();
             String slug = extractSlug(novelUrl);
             if (slug == null) {
                 throw new CrawlerException(getSourceId(), "getNovelDetails", "Invalid novel URL: " + novelUrl);
@@ -168,11 +246,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
                     .build()
                     .toUriString();
             
-            String categoryJson = webClient.get()
-                    .uri(categoryUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String categoryJson = fetchWithCloudflareBypass(categoryUrl);
             
             JsonNode categories = objectMapper.readTree(categoryJson);
             if (categories.isEmpty()) {
@@ -183,12 +257,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
             int categoryId = category.hasNonNull("id") ? category.get("id").asInt() : 0;
             
             // Also get the HTML page for cover and additional tags
-            acquirePermit();
-            String html = webClient.get()
-                    .uri(novelUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass(novelUrl);
             
             org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(html);
             
@@ -256,7 +325,6 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         log.debug("Getting chapters for novel: {}", novelUrl);
         
         try {
-            acquirePermit();
             String slug = extractSlug(novelUrl);
             if (slug == null) {
                 throw new CrawlerException(getSourceId(), "getChapters", "Invalid novel URL: " + novelUrl);
@@ -269,11 +337,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
                     .build()
                     .toUriString();
             
-            String categoryJson = webClient.get()
-                    .uri(categoryUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String categoryJson = fetchWithCloudflareBypass(categoryUrl);
             
             JsonNode categories = objectMapper.readTree(categoryJson);
             if (categories.isEmpty()) {
@@ -294,12 +358,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
         log.debug("Getting chapter content: {}", chapterUrl);
         
         try {
-            acquirePermit();
-            String html = webClient.get()
-                    .uri(chapterUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass(chapterUrl);
             
             org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(html);
             
@@ -340,12 +399,7 @@ public class NovelaEnEspanolCrawler implements SourceCrawler {
     @Override
     public boolean isHealthy() {
         try {
-            acquirePermit();
-            String html = webClient.get()
-                    .uri("/")
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass("/");
             return html != null && html.contains("novelaenespanol");
         } catch (Exception e) {
             log.warn("NovelaEnEspanol health check failed: {}", e.getMessage());

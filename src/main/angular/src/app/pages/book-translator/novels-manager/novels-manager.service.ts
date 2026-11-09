@@ -9,6 +9,8 @@ export interface NovelSummary {
   category: string | null;
   volumeCount: number;
   lastSyncedAt: string | null;
+  // --- Carátula nativa del crawler (para fuentes no-Elscione) ---
+  coverUrl: string | null;
   // --- Campos de enriquecimiento AniList ---
   anilistId: number | null;
   anilistCoverUrl: string | null;
@@ -22,6 +24,13 @@ export interface NovelSummary {
   anilistCountryOfOrigin: string | null;
   anilistVolumes: number | null;
   anilistChapters: number | null;
+  // --- Metadatos adicionales del crawler ---
+  author: string | null;
+  status: string | null;
+  language: string | null;
+  isMtl: boolean;
+  isManga: boolean;
+  sourceId: string | null;
 }
 
 /** Shape of a serialized Spring Data page (GET /api/novels-manager/catalog). */
@@ -120,16 +129,48 @@ export class NovelsManagerService {
         params = params.set('q', search.trim());
       }
       return this.http.get<any>(`${this.SOURCES_API_URL}/${sourceId}/search`, { params }).pipe(
-        map(response => ({
-          content: response.content || response,
-          page: {
-            number: response.page ?? page,
-            size: response.size ?? size,
-            totalElements: response.totalElements ?? 0,
-            totalPages: response.totalPages ?? 1
-          },
-          links: response.links || []
-        }))
+        map(response => {
+          const rawContent = response.content || response;
+          // Map NovelSearchResult[] to NovelSummary[] with crawler's cover image
+          const content = (Array.isArray(rawContent) ? rawContent : []).map((item: any) => ({
+            id: item.sourceNovelId || item.url,
+            title: item.title,
+            category: null,
+            volumeCount: 0,
+            lastSyncedAt: null,
+            coverUrl: item.coverUrl || null, // Crawler's native cover
+            // AniList fields (will be populated after enrichment)
+            anilistId: null,
+            anilistCoverUrl: null,
+            anilistDescription: null,
+            anilistGenres: null,
+            anilistTags: null,
+            anilistStatus: null,
+            anilistAverageScore: null,
+            anilistFormat: null,
+            anilistSource: null,
+            anilistCountryOfOrigin: null,
+            anilistVolumes: null,
+            anilistChapters: null,
+            // Additional crawler metadata
+            author: null,
+            status: item.info || null,
+            language: null,
+            isMtl: false,
+            isManga: false,
+            sourceId: sourceId
+          }));
+          return {
+            content,
+            page: {
+              number: response.page ?? page,
+              size: response.size ?? size,
+              totalElements: response.totalElements ?? 0,
+              totalPages: response.totalPages ?? 1
+            },
+            links: response.links || []
+          };
+        })
       );
     }
 
@@ -152,10 +193,39 @@ export class NovelsManagerService {
     );
   }
 
-  /** Obtiene una novela individual por ID (con campos AniList). */
+  /** Obtiene una novela individual por ID (con campos AniList y metadatos del crawler). */
   getNovel(novelId: string, sourceId?: string): Observable<NovelSummary> {
     if (sourceId) {
-      return this.http.get<NovelSummary>(`${this.SOURCES_API_URL}/${sourceId}/novels/${novelId}`);
+      return this.http.get<any>(`${this.SOURCES_API_URL}/${sourceId}/novels/${novelId}`).pipe(
+        map((detail: any) => ({
+          id: detail.sourceNovelId || novelId,
+          title: detail.title,
+          category: null,
+          volumeCount: detail.volumes?.length || 0,
+          lastSyncedAt: null,
+          coverUrl: detail.coverUrl || null, // Crawler's native cover
+          // AniList fields
+          anilistId: detail.anilistId || null,
+          anilistCoverUrl: detail.anilistCoverUrl || null,
+          anilistDescription: detail.anilistDescription || detail.synopsis || null,
+          anilistGenres: detail.anilistGenres || detail.tags || null,
+          anilistTags: detail.anilistTags || null,
+          anilistStatus: detail.anilistStatus || detail.status || null,
+          anilistAverageScore: detail.anilistAverageScore || null,
+          anilistFormat: detail.anilistFormat || null,
+          anilistSource: detail.anilistSource || null,
+          anilistCountryOfOrigin: detail.anilistCountryOfOrigin || null,
+          anilistVolumes: detail.anilistVolumes || null,
+          anilistChapters: detail.anilistChapters || null,
+          // Additional crawler metadata
+          author: detail.author || null,
+          status: detail.status || null,
+          language: detail.language || null,
+          isMtl: detail.isMtl || false,
+          isManga: detail.isManga || false,
+          sourceId: sourceId
+        }))
+      );
     }
     return this.http.get<NovelSummary>(`${this.API_URL}/novels/${novelId}`);
   }

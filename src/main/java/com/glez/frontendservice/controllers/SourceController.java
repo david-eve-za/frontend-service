@@ -76,7 +76,7 @@ public class SourceController {
     @GetMapping("/{sourceId}/search")
     public ResponseEntity<PageResponse<NovelSearchResult>> search(
             @Parameter(description = "Source identifier") @PathVariable String sourceId,
-            @Parameter(description = "Search query") @RequestParam String q,
+            @Parameter(description = "Search query (optional)") @RequestParam(required = false) String q,
             @Parameter(description = "Page number (0-based)") @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "Page size") @RequestParam(defaultValue = "50") int size) {
         
@@ -197,6 +197,36 @@ public class SourceController {
     }
 
     /**
+     * Get chapter list for a novel from a specific source (query param version).
+     */
+    @Operation(summary = "Get chapters for a novel from a source (query param)",
+            description = "Retrieve chapter list using query parameter for novel URL.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Chapter list",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ChapterInfo.class))),
+            @ApiResponse(responseCode = "404", description = "Source or novel not found"),
+            @ApiResponse(responseCode = "500", description = "Retrieval failed")
+    })
+    @GetMapping("/{sourceId}/chapters")
+    public ResponseEntity<List<ChapterInfo>> getChaptersByQuery(
+            @Parameter(description = "Source identifier") @PathVariable String sourceId,
+            @Parameter(description = "Novel URL") @RequestParam String novelUrl) {
+
+        SourceCrawler crawler = sourceRegistry.requireSource(sourceId);
+        try {
+            List<ChapterInfo> chapters = crawler.getChapters(novelUrl);
+            return ResponseEntity.ok(chapters);
+        } catch (CrawlerException e) {
+            if (e.getMessage().contains("not found") || e.getMessage().contains("404")) {
+                return ResponseEntity.notFound().build();
+            }
+            log.error("Get chapters failed for source {}: {}", sourceId, e.getMessage());
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    /**
      * Get chapter content from a specific source (query param version to avoid path matching issues).
      */
     @Operation(summary = "Get chapter content from a source (query param)",
@@ -222,6 +252,36 @@ public class SourceController {
                 return ResponseEntity.notFound().build();
             }
             log.error("Get chapter content failed for source {}: {}", sourceId, e.getMessage());
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    /**
+     * Get novel details from a specific source (query param version to avoid path matching issues).
+     */
+    @Operation(summary = "Get novel details from a source (query param)",
+            description = "Retrieve full novel metadata including volumes and chapters using query parameter for novel URL.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Novel details",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = NovelDetail.class))),
+            @ApiResponse(responseCode = "404", description = "Source or novel not found"),
+            @ApiResponse(responseCode = "500", description = "Retrieval failed")
+    })
+    @GetMapping("/{sourceId}/novel-details")
+    public ResponseEntity<NovelDetail> getNovelDetails(
+            @Parameter(description = "Source identifier") @PathVariable String sourceId,
+            @Parameter(description = "Novel URL") @RequestParam String novelUrl) {
+
+        SourceCrawler crawler = sourceRegistry.requireSource(sourceId);
+        try {
+            NovelDetail detail = crawler.getNovelDetails(novelUrl);
+            return ResponseEntity.ok(detail);
+        } catch (CrawlerException e) {
+            if (e.getMessage().contains("not found") || e.getMessage().contains("404")) {
+                return ResponseEntity.notFound().build();
+            }
+            log.error("Get novel details failed for source {}: {}", sourceId, e.getMessage());
             return ResponseEntity.internalServerError().build();
         }
     }

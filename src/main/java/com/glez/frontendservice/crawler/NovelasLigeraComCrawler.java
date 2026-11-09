@@ -95,6 +95,11 @@ public class NovelasLigeraComCrawler implements SourceCrawler {
 
     @Override
     public List<NovelSearchResult> search(String query) {
+        // Handle null or empty query - return empty results
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        
         log.debug("Searching NovelasLigera.com for: {}", query);
         
         try {

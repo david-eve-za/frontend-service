@@ -94,6 +94,11 @@ public class FoxaholicCrawler implements SourceCrawler {
 
     @Override
     public List<NovelSearchResult> search(String query) {
+        // Handle null or empty query - return empty results
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        
         log.debug("Searching Foxaholic for: {}", query);
         
         try {

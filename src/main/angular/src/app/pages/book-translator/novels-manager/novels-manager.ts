@@ -19,7 +19,8 @@ import { PaginatorModule } from 'primeng/paginator'
 import { DrawerModule } from 'primeng/drawer';
 import { SelectModule } from 'primeng/select';
 import { MessageService } from 'primeng/api';
-import { firstValueFrom, Subscription, timer, switchMap, takeWhile } from 'rxjs';
+import { firstValueFrom, Subscription, timer, switchMap, takeWhile, retry, catchError, of } from 'rxjs';
+import { delay } from 'rxjs/operators';
 import {
   CatalogSyncStatus,
   CatalogVolume,
@@ -577,13 +578,45 @@ export class NovelsManager implements OnInit, OnDestroy {
   }
 
   /**
-   * Refresco periódico (10s) mientras la sincronización corre.
+   * Refresco periódico mientras la sincronización corre.
+   * Usa 30s en lugar de 10s para reducir carga, pausa si la pestaña no está visible,
+   * y tiene backoff exponencial en caso de errores.
    */
   private startCatalogAutoRefresh(): void {
     this.catalogSyncSubscription?.unsubscribe();
-    this.catalogSyncSubscription = timer(10000, 10000)
-      .pipe(takeWhile(() => this.syncStatus?.state === 'RUNNING'))
-      .subscribe(() => this.refreshCatalogDuringSync());
+    
+    const baseIntervalMs = 30000; // 30 segundos en lugar de 10
+    let currentIntervalMs = baseIntervalMs;
+    let consecutiveErrors = 0;
+    const maxIntervalMs = 120000; // Máximo 2 minutos
+    
+    const isVisible = () => !document.hidden;
+    
+    const poll = () => {
+      if (!isVisible() || this.syncStatus?.state !== 'RUNNING') {
+        // Si la pestaña no está visible o el sync terminó, reprogramar para más tarde
+        setTimeout(poll, 5000);
+        return;
+      }
+      
+      this.refreshCatalogDuringSync()
+        .then(() => {
+          // Éxito: resetear backoff
+          consecutiveErrors = 0;
+          currentIntervalMs = baseIntervalMs;
+          setTimeout(poll, currentIntervalMs);
+        })
+        .catch(() => {
+          // Error: backoff exponencial
+          consecutiveErrors++;
+          currentIntervalMs = Math.min(currentIntervalMs * 2, maxIntervalMs);
+          console.warn(`Catalog refresh failed, backing off to ${currentIntervalMs}ms (attempt ${consecutiveErrors})`);
+          setTimeout(poll, currentIntervalMs);
+        });
+    };
+    
+    // Iniciar primera poll
+    poll();
   }
 
   private async refreshCatalogDuringSync(): Promise<void> {
@@ -892,17 +925,46 @@ export class NovelsManager implements OnInit, OnDestroy {
 
   private pollSync(): void {
     this.syncPollSubscription?.unsubscribe();
-    this.syncPollSubscription = this.novelsService.pollSyncStatus(2000).subscribe({
-      next: status => {
-        const finished = status.state !== 'RUNNING';
-        this.syncStatus = status;
-        if (finished) {
-          this.catalogSyncSubscription?.unsubscribe();
-          this.reloadCatalog(false);
-        }
-        this.cdr.markForCheck();
+    // 5 segundos en lugar de 2 para reducir carga
+    const intervalMs = 5000;
+    let consecutiveErrors = 0;
+    const baseIntervalMs = intervalMs;
+    const maxIntervalMs = 30000;
+    
+    const isVisible = () => !document.hidden;
+    
+    const poll = () => {
+      if (!isVisible()) {
+        // Si la pestaña no está visible, esperar y volver a comprobar
+        setTimeout(poll, 5000);
+        return;
       }
-    });
+      
+      this.novelsService.getSyncStatus().subscribe({
+        next: status => {
+          consecutiveErrors = 0; // Reset on success
+          const finished = status.state !== 'RUNNING';
+          this.syncStatus = status;
+          if (finished) {
+            this.catalogSyncSubscription?.unsubscribe();
+            this.reloadCatalog(false);
+          }
+          this.cdr.markForCheck();
+          
+          if (!finished) {
+            setTimeout(poll, baseIntervalMs);
+          }
+        },
+        error: () => {
+          consecutiveErrors++;
+          const backoffMs = Math.min(baseIntervalMs * Math.pow(2, consecutiveErrors - 1), maxIntervalMs);
+          console.warn(`Sync status poll failed, backing off to ${backoffMs}ms`);
+          setTimeout(poll, backoffMs);
+        }
+      });
+    };
+    
+    poll();
   }
 
   syncRunning(): boolean { return this.syncStatus?.state === 'RUNNING'; }

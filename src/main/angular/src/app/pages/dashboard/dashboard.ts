@@ -11,8 +11,9 @@ import { ProcessesWidget } from './components/processeswidget';
 import { ElscioneActivityWidget } from './components/elscioneactivitywidget';
 import { WizardActivityWidget } from './components/wizardactivitywidget';
 
-/** Frecuencia de sondeo de /api/dashboard/stats. */
-const REFRESH_INTERVAL_MS = 15000;
+/** Frecuencia de sondeo de /api/dashboard/stats (30s en lugar de 15s). */
+const REFRESH_INTERVAL_MS = 30000;
+const MAX_BACKOFF_MS = 120000; // 2 minutos máximo
 
 @Component({
     selector: 'app-dashboard',
@@ -96,7 +97,9 @@ const REFRESH_INTERVAL_MS = 15000;
 })
 export class Dashboard implements OnInit, OnDestroy {
     private readonly dashboardService = inject(DashboardService);
-    private subscription?: Subscription;
+    private pollingTimeout?: number;
+    private consecutiveErrors = 0;
+    private isPolling = false;
 
     stats = signal<DashboardStats | null>(null);
     loading = signal(false);
@@ -104,29 +107,69 @@ export class Dashboard implements OnInit, OnDestroy {
     lastUpdated = signal<Date | null>(null);
 
     ngOnInit() {
-        // timer(0, ...) dispara la primera carga inmediata y luego sondea.
-        this.subscription = timer(0, REFRESH_INTERVAL_MS).subscribe(() =>
-            this.refresh(),
-        );
+        this.startPolling();
     }
 
     ngOnDestroy() {
-        this.subscription?.unsubscribe();
+        this.stopPolling();
     }
 
-    refresh() {
+    private startPolling(): void {
+        this.isPolling = true;
+        const poll = () => {
+            if (!this.isPolling || document.hidden) {
+                // Si la pestaña no está visible, esperar y volver a comprobar
+                this.pollingTimeout = window.setTimeout(poll, 5000);
+                return;
+            }
+            
+            this.refresh()
+                .then(() => {
+                    // Éxito: resetear backoff
+                    this.consecutiveErrors = 0;
+                    if (this.isPolling) {
+                        this.pollingTimeout = window.setTimeout(poll, REFRESH_INTERVAL_MS);
+                    }
+                })
+                .catch(() => {
+                    // Error: backoff exponencial
+                    this.consecutiveErrors++;
+                    const backoffMs = Math.min(REFRESH_INTERVAL_MS * Math.pow(2, this.consecutiveErrors - 1), MAX_BACKOFF_MS);
+                    console.warn(`Dashboard stats poll failed, backing off to ${backoffMs}ms`);
+                    if (this.isPolling) {
+                        this.pollingTimeout = window.setTimeout(poll, backoffMs);
+                    }
+                });
+        };
+        
+        poll();
+    }
+
+    private stopPolling(): void {
+        this.isPolling = false;
+        if (this.pollingTimeout) {
+            clearTimeout(this.pollingTimeout);
+            this.pollingTimeout = undefined;
+        }
+    }
+
+    async refresh(): Promise<void> {
         this.loading.set(true);
-        this.dashboardService.getStats().subscribe({
-            next: (stats) => {
-                this.stats.set(stats);
-                this.lastUpdated.set(new Date());
-                this.error.set(null);
-                this.loading.set(false);
-            },
-            error: (err) => {
-                this.error.set(err?.message ?? 'error desconocido');
-                this.loading.set(false);
-            },
+        return new Promise((resolve) => {
+            this.dashboardService.getStats().subscribe({
+                next: (stats) => {
+                    this.stats.set(stats);
+                    this.lastUpdated.set(new Date());
+                    this.error.set(null);
+                    this.loading.set(false);
+                    resolve();
+                },
+                error: (err) => {
+                    this.error.set(err?.message ?? 'error desconocido');
+                    this.loading.set(false);
+                    resolve();
+                },
+            });
         });
     }
 }

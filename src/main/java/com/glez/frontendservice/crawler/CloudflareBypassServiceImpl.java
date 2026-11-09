@@ -56,6 +56,7 @@ public class CloudflareBypassServiceImpl extends CloudflareBypassService {
         this.webClient = webClientBuilder
                 .baseUrl(flaresolverrUrl)
                 .defaultHeader("Content-Type", "application/json")
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(10 * 1024 * 1024)) // 10MB buffer
                 .build();
         
         this.objectMapper = new ObjectMapper();
@@ -146,8 +147,8 @@ public class CloudflareBypassServiceImpl extends CloudflareBypassService {
     }
 
     /**
-     * Create a new session via FlareSolverr.
-     * Navigates twice to ensure cf_clearance cookie is captured.
+     * Create a new session via FlareSolverr using session-based approach.
+     * This works better than the two-request approach.
      */
     private CloudflareSession createSessionViaFlaresolverr(String baseUrl) {
         if (!isAvailable()) {
@@ -155,66 +156,93 @@ public class CloudflareBypassServiceImpl extends CloudflareBypassService {
             return null;
         }
         
+        String sessionName = "bypass-" + Integer.toHexString(Math.abs(baseUrl.hashCode()));
+        
         try {
-            // First navigation - solves challenge
-            Map<String, Object> request1 = Map.of(
-                    "cmd", "request.get",
-                    "url", baseUrl,
-                    "maxTimeout", flaresolverrTimeoutSeconds * 1000
+            // Step 1: Create a session
+            log.debug("Creating FlareSolverr session for {}", baseUrl);
+            Map<String, Object> createSessionRequest = Map.of(
+                    "cmd", "sessions.create",
+                    "session", sessionName
             );
             
-            JsonNode response1 = webClient.post()
-                    .uri("/v1")
-                    .body(BodyInserters.fromValue(request1))
-                    .retrieve()
-                    .bodyToMono(JsonNode.class)
-                    .block(Duration.ofSeconds(flaresolverrTimeoutSeconds));
-            
-            if (response1 == null || !response1.has("solution")) {
-                log.error("FlareSolverr first request failed: {}", response1);
+            String createResponse;
+            try {
+                createResponse = webClient.post()
+                        .uri("/v1")
+                        .body(BodyInserters.fromValue(createSessionRequest))
+                        .retrieve()
+                        .bodyToMono(String.class)
+                        .block(Duration.ofSeconds(flaresolverrTimeoutSeconds));
+            } catch (WebClientResponseException e) {
+                log.error("FlareSolverr session creation failed for {}: {} - {}", baseUrl, e.getStatusCode(), e.getResponseBodyAsString());
+                return null;
+            } catch (Exception e) {
+                log.error("FlareSolverr session creation exception for {}: {}", baseUrl, e.getMessage());
                 return null;
             }
             
-            JsonNode solution1 = response1.get("solution");
-            String userAgent = solution1.get("userAgent").asText();
-            String cookies = solution1.get("cookies").asText();
+            log.debug("FlareSolverr session created: {}", createResponse);
             
-            // Second navigation - gets complete cookie jar with cf_clearance
-            Map<String, Object> request2 = Map.of(
+            // Step 2: Make request using the session
+            Map<String, Object> request = Map.of(
                     "cmd", "request.get",
                     "url", baseUrl,
                     "maxTimeout", flaresolverrTimeoutSeconds * 1000,
-                    "session", "bypass-session"
+                    "session", sessionName
             );
             
-            JsonNode response2 = webClient.post()
-                    .uri("/v1")
-                    .body(BodyInserters.fromValue(request2))
-                    .retrieve()
-                    .bodyToMono(JsonNode.class)
-                    .block(Duration.ofSeconds(flaresolverrTimeoutSeconds));
-            
-            if (response2 == null || !response2.has("solution")) {
-                log.error("FlareSolverr second request failed: {}", response2);
+            String rawResponse;
+            try {
+                rawResponse = webClient.post()
+                        .uri("/v1")
+                        .body(BodyInserters.fromValue(request))
+                        .retrieve()
+                        .bodyToMono(String.class)
+                        .block(Duration.ofSeconds(flaresolverrTimeoutSeconds));
+            } catch (WebClientResponseException e) {
+                log.error("FlareSolverr HTTP error for {}: {} - {}", baseUrl, e.getStatusCode(), e.getResponseBodyAsString());
+                return null;
+            } catch (Exception e) {
+                log.error("FlareSolverr exception for {}: {}", baseUrl, e.getMessage());
                 return null;
             }
             
-            JsonNode solution2 = response2.get("solution");
-            String finalCookies = solution2.get("cookies").asText();
+            log.debug("Raw FlareSolverr response: {}", rawResponse);
             
-            // Extract cf_clearance cookie
-            String clearanceCookie = extractClearanceCookie(finalCookies);
-            if (clearanceCookie == null) {
-                log.warn("No cf_clearance cookie in FlareSolverr response for {}", baseUrl);
+            JsonNode response;
+            try {
+                response = objectMapper.readTree(rawResponse);
+            } catch (Exception e) {
+                log.error("Failed to parse FlareSolverr response: {}", e.getMessage());
+                return null;
             }
             
-            log.info("FlareSolverr session created for {} (clearance: {})", 
-                    baseUrl, clearanceCookie != null ? "yes" : "no");
+            if (response == null || !response.has("solution")) {
+                log.error("FlareSolverr request failed - no solution: {}", rawResponse);
+                return null;
+            }
             
-            return new CloudflareSession(userAgent, finalCookies, System.currentTimeMillis());
+            JsonNode solution = response.get("solution");
+            String userAgent = solution.get("userAgent").asText();
+            JsonNode cookiesNode = solution.get("cookies");
+            
+            // Extract cf_clearance cookie from JSON array
+            String clearanceCookie = extractClearanceCookieFromJson(cookiesNode);
+            if (clearanceCookie == null || clearanceCookie.isBlank()) {
+                log.warn("No cf_clearance cookie in FlareSolverr response for {}", baseUrl);
+                return null;
+            }
+            
+            // Convert cookies to semicolon-separated format for crawler compatibility
+            String cookiesString = convertCookiesToHeaderString(cookiesNode);
+            
+            log.info("FlareSolverr session created for {} (clearance: yes)", baseUrl);
+            
+            return new CloudflareSession(userAgent, cookiesString, System.currentTimeMillis());
             
         } catch (WebClientResponseException e) {
-            log.error("FlareSolverr HTTP error for {}: {} {}", baseUrl, e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("FlareSolverr HTTP error for {}: {} - {}", baseUrl, e.getStatusCode(), e.getResponseBodyAsString());
         } catch (Exception e) {
             log.error("FlareSolverr error for {}: {}", baseUrl, e.getMessage());
         }
@@ -223,10 +251,73 @@ public class CloudflareBypassServiceImpl extends CloudflareBypassService {
     }
 
     /**
-     * Extract cf_clearance cookie from cookie string.
+     * Extract cf_clearance cookie from JSON array of cookie objects.
+     */
+    private String extractClearanceCookieFromJson(JsonNode cookiesNode) {
+        if (cookiesNode == null || !cookiesNode.isArray()) {
+            return null;
+        }
+        
+        for (JsonNode cookie : cookiesNode) {
+            if (cookie.has("name") && "cf_clearance".equals(cookie.get("name").asText()) 
+                    && cookie.has("value")) {
+                return cookie.get("value").asText();
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Convert JSON cookie array to semicolon-separated cookie header string.
+     */
+    private String convertCookiesToHeaderString(JsonNode cookiesNode) {
+        if (cookiesNode == null || !cookiesNode.isArray()) {
+            return "";
+        }
+        
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (JsonNode cookie : cookiesNode) {
+            if (cookie.has("name") && cookie.has("value")) {
+                if (!first) {
+                    sb.append("; ");
+                }
+                sb.append(cookie.get("name").asText())
+                  .append("=")
+                  .append(cookie.get("value").asText());
+                first = false;
+            }
+        }
+        return sb.toString();
+    }
+    
+    /**
+     * Extract cf_clearance cookie from cookie string or array.
+     * @deprecated Use extractClearanceCookieFromJson instead
      */
     private String extractClearanceCookie(String cookies) {
-        if (cookies == null) return null;
+        if (cookies == null || cookies.isBlank()) {
+            return null;
+        }
+        
+        // Try to parse as JSON array first (FlareSolverr returns array of cookie objects)
+        if (cookies.trim().startsWith("[")) {
+            try {
+                JsonNode cookiesArray = objectMapper.readTree(cookies);
+                if (cookiesArray.isArray()) {
+                    for (JsonNode cookie : cookiesArray) {
+                        if (cookie.has("name") && "cf_clearance".equals(cookie.get("name").asText()) 
+                                && cookie.has("value")) {
+                            return cookie.get("value").asText();
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Failed to parse cookies as JSON array: {}", e.getMessage());
+            }
+        }
+        
+        // Fallback: try semicolon-separated format
         for (String cookie : cookies.split(";")) {
             cookie = cookie.trim();
             if (cookie.startsWith("cf_clearance=")) {

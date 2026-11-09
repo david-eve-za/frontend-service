@@ -2,6 +2,7 @@ package com.glez.frontendservice.crawler;
 
 import com.glez.frontendservice.config.CrawlerProperties;
 import com.glez.frontendservice.config.RateLimiterConfig;
+import com.glez.frontendservice.crawler.CloudflareBypassService;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -43,18 +44,22 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         "https?://[^/]+/index\\.php/\\d{4}/\\d{2}/\\d{2}/");
 
     private final WebClient webClient;
+    private final CloudflareBypassService cloudflareBypassService;
     private final CrawlerProperties.SourceConfig config;
     private final RateLimiter rateLimiter;
 
-    public NovelasLigerasCrawler(WebClient.Builder webClientBuilder, 
+    public NovelasLigerasCrawler(WebClient.Builder webClientBuilder,
                                   CrawlerProperties properties,
-                                  RateLimiterConfig.RateLimiterProvider rateLimiterProvider) {
+                                  RateLimiterConfig.RateLimiterProvider rateLimiterProvider,
+                                  CloudflareBypassService cloudflareBypassService) {
         this.config = properties.getSources().get("novelasligeras");
         this.rateLimiter = rateLimiterProvider.getLimiter("novelasligeras");
+        this.cloudflareBypassService = cloudflareBypassService;
         
         this.webClient = webClientBuilder
                 .baseUrl("https://novelasligeras.net")
                 .defaultHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(10 * 1024 * 1024))
                 .build();
     }
 
@@ -105,17 +110,18 @@ public class NovelasLigerasCrawler implements SourceCrawler {
 
     @Override
     public List<NovelSearchResult> search(String query) {
+        // Handle null or empty query - return empty results
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        
         log.debug("Searching NovelasLigeras for: {}", query);
         String encodedQuery = query.toLowerCase().replace(" ", "+");
         String searchUrl = String.format(SEARCH_URL_TEMPLATE, encodedQuery);
         
         try {
             acquirePermit();
-            String html = webClient.get()
-                    .uri(searchUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass(searchUrl);
             
             Document doc = Jsoup.parse(html);
             Elements resultElements = doc.select(".wf-cell[data-post-id]");
@@ -154,17 +160,63 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         }
     }
 
+    /**
+     * Fetch HTML using Cloudflare bypass service if enabled for this source.
+     */
+    private String fetchWithCloudflareBypass(String url) {
+        // Check if Cloudflare bypass is configured for this source
+        if (config != null && config.isCloudflareBypass()) {
+            String baseUrl = getBaseUrl();
+            CloudflareBypassService.CloudflareSession session = cloudflareBypassService.getSession(baseUrl);
+            if (session != null) {
+                log.debug("Using Cloudflare bypass session for {}", baseUrl);
+                String clearanceCookie = extractClearanceCookie(session.cookies());
+                try {
+                    acquirePermit();
+                    return webClient.get()
+                            .uri(url)
+                            .header("User-Agent", session.userAgent())
+                            .cookie("cf_clearance", clearanceCookie)
+                            .retrieve()
+                            .bodyToMono(String.class)
+                            .block();
+                } catch (Exception e) {
+                    log.warn("Cloudflare bypass request failed, invalidating session: {}", e.getMessage());
+                    cloudflareBypassService.invalidateSession(baseUrl);
+                    throw e;
+                }
+            }
+        }
+        
+        // Fallback to direct request
+        acquirePermit();
+        return webClient.get()
+                .uri(url)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+    }
+
+    /**
+     * Extract cf_clearance cookie from cookie string.
+     */
+    private String extractClearanceCookie(String cookies) {
+        if (cookies == null) return "";
+        String[] parts = cookies.split(";\\s*");
+        for (String part : parts) {
+            if (part.trim().startsWith("cf_clearance=")) {
+                return part.trim().substring("cf_clearance=".length());
+            }
+        }
+        return "";
+    }
+
     @Override
     public NovelDetail getNovelDetails(String novelUrl) {
         log.debug("Getting novel details from NovelasLigeras: {}", novelUrl);
         
         try {
-            acquirePermit();
-            String html = webClient.get()
-                    .uri(novelUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass(novelUrl);
             
             Document doc = Jsoup.parse(html);
             
@@ -234,12 +286,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         log.debug("Getting chapters for novel: {}", novelUrl);
         
         try {
-            acquirePermit();
-            String html = webClient.get()
-                    .uri(novelUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass(novelUrl);
             
             Document doc = Jsoup.parse(html);
             return extractChapters(doc, novelUrl);
@@ -255,12 +302,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
         log.debug("Getting chapter content: {}", chapterUrl);
         
         try {
-            acquirePermit();
-            String html = webClient.get()
-                    .uri(chapterUrl)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass(chapterUrl);
             
             Document doc = Jsoup.parse(html);
             
@@ -302,12 +344,7 @@ public class NovelasLigerasCrawler implements SourceCrawler {
     @Override
     public boolean isHealthy() {
         try {
-            acquirePermit();
-            String html = webClient.get()
-                    .uri("/")
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String html = fetchWithCloudflareBypass("/");
             return html != null && html.contains("novelasligeras");
         } catch (Exception e) {
             log.warn("NovelasLigeras health check failed: {}", e.getMessage());

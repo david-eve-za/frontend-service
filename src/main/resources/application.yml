@@ -222,7 +222,7 @@ app:
     session-ttl-minutes: 30
     # FlareSolverr sidecar (compose.yaml) solves the Cloudflare challenge and
     # provides the cf_clearance cookie + matching user agent. Empty disables it.
-    flaresolverr-url: http://localhost:8191/v1
+    flaresolverr-url: http://localhost:8191
     flaresolverr-timeout-seconds: 60
     # Persistent FlareSolverr session: navigates the target TWICE with the same
     # browser context and merges the cookie jars. The first navigation can
@@ -272,7 +272,7 @@ app:
     default-timeout-seconds: 30
     default-user-agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     # FlareSolverr sidecar (shared across crawlers that need it)
-    flaresolverr-url: http://localhost:8191/v1
+    flaresolverr-url: http://localhost:8191
     flaresolverr-timeout-seconds: 60
     # Anubis proof-of-work solver
     anubis-solve-enabled: true
@@ -290,31 +290,31 @@ app:
       novelasligeras:
         base-url: "https://novelasligeras.net/"
         rate-limit-rpm: 30
-        cloudflare-bypass: false
+        cloudflare-bypass: true
         enabled: true
         tags: ["spanish", "light-novel", "web"]
       novelaenespanol:
         base-url: "https://novelaenespanol.com/"
         rate-limit-rpm: 60
-        cloudflare-bypass: false
+        cloudflare-bypass: true
         enabled: true
         tags: ["spanish", "light-novel", "wordpress"]
       novelasligera_com:
         base-url: "https://novelasligera.com/"
         rate-limit-rpm: 30
-        cloudflare-bypass: false
+        cloudflare-bypass: true
         enabled: true
         tags: ["spanish", "light-novel", "elementor"]
       skynovels:
         base-url: "https://skynovels.net/"
         rate-limit-rpm: 30
-        cloudflare-bypass: false
+        cloudflare-bypass: true
         enabled: true
         tags: ["spanish", "light-novel"]
       domentranslations:
         base-url: "https://domentranslations.wordpress.com/"
         rate-limit-rpm: 60
-        cloudflare-bypass: false
+        cloudflare-bypass: true
         enabled: true
         tags: ["spanish", "light-novel", "wordpress", "translation"]
       novelupdates:
