@@ -1,7 +1,7 @@
-import { ViewChild, signal, computed } from '@angular/core';
-import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
+import { ViewChild, signal, computed, inject, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 import { FormsModule } from '@angular/forms';
 import { InputTextModule } from 'primeng/inputtext';
@@ -19,13 +19,15 @@ import { PaginatorModule } from 'primeng/paginator'
 import { DrawerModule } from 'primeng/drawer';
 import { SelectModule } from 'primeng/select';
 import { MessageService } from 'primeng/api';
-import { firstValueFrom, Subscription, timer, switchMap, takeWhile } from 'rxjs';
+import { firstValueFrom, Subscription, timer, switchMap, takeWhile, retry, catchError, of } from 'rxjs';
+import { delay } from 'rxjs/operators';
 import {
   CatalogSyncStatus,
   CatalogVolume,
   NovelSummary,
   NovelsManagerService
 } from './novels-manager.service';
+import { SourcesService, SourceMetadata } from './sources.service';
 import { NovelCardComponent } from './novel-card.component';
 import { NovelCardSkeletonComponent } from './novel-card-skeleton.component';
 import { NovelDetailDrawerComponent } from './novel-detail-drawer.component';
@@ -71,7 +73,9 @@ interface NovelRow extends NovelSummary {
         <div>
           <h2 class="text-xl font-bold text-gray-800">Gestor de Novelas</h2>
           <p class="text-sm text-gray-600 mt-1">
-            Catálogo sincronizado desde elscione con enriquecimiento AniList (carátula, descripción, géneros, puntuación).
+            Catálogo sincronizado desde 
+            <strong>{{ getCurrentSourceDisplayName() }}</strong> 
+            con enriquecimiento AniList (carátula, descripción, géneros, puntuación).
             Estado del pipeline por volumen: split, traducción y audio.
           </p>
         </div>
@@ -155,6 +159,39 @@ interface NovelRow extends NovelSummary {
             (click)="clearSearch()"
             *ngIf="searchTerm">
           </p-button>
+
+          <!-- Selector de fuente -->
+          <div class="flex items-center gap-2" *ngIf="availableSources.length > 0">
+            <label class="text-sm text-gray-600 whitespace-nowrap">Fuente:</label>
+            <p-select
+              [options]="availableSources.map(s => ({ label: s.displayName, value: s.id }))"
+              [(ngModel)]="selectedSourceId"
+              (onChange)="onSourceChange()"
+              [style]="{ width: '180px' }"
+              [disabled]="loadingSources"
+              optionLabel="label"
+              optionValue="value"
+              [showClear]="false"
+              placeholder="Seleccionar fuente"
+              [filter]="true"
+              filterBy="label">
+              <ng-template let-source pTemplate="item">
+                <div class="flex items-center gap-2">
+                  <i class="{{source.icon}}"></i>
+                  <span>{{source.label}}</span>
+                  <span class="text-xs text-gray-500 uppercase">{{availableSources.find(s => s.id === source.value)?.language}}</span>
+                </div>
+              </ng-template>
+            </p-select>
+          </div>
+          <div *ngIf="loadingSources" class="flex items-center gap-2 text-sm text-gray-500">
+            <i class="pi pi-spin pi-spinner"></i>
+            <span>Cargando fuentes...</span>
+          </div>
+          <div *ngIf="sourcesError" class="flex items-center gap-2 text-sm text-red-600">
+            <i class="pi pi-exclamation-triangle"></i>
+            <span>{{sourcesError}}</span>
+          </div>
         </div>
       </div>
 
@@ -371,6 +408,12 @@ export class NovelsManager implements OnInit, OnDestroy {
   volumeLoading: Record<string, boolean> = {};
   actionBusy: Record<string, boolean> = {};
 
+  /** Source selection */
+  availableSources: SourceMetadata[] = [];
+  selectedSourceId: string = 'elscione';
+  loadingSources = false;
+  sourcesError: string | null = null;
+
   private volumePollSubscription?: Subscription;
   private syncPollSubscription?: Subscription;
   private catalogSyncSubscription?: Subscription;
@@ -378,12 +421,16 @@ export class NovelsManager implements OnInit, OnDestroy {
 
   constructor(
     private novelsService: NovelsManagerService,
+    private sourcesService: SourcesService,
     private router: Router,
+    private route: ActivatedRoute,
     private messageService: MessageService,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit(): void {
+    this.loadSources();
+    this.readSourceFromRoute();
     this.loadSyncStatus();
   }
 
@@ -391,6 +438,56 @@ export class NovelsManager implements OnInit, OnDestroy {
     this.volumePollSubscription?.unsubscribe();
     this.syncPollSubscription?.unsubscribe();
     this.catalogSyncSubscription?.unsubscribe();
+  }
+
+  private loadSources(): void {
+    this.loadingSources = true;
+    this.sourcesService.getAllSources().subscribe({
+      next: (sources) => {
+        this.availableSources = sources;
+        // Set default source from route or first available
+        if (!this.selectedSourceId && sources.length > 0) {
+          this.selectedSourceId = sources[0].id;
+        }
+        this.loadingSources = false;
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        this.sourcesError = 'No se pudieron cargar las fuentes disponibles';
+        this.loadingSources = false;
+        // Fallback to elscione
+        this.availableSources = [{ 
+          id: 'elscione', 
+          displayName: 'Elscione', 
+          icon: 'pi pi-book', 
+          language: 'es', 
+          baseUrl: '', 
+          rateLimitRpm: 20, 
+          requiresLogin: false, 
+          enabled: true, 
+          tags: [] 
+        }];
+        this.selectedSourceId = 'elscione';
+        this.cdr.markForCheck();
+      }
+    });
+  }
+
+  private readSourceFromRoute(): void {
+    this.route.queryParams.subscribe(params => {
+      if (params['source'] && this.availableSources.some(s => s.id === params['source'])) {
+        this.selectedSourceId = params['source'];
+      }
+    });
+  }
+
+  onSourceChange(): void {
+    this.router.navigate([], { 
+      relativeTo: this.route, 
+      queryParams: { source: this.selectedSourceId }, 
+      queryParamsHandling: 'merge' 
+    });
+    this.reloadCatalog(true);
   }
 
   // ------- Nivel 1: catálogo de obras -------
@@ -405,7 +502,7 @@ export class NovelsManager implements OnInit, OnDestroy {
 
     try {
       const result = await firstValueFrom(
-        this.novelsService.getCatalog(this.searchTerm, page, rows));
+        this.novelsService.getCatalog(this.searchTerm, page, rows, this.selectedSourceId));
       this.novels = result.content.map(n => ({
         ...n,
         volumesLoaded: false,
@@ -457,7 +554,7 @@ export class NovelsManager implements OnInit, OnDestroy {
     const nextPage = this.currentPage + 1;
     try {
       const result = await firstValueFrom(
-        this.novelsService.getCatalog(this.searchTerm, nextPage, this.pageSize));
+        this.novelsService.getCatalog(this.searchTerm, nextPage, this.pageSize, this.selectedSourceId));
       const newNovels = result.content.map(n => ({
         ...n,
         volumesLoaded: false,
@@ -481,19 +578,51 @@ export class NovelsManager implements OnInit, OnDestroy {
   }
 
   /**
-   * Refresco periódico (10s) mientras la sincronización corre.
+   * Refresco periódico mientras la sincronización corre.
+   * Usa 30s en lugar de 10s para reducir carga, pausa si la pestaña no está visible,
+   * y tiene backoff exponencial en caso de errores.
    */
   private startCatalogAutoRefresh(): void {
     this.catalogSyncSubscription?.unsubscribe();
-    this.catalogSyncSubscription = timer(10000, 10000)
-      .pipe(takeWhile(() => this.syncStatus?.state === 'RUNNING'))
-      .subscribe(() => this.refreshCatalogDuringSync());
+    
+    const baseIntervalMs = 30000; // 30 segundos en lugar de 10
+    let currentIntervalMs = baseIntervalMs;
+    let consecutiveErrors = 0;
+    const maxIntervalMs = 120000; // Máximo 2 minutos
+    
+    const isVisible = () => !document.hidden;
+    
+    const poll = () => {
+      if (!isVisible() || this.syncStatus?.state !== 'RUNNING') {
+        // Si la pestaña no está visible o el sync terminó, reprogramar para más tarde
+        setTimeout(poll, 5000);
+        return;
+      }
+      
+      this.refreshCatalogDuringSync()
+        .then(() => {
+          // Éxito: resetear backoff
+          consecutiveErrors = 0;
+          currentIntervalMs = baseIntervalMs;
+          setTimeout(poll, currentIntervalMs);
+        })
+        .catch(() => {
+          // Error: backoff exponencial
+          consecutiveErrors++;
+          currentIntervalMs = Math.min(currentIntervalMs * 2, maxIntervalMs);
+          console.warn(`Catalog refresh failed, backing off to ${currentIntervalMs}ms (attempt ${consecutiveErrors})`);
+          setTimeout(poll, currentIntervalMs);
+        });
+    };
+    
+    // Iniciar primera poll
+    poll();
   }
 
   private async refreshCatalogDuringSync(): Promise<void> {
     try {
       const result = await firstValueFrom(
-        this.novelsService.getCatalog(this.searchTerm, this.currentPage, this.pageSize));
+        this.novelsService.getCatalog(this.searchTerm, this.currentPage, this.pageSize, this.selectedSourceId));
       this.totalRecords = result.page.totalElements;
       this.novels = result.content.map(n => {
         const previous = this.novels.find(o => o.id === n.id);
@@ -546,7 +675,7 @@ export class NovelsManager implements OnInit, OnDestroy {
     this.volumeLoading[novelId] = true;
     this.cdr.markForCheck();
     try {
-      this.volumes[novelId] = await firstValueFrom(this.novelsService.getVolumes(novelId));
+      this.volumes[novelId] = await firstValueFrom(this.novelsService.getVolumes(novelId, this.selectedSourceId));
       const novel = this.novels.find(n => n.id === novelId);
       if (novel) {
         novel.volumesLoaded = true;
@@ -570,7 +699,7 @@ export class NovelsManager implements OnInit, OnDestroy {
     this.pollNovelId = novelId;
     this.volumePollSubscription?.unsubscribe();
     this.volumePollSubscription = timer(3000, 3000).pipe(
-      switchMap(() => this.novelsService.getVolumes(novelId)),
+      switchMap(() => this.novelsService.getVolumes(novelId, this.selectedSourceId)),
       takeWhile(volumes => volumes.some(v => v.running), true)
     ).subscribe({
       next: volumes => {
@@ -796,17 +925,46 @@ export class NovelsManager implements OnInit, OnDestroy {
 
   private pollSync(): void {
     this.syncPollSubscription?.unsubscribe();
-    this.syncPollSubscription = this.novelsService.pollSyncStatus(2000).subscribe({
-      next: status => {
-        const finished = status.state !== 'RUNNING';
-        this.syncStatus = status;
-        if (finished) {
-          this.catalogSyncSubscription?.unsubscribe();
-          this.reloadCatalog(false);
-        }
-        this.cdr.markForCheck();
+    // 5 segundos en lugar de 2 para reducir carga
+    const intervalMs = 5000;
+    let consecutiveErrors = 0;
+    const baseIntervalMs = intervalMs;
+    const maxIntervalMs = 30000;
+    
+    const isVisible = () => !document.hidden;
+    
+    const poll = () => {
+      if (!isVisible()) {
+        // Si la pestaña no está visible, esperar y volver a comprobar
+        setTimeout(poll, 5000);
+        return;
       }
-    });
+      
+      this.novelsService.getSyncStatus().subscribe({
+        next: status => {
+          consecutiveErrors = 0; // Reset on success
+          const finished = status.state !== 'RUNNING';
+          this.syncStatus = status;
+          if (finished) {
+            this.catalogSyncSubscription?.unsubscribe();
+            this.reloadCatalog(false);
+          }
+          this.cdr.markForCheck();
+          
+          if (!finished) {
+            setTimeout(poll, baseIntervalMs);
+          }
+        },
+        error: () => {
+          consecutiveErrors++;
+          const backoffMs = Math.min(baseIntervalMs * Math.pow(2, consecutiveErrors - 1), maxIntervalMs);
+          console.warn(`Sync status poll failed, backing off to ${backoffMs}ms`);
+          setTimeout(poll, backoffMs);
+        }
+      });
+    };
+    
+    poll();
   }
 
   syncRunning(): boolean { return this.syncStatus?.state === 'RUNNING'; }
@@ -844,5 +1002,10 @@ export class NovelsManager implements OnInit, OnDestroy {
     if (!bytes && bytes !== 0) return 'tamaño desconocido';
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  getCurrentSourceDisplayName(): string {
+    const source = this.availableSources.find(s => s.id === this.selectedSourceId);
+    return source ? source.displayName : this.selectedSourceId;
   }
 }

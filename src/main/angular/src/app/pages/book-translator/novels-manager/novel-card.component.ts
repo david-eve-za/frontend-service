@@ -53,6 +53,14 @@ export interface NovelRow extends NovelSummary {
             class="novel-card-cover-img"
             (click)="onCoverClick($event)">
           </p-image>
+        } @else if (novel.coverUrl) {
+          <p-image
+            [src]="novel.coverUrl"
+            [preview]="true"
+            [alt]="novel.title"
+            class="novel-card-cover-img"
+            (click)="onCoverClick($event)">
+          </p-image>
         } @else {
           <div class="novel-card-cover-placeholder">
             <div class="cover-placeholder-content">
@@ -75,9 +83,9 @@ export interface NovelRow extends NovelSummary {
               </p-badge>
             }
 
-            <!-- Enriched Indicator -->
-            @if (isEnriched()) {
-              <p-badge value="AniList" severity="success" size="small" class="enriched-badge">
+            <!-- Cover Source Indicator -->
+            @if (hasCover()) {
+              <p-badge [value]="novel.anilistCoverUrl ? 'AniList' : 'Fuente'" [severity]="novel.anilistCoverUrl ? 'success' : 'info'" size="small" class="enriched-badge">
                 <i class="pi pi-verified mr-1"></i>
               </p-badge>
             }
@@ -85,7 +93,7 @@ export interface NovelRow extends NovelSummary {
 
           <!-- Quick Actions on Hover -->
           <div class="overlay-quick-actions">
-            @if (!novel.anilistCoverUrl && !novel.anilistEnriching) {
+            @if (!novel.anilistCoverUrl && !novel.coverUrl && !novel.anilistEnriching) {
               <p-button
                 icon="pi pi-sparkles"
                 severity="info"
@@ -217,7 +225,7 @@ export interface NovelRow extends NovelSummary {
         }
 
         <!-- Not Enriched State -->
-        @if (!isEnriched()) {
+        @if (!isEnriched() && !novel.coverUrl) {
           <div class="novel-not-enriched">
             <div class="not-enriched-content">
               <i class="pi pi-info-circle"></i>
@@ -659,6 +667,66 @@ export interface NovelRow extends NovelSummary {
       font-size: 1.25rem;
     }
 
+    /* --- Not Enriched State --- */
+    .novel-not-enriched {
+      margin-top: 0.5rem;
+      padding-top: 0.75rem;
+      border-top: 1px dashed #e5e7eb;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .not-enriched-content {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      color: #9ca3af;
+      font-size: 0.8125rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .not-enriched-content i {
+      font-size: 1.25rem;
+    }
+
+    /* --- Crawler Cover Info --- */
+    .novel-crawler-info {
+      margin-top: 0.5rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #e5e7eb;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .crawler-cover-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .crawler-info-text {
+      font-size: 0.75rem;
+      color: #6b7280;
+      font-weight: 500;
+    }
+
+    .crawler-meta {
+      margin-top: 0.375rem;
+    }
+
+    .crawler-author {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.75rem;
+      color: #6b7280;
+    }
+
+    .crawler-author i {
+      font-size: 0.75rem;
+    }
+
     /* --- Progress Section --- */
     .progress-section {
       margin-top: 0.5rem;
@@ -818,6 +886,7 @@ export class NovelCardComponent {
 
   // Computed
   isEnriched = computed(() => !!this.novel.anilistCoverUrl);
+  hasCover = computed(() => !!this.novel.anilistCoverUrl || !!this.novel.coverUrl);
   hasProgress = computed(() => false); // Placeholder - would need progress data
   descriptionTruncated = computed(() => {
     if (!this.novel.anilistDescription) return false;

@@ -1,0 +1,14 @@
+{
+  "data": {
+    "id": "1",
+    "title": "Test Novel 1",
+    "url": "https://www.novelupdates.com/series/test-novel-1/",
+    "image": "https://www.novelupdates.com/img/novel1.jpg",
+    "author": "Author 1",
+    "description": "This is a test novel description.",
+    "genres": ["Fantasy", "Adventure"],
+    "status": "Ongoing",
+    "type": "Light Novel",
+    "last_updated": "2024-01-15"
+  }
+}

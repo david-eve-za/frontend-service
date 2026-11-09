@@ -9,6 +9,8 @@ export interface NovelSummary {
   category: string | null;
   volumeCount: number;
   lastSyncedAt: string | null;
+  // --- Carátula nativa del crawler (para fuentes no-Elscione) ---
+  coverUrl: string | null;
   // --- Campos de enriquecimiento AniList ---
   anilistId: number | null;
   anilistCoverUrl: string | null;
@@ -22,6 +24,13 @@ export interface NovelSummary {
   anilistCountryOfOrigin: string | null;
   anilistVolumes: number | null;
   anilistChapters: number | null;
+  // --- Metadatos adicionales del crawler ---
+  author: string | null;
+  status: string | null;
+  language: string | null;
+  isMtl: boolean;
+  isManga: boolean;
+  sourceId: string | null;
 }
 
 /** Shape of a serialized Spring Data page (GET /api/novels-manager/catalog). */
@@ -103,10 +112,69 @@ export interface BatchAnilistEnrichmentResult {
 @Injectable({ providedIn: 'root' })
 export class NovelsManagerService {
   private readonly API_URL = '/api/novels-manager';
+  private readonly SOURCES_API_URL = '/api/sources';
 
   constructor(private http: HttpClient) {}
 
-  getCatalog(search: string | null, page: number, size: number): Observable<NovelCatalogPage> {
+  /**
+   * Get catalog from the default source (elscione) or a specific source.
+   * If sourceId is provided, uses the new multi-source API.
+   * Otherwise, uses the legacy elscione-only endpoint for backward compatibility.
+   */
+  getCatalog(search: string | null, page: number, size: number, sourceId?: string): Observable<NovelCatalogPage> {
+    if (sourceId) {
+      // Use new multi-source API
+      let params = new HttpParams().set('page', page).set('size', size);
+      if (search && search.trim()) {
+        params = params.set('q', search.trim());
+      }
+      return this.http.get<any>(`${this.SOURCES_API_URL}/${sourceId}/search`, { params }).pipe(
+        map(response => {
+          const rawContent = response.content || response;
+          // Map NovelSearchResult[] to NovelSummary[] with crawler's cover image
+          const content = (Array.isArray(rawContent) ? rawContent : []).map((item: any) => ({
+            id: item.sourceNovelId || item.url,
+            title: item.title,
+            category: null,
+            volumeCount: 0,
+            lastSyncedAt: null,
+            coverUrl: item.coverUrl || null, // Crawler's native cover
+            // AniList fields (will be populated after enrichment)
+            anilistId: null,
+            anilistCoverUrl: null,
+            anilistDescription: null,
+            anilistGenres: null,
+            anilistTags: null,
+            anilistStatus: null,
+            anilistAverageScore: null,
+            anilistFormat: null,
+            anilistSource: null,
+            anilistCountryOfOrigin: null,
+            anilistVolumes: null,
+            anilistChapters: null,
+            // Additional crawler metadata
+            author: null,
+            status: item.info || null,
+            language: null,
+            isMtl: false,
+            isManga: false,
+            sourceId: sourceId
+          }));
+          return {
+            content,
+            page: {
+              number: response.page ?? page,
+              size: response.size ?? size,
+              totalElements: response.totalElements ?? 0,
+              totalPages: response.totalPages ?? 1
+            },
+            links: response.links || []
+          };
+        })
+      );
+    }
+
+    // Legacy elscione-only endpoint
     let params = new HttpParams().set('page', page).set('size', size);
     if (search && search.trim()) {
       params = params.set('search', search.trim());
@@ -125,51 +193,108 @@ export class NovelsManagerService {
     );
   }
 
-  /** Obtiene una novela individual por ID (con campos AniList). */
-  getNovel(novelId: string): Observable<NovelSummary> {
+  /** Obtiene una novela individual por ID (con campos AniList y metadatos del crawler). */
+  getNovel(novelId: string, sourceId?: string): Observable<NovelSummary> {
+    if (sourceId) {
+      return this.http.get<any>(`${this.SOURCES_API_URL}/${sourceId}/novels/${novelId}`).pipe(
+        map((detail: any) => ({
+          id: detail.sourceNovelId || novelId,
+          title: detail.title,
+          category: null,
+          volumeCount: detail.volumes?.length || 0,
+          lastSyncedAt: null,
+          coverUrl: detail.coverUrl || null, // Crawler's native cover
+          // AniList fields
+          anilistId: detail.anilistId || null,
+          anilistCoverUrl: detail.anilistCoverUrl || null,
+          anilistDescription: detail.anilistDescription || detail.synopsis || null,
+          anilistGenres: detail.anilistGenres || detail.tags || null,
+          anilistTags: detail.anilistTags || null,
+          anilistStatus: detail.anilistStatus || detail.status || null,
+          anilistAverageScore: detail.anilistAverageScore || null,
+          anilistFormat: detail.anilistFormat || null,
+          anilistSource: detail.anilistSource || null,
+          anilistCountryOfOrigin: detail.anilistCountryOfOrigin || null,
+          anilistVolumes: detail.anilistVolumes || null,
+          anilistChapters: detail.anilistChapters || null,
+          // Additional crawler metadata
+          author: detail.author || null,
+          status: detail.status || null,
+          language: detail.language || null,
+          isMtl: detail.isMtl || false,
+          isManga: detail.isManga || false,
+          sourceId: sourceId
+        }))
+      );
+    }
     return this.http.get<NovelSummary>(`${this.API_URL}/novels/${novelId}`);
   }
 
-  getVolumes(novelId: string): Observable<CatalogVolume[]> {
+  getVolumes(novelId: string, sourceId?: string): Observable<CatalogVolume[]> {
+    if (sourceId) {
+      // Convert ChapterInfo[] to CatalogVolume[] format
+      return this.http.get<any[]>(`${this.SOURCES_API_URL}/${sourceId}/novels/${novelId}/chapters`).pipe(
+        map(chapters => this.groupChaptersIntoVolumes(chapters))
+      );
+    }
     return this.http.get<CatalogVolume[]>(`${this.API_URL}/novels/${novelId}/volumes`);
   }
 
-  startSync(): Observable<CatalogSyncStatus> {
+  startSync(sourceId?: string): Observable<CatalogSyncStatus> {
+    if (sourceId) {
+      // For multi-source, sync is per-source - would need new endpoint
+      // For now, fall back to elscione sync
+      return this.http.post<CatalogSyncStatus>(`${this.API_URL}/sync`, {});
+    }
     return this.http.post<CatalogSyncStatus>(`${this.API_URL}/sync`, {});
   }
 
-  getSyncStatus(): Observable<CatalogSyncStatus> {
+  getSyncStatus(sourceId?: string): Observable<CatalogSyncStatus> {
+    if (sourceId) {
+      // Would need per-source sync status endpoint
+      return this.http.get<CatalogSyncStatus>(`${this.API_URL}/sync/status`);
+    }
     return this.http.get<CatalogSyncStatus>(`${this.API_URL}/sync/status`);
   }
 
-  cancelSync(): Observable<{ cancelled: boolean }> {
+  cancelSync(sourceId?: string): Observable<{ cancelled: boolean }> {
+    if (sourceId) {
+      return this.http.post<{ cancelled: boolean }>(`${this.API_URL}/sync/cancel`, {});
+    }
     return this.http.post<{ cancelled: boolean }>(`${this.API_URL}/sync/cancel`, {});
   }
 
   /**
    * Enriquece una novela buscando en AniList por su título.
    */
-  enrichNovelAnilist(novelId: string): Observable<AnilistEnrichmentResult> {
+  enrichNovelAnilist(novelId: string, sourceId?: string): Observable<AnilistEnrichmentResult> {
+    if (sourceId && sourceId !== 'elscione') {
+      // AniList enrichment only available for elscione currently
+      return this.http.post<AnilistEnrichmentResult>(`${this.API_URL}/novels/${novelId}/enrich-anilist`, {});
+    }
     return this.http.post<AnilistEnrichmentResult>(`${this.API_URL}/novels/${novelId}/enrich-anilist`, {});
   }
 
   /** Enriquecimiento en lote de múltiples novelas. */
-  enrichBatchAnilist(novelIds: string[]): Observable<BatchAnilistEnrichmentResult> {
+  enrichBatchAnilist(novelIds: string[], sourceId?: string): Observable<BatchAnilistEnrichmentResult> {
     return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-batch-anilist`, novelIds);
   }
 
   /*** Traduce todas las sinopsis/descripciones de AniList al español. */
-  translateAllSynopses(): Observable<TranslatedSynopsis[]> {
+  translateAllSynopses(sourceId?: string): Observable<TranslatedSynopsis[]> {
     return this.http.get<TranslatedSynopsis[]>(`${this.API_URL}/novels/translate-synopses`);
   }
 
   /** Obtiene todos los IDs de novelas. */
-  getAllNovelIds(): Observable<string[]> {
+  getAllNovelIds(sourceId?: string): Observable<string[]> {
+    if (sourceId) {
+      return this.http.get<string[]>(`${this.SOURCES_API_URL}/${sourceId}/novels/ids`);
+    }
     return this.http.get<string[]>(`${this.API_URL}/novels/ids`);
   }
 
   /** Enriquece todas las novelas con AniList. */
-  enrichAllNovels(): Observable<BatchAnilistEnrichmentResult> {
+  enrichAllNovels(sourceId?: string): Observable<BatchAnilistEnrichmentResult> {
     return this.http.post<BatchAnilistEnrichmentResult>(`${this.API_URL}/novels/enrich-all-anilist`, {});
   }
 
@@ -178,20 +303,56 @@ export class NovelsManagerService {
    * on-demand) y crea el Book del pipeline: el split se hace después en el
    * wizard con el editor de bloques.
    */
-  prepareVolumeText(volumeId: string): Observable<VolumePrepared> {
+  prepareVolumeText(volumeId: string, sourceId?: string): Observable<VolumePrepared> {
+    if (sourceId && sourceId !== 'elscione') {
+      // Would need new endpoint for multi-source
+      // Fall back to elscione for now
+    }
     return this.http.post<VolumePrepared>(`${this.API_URL}/volumes/${volumeId}/prepare-text`, {});
   }
 
   /** Traduce / genera audio del Book enlazado al volumen (pipeline por etapas). */
-  processVolumeBook(bookId: string, target: 'TRANSLATE' | 'AUDIO'): Observable<{ message: string }> {
+  processVolumeBook(bookId: string, target: 'TRANSLATE' | 'AUDIO', sourceId?: string): Observable<{ message: string }> {
     return this.http.post<{ message: string }>(`/api/files/${bookId}/process?to=${target}`, {});
   }
 
   /** Sondea el estado de sync mientras esté RUNNING. */
-  pollSyncStatus(intervalMs: number): Observable<CatalogSyncStatus> {
+  pollSyncStatus(intervalMs: number, sourceId?: string): Observable<CatalogSyncStatus> {
     return timer(0, intervalMs).pipe(
-      switchMap(() => this.getSyncStatus()),
+      switchMap(() => this.getSyncStatus(sourceId)),
       takeWhile(status => status.state === 'RUNNING', true)
     );
+  }
+
+  /** Helper: group flat chapter list into volumes by volumeId */
+  private groupChaptersIntoVolumes(chapters: any[]): CatalogVolume[] {
+    const volumeMap = new Map<number, CatalogVolume>();
+    
+    for (const ch of chapters) {
+      const volId = ch.volumeId || 1;
+      if (!volumeMap.has(volId)) {
+        volumeMap.set(volId, {
+          id: `vol-${volId}`,
+          volumeNumber: volId,
+          label: `Volume ${volId}`,
+          translatorGroup: null,
+          removedFromSource: false,
+          bookId: null,
+          bookStatus: null,
+          splitDone: false,
+          translated: false,
+          audioCreated: false,
+          running: false,
+          sourceAvailable: true,
+          canPrepareText: true,
+          canTranslate: true,
+          canCreateAudio: true,
+          files: []
+        });
+      }
+      // We don't have chapter details in the new API yet, just basic info
+    }
+    
+    return Array.from(volumeMap.values());
   }
 }

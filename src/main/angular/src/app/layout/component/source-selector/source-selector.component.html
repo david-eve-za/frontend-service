@@ -1,0 +1,236 @@
+<div class="source-selector" [class.mobile]="isMobile()">
+  
+  <!-- Trigger Button -->
+  <button 
+    type="button"
+    class="source-trigger"
+    [class.active]="panelOpen()"
+    [class.disabled]="loading()"
+    [attr.aria-expanded]="panelOpen()"
+    [attr.aria-controls]="'source-panel-' + triggerId()"
+    [attr.aria-label]="'Fuente actual: ' + currentSourceDisplayName() + ', ' + currentSourceLanguage() + ', ' + healthStatus().details"
+    (click)="togglePanel()"
+    (keydown)="onTriggerKeydown($event)"
+    [disabled]="loading()"
+    pRipple>
+    
+    <span class="trigger-content">
+      <!-- Source Icon -->
+      <i [class]="currentSourceIcon()" 
+         [style.color]="currentSourceColor()" 
+         class="trigger-icon" 
+         aria-hidden="true"></i>
+      
+      <!-- Source Label -->
+      <span class="trigger-label">{{ currentSourceDisplayName() }}</span>
+      
+      <!-- Language Badge -->
+      <span class="lang-badge" 
+            [style.background-color]="currentSourceBgColor()"
+            [style.color]="currentSourceTextColor()"
+            aria-label="Idioma: {{ currentSourceLanguageName() }}">
+        {{ currentSourceLanguage() | uppercase }}
+      </span>
+      
+      <!-- Chevron -->
+      <i class="pi pi-chevron-down trigger-chevron" 
+         [class.rotate]="panelOpen()" 
+         aria-hidden="true"></i>
+    </span>
+    
+    <!-- Health Indicator Dot -->
+    <span class="health-dot" 
+          [class.healthy]="healthStatus().healthy"
+          [attr.aria-label]="'Estado de salud: ' + healthStatus().details"
+          [attr.title]="healthStatus().details"></span>
+  </button>
+
+  <!-- Dropdown Panel (CSS-based) -->
+  <div 
+    #panelElement
+    id="source-panel-{{ triggerId() }}"
+    class="source-panel"
+    role="dialog" 
+    aria-label="Seleccionar fuente de novelas"
+    [attr.aria-labelledby]="'panel-title-' + triggerId()"
+    [class.open]="panelOpen()"
+    [class.mobile-open]="isMobile() && panelOpen()">
+  
+    <!-- Backdrop for mobile -->
+    <div class="source-backdrop" 
+         *ngIf="isMobile() && panelOpen()" 
+         (click)="closePanel()"
+         aria-hidden="true"></div>
+  
+    <!-- Panel Content -->
+    <div class="panel-content">
+    
+      <!-- Header -->
+      <div class="panel-header">
+        <h2 id="panel-title-{{ triggerId() }}" class="panel-title">Fuentes de Novelas</h2>
+        
+        <div class="health-summary" [class.warning]="!healthStatus().healthy">
+          <i class="pi" [class]="healthStatus().healthy ? 'pi-check-circle' : 'pi-exclamation-triangle'" aria-hidden="true"></i>
+          <span>{{ healthStatus().details }}</span>
+        </div>
+      </div>
+
+      <!-- Search -->
+      <div class="panel-search">
+        <label for="source-search-{{ triggerId() }}" class="sr-only">Buscar fuente</label>
+        <div class="search-wrapper">
+          <i class="pi pi-search search-icon" aria-hidden="true"></i>
+          <input 
+            id="source-search-{{ triggerId() }}"
+            type="search"
+            pInputText
+            placeholder="Buscar por nombre, idioma o URL..."
+            [(ngModel)]="searchTerm"
+            (ngModelChange)="onSearchTermChange($event)"
+            autocomplete="off"
+            aria-describedby="search-hint-{{ triggerId() }}"
+            [disabled]="loading()">
+          <span id="search-hint-{{ triggerId() }}" class="sr-only">
+            Escribe para filtrar {{ filteredLanguageGroups().reduce((sum, g) => sum + g.sources.length, 0) }} de {{ totalSourcesCount() }} fuentes
+          </span>
+        </div>
+      </div>
+
+      <!-- Source List -->
+      <div class="panel-body" 
+           role="listbox" 
+           aria-label="Lista de fuentes disponibles"
+           #listContainer>
+      
+        @if (loading()) {
+          <div class="loading-state" role="status" aria-live="polite" aria-busy="true">
+            <i class="pi pi-spin pi-spinner text-2xl" [style.color]="'var(--primary-color, #3b82f6)'"></i>
+            <p>Cargando fuentes...</p>
+          </div>
+        } @else if (error()) {
+          <div class="error-state" role="alert" aria-live="assertive">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            <p>{{ error() }}</p>
+            <p-button 
+              label="Reintentar" 
+              icon="pi pi-refresh" 
+              styleClass="p-button-sm p-button-outlined"
+              (onClick)="retry.emit()">
+            </p-button>
+          </div>
+        } @else if (filteredLanguageGroups().length === 0) {
+          <div class="empty-state" role="status">
+            <i class="pi pi-filter-slash" aria-hidden="true"></i>
+            <p>No se encontraron fuentes para "{{ searchTerm() }}"</p>
+            <p-button 
+              label="Limpiar búsqueda" 
+              icon="pi pi-times" 
+              styleClass="p-button-text p-button-sm"
+              (onClick)="clearSearch()">
+            </p-button>
+          </div>
+        } @else {
+          
+          <!-- Language Groups -->
+          @for (group of filteredLanguageGroups(); track group.language) {
+            <div class="language-group" [attr.data-language]="group.language">
+              
+              <!-- Group Header (Accordion-style) -->
+              <button 
+                type="button"
+                class="group-header"
+                [attr.aria-expanded]="group.expanded"
+                [attr.aria-controls]="'group-sources-' + group.language + '-' + triggerId()"
+                (click)="toggleGroup(group)"
+                (keydown)="onGroupKeydown($event, group)">
+              
+                <span class="group-lang-badge" 
+                      [style.background-color]="group.bgColor"
+                      [style.color]="group.textColor">
+                  {{ group.flag }} {{ group.nativeName }}
+                </span>
+                
+                <span class="group-count">{{ group.sources.length }}</span>
+                
+                <i class="pi pi-chevron-down" 
+                   [class.rotate]="group.expanded" 
+                   aria-hidden="true"></i>
+              </button>
+
+              <!-- Group Sources -->
+              <div id="group-sources-{{ group.language }}-{{ triggerId() }}" 
+                   class="group-sources" 
+                   [class.collapsed]="!group.expanded"
+                   role="group" 
+                   [attr.aria-label]="group.nativeName + ' (' + group.sources.length + ' fuentes)'">
+              
+                @for (source of group.sources; track source.id; let i = $index) {
+                  <button 
+                    type="button"
+                    class="source-item"
+                    [class.selected]="source.id === selectedSourceId()"
+                    [class.disabled]="!source.enabled"
+                    [attr.aria-selected]="source.id === selectedSourceId()"
+                    [attr.aria-disabled]="!source.enabled"
+                    [attr.aria-describedby]="'source-desc-' + source.id + '-' + triggerId()"
+                    (click)="selectSource(source)"
+                    (keydown)="onItemKeydown($event, source, group)"
+                    tabindex="0"
+                    [attr.data-language]="group.language">
+                    
+                    <!-- Source Icon -->
+                    <i [class]="source.icon" 
+                       class="source-icon"
+                       [style.color]="group.textColor"
+                       aria-hidden="true"></i>
+                    
+                    <!-- Source Info -->
+                    <div class="source-info">
+                      <span class="source-name">{{ source.displayName }}</span>
+                      <span id="source-desc-{{ source.id }}-{{ triggerId() }}" class="source-url">{{ source.baseUrl }}</span>
+                    </div>
+                    
+                    <!-- Tags -->
+                    <div class="source-tags" *ngIf="source.tags && source.tags.length > 0" aria-hidden="true">
+                      @for (tag of source.tags.slice(0, 2); track tag) {
+                        <span class="tag">{{ tag }}</span>
+                      }
+                      @if (source.tags.length > 2) {
+                        <span class="tag more">+{{ source.tags.length - 2 }}</span>
+                      }
+                    </div>
+                    
+                    <!-- Selection Indicator -->
+                    @if (source.id === selectedSourceId()) {
+                      <i class="pi pi-check selection-check" 
+                         [style.color]="group.textColor" 
+                         aria-hidden="true"></i>
+                    }
+                  </button>
+                }
+              </div>
+            </div>
+          }
+        }
+      </div>
+
+      <!-- Footer -->
+      <div class="panel-footer">
+        <p-button 
+          label="Gestionar todas las fuentes" 
+          icon="pi pi-cog"
+          styleClass="p-button-text p-button-sm"
+          (onClick)="navigateToSourcesPage()"
+          pTooltip="Abrir página de configuración de fuentes"
+          tooltipPosition="left">
+        </p-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backdrop for mobile -->
+  <div class="source-backdrop" 
+       *ngIf="isMobile() && panelOpen()" 
+       (click)="closePanel()"
+       aria-hidden="true"></div>
+</div>

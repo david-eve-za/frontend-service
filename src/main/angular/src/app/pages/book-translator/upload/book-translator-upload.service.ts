@@ -273,12 +273,28 @@ export class BookTranslatorUploadService {
 
     pollBookStatus(
         bookId: string,
-        intervalMs: number = 2000,
+        intervalMs: number = 5000, // 5s en lugar de 2s por defecto
     ): Observable<BookStatusResponse> {
         return new Observable((subscriber) => {
+            let consecutiveErrors = 0;
+            const baseIntervalMs = intervalMs;
+            const maxIntervalMs = 30000;
+            let isSubscribed = true;
+            
+            const isVisible = () => !document.hidden;
+            
             const poll = () => {
+                if (!isSubscribed) return;
+                
+                if (!isVisible()) {
+                    setTimeout(poll, 5000);
+                    return;
+                }
+                
                 this.getBookStatus(bookId).subscribe({
                     next: (response) => {
+                        if (!isSubscribed) return;
+                        consecutiveErrors = 0;
                         subscriber.next(response);
                         if (
                             response.status === 'COMPLETED' ||
@@ -286,13 +302,24 @@ export class BookTranslatorUploadService {
                         ) {
                             subscriber.complete();
                         } else {
-                            setTimeout(poll, intervalMs);
+                            setTimeout(poll, baseIntervalMs);
                         }
                     },
-                    error: (err) => subscriber.error(err),
+                    error: (err) => {
+                        if (!isSubscribed) return;
+                        consecutiveErrors++;
+                        const backoffMs = Math.min(baseIntervalMs * Math.pow(2, consecutiveErrors - 1), maxIntervalMs);
+                        console.warn(`Book status poll failed for ${bookId}, backing off to ${backoffMs}ms`);
+                        setTimeout(poll, backoffMs);
+                    },
                 });
             };
             poll();
+            
+            // Cleanup al desuscribirse
+            return () => {
+                isSubscribed = false;
+            };
         });
     }
 }

@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "id": "1",
+      "title": "Test Novel 1",
+      "url": "https://www.novelupdates.com/series/test-novel-1/",
+      "image": "https://www.novelupdates.com/img/novel1.jpg",
+      "author": "Author 1",
+      "genre": "Fantasy, Adventure",
+      "status": "Ongoing",
+      "type": "Light Novel"
+    },
+    {
+      "id": "2",
+      "title": "Test Novel 2",
+      "url": "https://www.novelupdates.com/series/test-novel-2/",
+      "image": "https://www.novelupdates.com/img/novel2.jpg",
+      "author": "Author 2",
+      "genre": "Sci-Fi",
+      "status": "Completed",
+      "type": "Web Novel"
+    }
+  ]
+}

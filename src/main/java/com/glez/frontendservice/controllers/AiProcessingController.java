@@ -2,6 +2,7 @@ package com.glez.frontendservice.controllers;
 
 import com.glez.frontendservice.dtos.AiProcessRequest;
 import com.glez.frontendservice.dtos.AiProcessResponse;
+import com.glez.frontendservice.services.AiProcessingService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -13,6 +14,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api")
 public class AiProcessingController {
 
+    private final AiProcessingService aiProcessingService;
+
+    public AiProcessingController(AiProcessingService aiProcessingService) {
+        this.aiProcessingService = aiProcessingService;
+    }
+
     @PostMapping("/process-data")
     public ResponseEntity<AiProcessResponse> processData(@RequestBody AiProcessRequest request) {
         if (request == null || request.getText() == null || request.getText().isEmpty()) {
@@ -20,12 +27,7 @@ public class AiProcessingController {
             return ResponseEntity.badRequest().build();
         }
 
-        // Dummy response to make the test pass initially
-        AiProcessResponse response = new AiProcessResponse(
-                request.getText(),
-                "Processed: " + request.getText(),
-                request.getParameters() != null ? request.getParameters().get("model") : "default-model"
-        );
+        AiProcessResponse response = aiProcessingService.processData(request);
         return ResponseEntity.ok(response);
     }
 }

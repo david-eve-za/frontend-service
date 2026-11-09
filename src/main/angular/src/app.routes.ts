@@ -37,6 +37,11 @@ export const appRoutes: Routes = [
                 loadChildren: () =>
                     import('./app/pages/video-stories/video-stories.routes'),
             },
+            {
+                path: 'ai-processor',
+                loadChildren: () =>
+                    import('./app/pages/ai-processor/ai-processor.routes'),
+            },
         ],
     },
     { path: 'landing', component: Landing },
