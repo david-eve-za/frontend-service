@@ -26,7 +26,9 @@ public interface SourceNovelRepository extends JpaRepository<SourceNovel, UUID> 
            "(n.title ILIKE %:search% OR n.author ILIKE %:search% OR n.synopsis ILIKE %:search%)")
     Page<SourceNovel> searchBySource(String sourceId, String search, Pageable pageable);
 
-    @Query("SELECT n FROM SourceNovel n WHERE n.sourceId = :sourceId AND :tag = ANY(n.tags)")
+    @Query(value = "SELECT * FROM source_novel WHERE source_id = :sourceId AND JSON_EXISTS(tags, '$[*] ? (@ == :tag)')",
+            countQuery = "SELECT COUNT(*) FROM source_novel WHERE source_id = :sourceId AND JSON_EXISTS(tags, '$[*] ? (@ == :tag)')",
+            nativeQuery = true)
     Page<SourceNovel> findBySourceAndTag(String sourceId, String tag, Pageable pageable);
 
     @Query("SELECT n FROM SourceNovel n WHERE n.sourceId = :sourceId ORDER BY n.popularity DESC")
