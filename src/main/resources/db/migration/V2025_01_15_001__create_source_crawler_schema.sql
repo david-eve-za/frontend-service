@@ -1,7 +1,10 @@
 -- V2025_01_15_001__create_source_crawler_schema.sql
 -- Esquema para persistencia de crawlers genéricos (no-Elscione)
 -- Separado completamente del esquema Elscione existente
--- Compatible con H2 Database
+-- Compatible con PostgreSQL
+
+-- Habilitar extensión para generación de UUIDs
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================================
 -- 1. source_crawler_meta — Metadatos de versionado por crawler
@@ -23,7 +26,7 @@ COMMENT ON TABLE source_crawler_meta IS 'Metadatos de versionado de crawlers par
 -- 2. source_tag — Etiquetas/Géneros (independiente)
 -- ============================================================
 CREATE TABLE source_tag (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     name                VARCHAR(100)    NOT NULL,
     normalized_name     VARCHAR(100)    NOT NULL,
     category            VARCHAR(50),
@@ -43,7 +46,7 @@ COMMENT ON TABLE source_tag IS 'Catálogo de etiquetas/géneros normalizados';
 -- 3. source_novel — Novela principal por fuente
 -- ============================================================
 CREATE TABLE source_novel (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     source_id           VARCHAR(100)    NOT NULL,
     novel_url           VARCHAR(2048)   NOT NULL,
     novel_url_hash      CHAR(64)        NOT NULL,
@@ -57,14 +60,14 @@ CREATE TABLE source_novel (
     is_rtl              BOOLEAN         NOT NULL DEFAULT FALSE,
     status              VARCHAR(50),
     last_update         VARCHAR(100),
-    tags                CLOB            NOT NULL DEFAULT '[]',
+    tags                TEXT            NOT NULL DEFAULT '[]',
     volume_count        INT             NOT NULL DEFAULT 0,
     chapter_count       INT             NOT NULL DEFAULT 0,
     popularity          BIGINT          NOT NULL DEFAULT 0,
     view_count          BIGINT          NOT NULL DEFAULT 0,
     crawler_version     VARCHAR(50),
     crawler_tier        VARCHAR(20),
-    extra               CLOB            NOT NULL DEFAULT '{}',
+    extra               TEXT            NOT NULL DEFAULT '{}',
     created_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_crawled_at     TIMESTAMP,
@@ -87,14 +90,14 @@ COMMENT ON TABLE source_novel IS 'Novelas rastreadas por crawlers genéricos (no
 -- 4. source_volume — Volúmenes por novela
 -- ============================================================
 CREATE TABLE source_volume (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     novel_id            UUID            NOT NULL,
     serial              INT             NOT NULL,
     title               VARCHAR(500)    NOT NULL DEFAULT '',
     chapter_count       INT             NOT NULL DEFAULT 0,
     crawler_version     VARCHAR(50),
     crawler_tier        VARCHAR(20),
-    extra               CLOB            NOT NULL DEFAULT '{}',
+    extra               TEXT            NOT NULL DEFAULT '{}',
     created_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_source_volume PRIMARY KEY (id),
@@ -110,7 +113,7 @@ COMMENT ON TABLE source_volume IS 'Volúmenes de novelas de crawlers genéricos'
 -- 5. source_chapter — Capítulos por novela
 -- ============================================================
 CREATE TABLE source_chapter (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     novel_id            UUID            NOT NULL,
     volume_id           UUID,
     serial              INT             NOT NULL,
@@ -120,7 +123,7 @@ CREATE TABLE source_chapter (
     word_count          INT,
     crawler_version     VARCHAR(50),
     crawler_tier        VARCHAR(20),
-    extra               CLOB            NOT NULL DEFAULT '{}',
+    extra               TEXT            NOT NULL DEFAULT '{}',
     created_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_fetched_at     TIMESTAMP,
@@ -140,18 +143,18 @@ COMMENT ON TABLE source_chapter IS 'Capítulos de novelas de crawlers genéricos
 -- 6. source_chapter_content — Contenido HTML comprimido (GZIP)
 -- ============================================================
 CREATE TABLE source_chapter_content (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     chapter_id          UUID            NOT NULL,
     content_file        VARCHAR(500)    NOT NULL,
     content_hash        CHAR(64)        NOT NULL,
     compressed_size     BIGINT          NOT NULL,
     original_size       BIGINT          NOT NULL,
     compression         VARCHAR(10)     NOT NULL DEFAULT 'gzip',
-    images              CLOB            NOT NULL DEFAULT '[]',
+    images              TEXT            NOT NULL DEFAULT '[]',
     extractor           VARCHAR(50),
     crawler_version     VARCHAR(50),
     crawler_tier        VARCHAR(20),
-    extra               CLOB            NOT NULL DEFAULT '{}',
+    extra               TEXT            NOT NULL DEFAULT '{}',
     created_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_source_chapter_content PRIMARY KEY (id),
@@ -165,7 +168,7 @@ COMMENT ON TABLE source_chapter_content IS 'Contenido HTML de capítulos comprim
 -- 7. source_novel_translation — Traducciones de metadatos
 -- ============================================================
 CREATE TABLE source_novel_translation (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     novel_id            UUID            NOT NULL,
     language            CHAR(2)         NOT NULL,
     title               VARCHAR(500),
@@ -188,7 +191,7 @@ COMMENT ON TABLE source_novel_translation IS 'Traducciones de título/autor/sino
 -- 8. source_volume_translation — Traducciones de títulos de volumen
 -- ============================================================
 CREATE TABLE source_volume_translation (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     novel_id            UUID            NOT NULL,
     volume_serial       INT             NOT NULL,
     language            CHAR(2)         NOT NULL,
@@ -208,7 +211,7 @@ COMMENT ON TABLE source_volume_translation IS 'Traducciones de títulos de volum
 -- 9. source_chapter_translation — Traducciones de capítulos
 -- ============================================================
 CREATE TABLE source_chapter_translation (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     novel_id            UUID            NOT NULL,
     chapter_serial      INT             NOT NULL,
     language            CHAR(2)         NOT NULL,
@@ -236,10 +239,10 @@ COMMENT ON TABLE source_chapter_translation IS 'Traducciones de capítulos (tít
 -- 10. source_novel_glossary — Glosarios por novela e idioma
 -- ============================================================
 CREATE TABLE source_novel_glossary (
-    id                  UUID            NOT NULL DEFAULT RANDOM_UUID(),
+    id                  UUID            NOT NULL DEFAULT gen_random_uuid(),
     novel_id            UUID            NOT NULL,
     language            CHAR(2)         NOT NULL,
-    terms               CLOB            NOT NULL DEFAULT '{}',
+    terms               TEXT            NOT NULL DEFAULT '{}',
     version             INT             NOT NULL DEFAULT 1,
     auto_extracted      BOOLEAN         NOT NULL DEFAULT FALSE,
     created_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -269,7 +272,7 @@ COMMENT ON TABLE source_novel_tag IS 'Asociación novela ↔ etiquetas';
 -- ============================================================
 -- Función auxiliar para updated_at automático (H2 compatible)
 -- ============================================================
--- Note: H2 doesn't support triggers in SQL the same way as PostgreSQL.
+-- Note: PostgreSQL doesn't support triggers in SQL the same way as H2.
 -- The updated_at field is managed by JPA @PreUpdate annotation in the entity classes.
 
 -- ============================================================

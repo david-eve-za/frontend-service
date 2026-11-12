@@ -3,6 +3,7 @@ package com.glez.frontendservice.repository.source;
 import com.glez.frontendservice.model.source.SourceNovel;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -49,4 +50,8 @@ public interface SourceNovelRepository extends JpaRepository<SourceNovel, UUID> 
 
     @Query("SELECT DISTINCT n.language FROM SourceNovel n WHERE n.sourceId = :sourceId AND n.language IS NOT NULL")
     List<String> findLanguagesBySource(String sourceId);
+
+    @EntityGraph(attributePaths = {"volumes"})
+    @Query("SELECT n FROM SourceNovel n WHERE n.sourceId = :sourceId AND n.novelUrl = :novelUrl")
+    Optional<SourceNovel> findBySourceIdAndNovelUrlEagerVolumes(String sourceId, String novelUrl);
 }

@@ -26,6 +26,7 @@ spring:
           batch_size: 25
         order_inserts: true
         order_updates: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
   cache:
     type: caffeine
     # regexPatterns: enabled cleaning patterns read on EVERY text
@@ -40,13 +41,17 @@ spring:
       enabled: true
       path: /h2-console
   datasource:
-    # CACHE_SIZE in KB (default 16384 = 16MB): the H2 file holds ~24MB of
-    # data, so a 64MB page cache keeps the whole hot database (catalog +
-    # chunk texts) in memory instead of re-reading pages from disk.
-    url: jdbc:h2:file:./H2-FrontEnd-Service;CACHE_SIZE=65536
-    driverClassName: org.h2.Driver
-    username: sa
-    password:
+    # PostgreSQL en Docker
+    url: jdbc:postgresql://localhost:5432/frontend_service
+    driverClassName: org.postgresql.Driver
+    username: frontend_user
+    password: frontend_pass
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
   servlet:
     multipart:
       enabled: true

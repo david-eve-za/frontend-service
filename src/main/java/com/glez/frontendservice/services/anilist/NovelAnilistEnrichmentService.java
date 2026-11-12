@@ -20,6 +20,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class NovelAnilistEnrichmentService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(NovelAnilistEnrichmentService.class);
+
     private final AniListGraphQLClient anilistClient;
     private final NovelRepository novelRepository;
     private final NvidiaAiService nvidiaAiService;

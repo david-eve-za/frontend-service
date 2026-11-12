@@ -1,9 +1,6 @@
 package com.glez.frontendservice.model;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -19,9 +16,6 @@ import java.util.UUID;
 // Index for the catalog listing (findNovels sorts by title on every page):
 // turns the full table scan + sort into an ordered index scan.
 @Table(indexes = @Index(name = "idx_novel_title", columnList = "title"))
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 public class Novel {
 
     @Id
@@ -111,4 +105,180 @@ public class Novel {
 
     @Column(name = "anilist_chapters")
     private Integer anilistChapters;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public String getRemotePath() {
+        return remotePath;
+    }
+
+    public void setRemotePath(String remotePath) {
+        this.remotePath = remotePath;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getCategory() {
+        return category;
+    }
+
+    public void setCategory(String category) {
+        this.category = category;
+    }
+
+    public Instant getLastSyncedAt() {
+        return lastSyncedAt;
+    }
+
+    public void setLastSyncedAt(Instant lastSyncedAt) {
+        this.lastSyncedAt = lastSyncedAt;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public boolean isListingComplete() {
+        return listingComplete;
+    }
+
+    public void setListingComplete(boolean listingComplete) {
+        this.listingComplete = listingComplete;
+    }
+
+    public Instant getLastListedAt() {
+        return lastListedAt;
+    }
+
+    public void setLastListedAt(Instant lastListedAt) {
+        this.lastListedAt = lastListedAt;
+    }
+
+    public List<NovelVolume> getVolumes() {
+        return volumes;
+    }
+
+    public void setVolumes(List<NovelVolume> volumes) {
+        this.volumes = volumes;
+    }
+
+    public Integer getAnilistId() {
+        return anilistId;
+    }
+
+    public void setAnilistId(Integer anilistId) {
+        this.anilistId = anilistId;
+    }
+
+    public String getAnilistCoverUrl() {
+        return anilistCoverUrl;
+    }
+
+    public void setAnilistCoverUrl(String anilistCoverUrl) {
+        this.anilistCoverUrl = anilistCoverUrl;
+    }
+
+    public String getAnilistDescription() {
+        return anilistDescription;
+    }
+
+    public void setAnilistDescription(String anilistDescription) {
+        this.anilistDescription = anilistDescription;
+    }
+
+    public List<String> getAnilistGenres() {
+        return anilistGenres;
+    }
+
+    public void setAnilistGenres(List<String> anilistGenres) {
+        this.anilistGenres = anilistGenres;
+    }
+
+    public List<String> getAnilistTags() {
+        return anilistTags;
+    }
+
+    public void setAnilistTags(List<String> anilistTags) {
+        this.anilistTags = anilistTags;
+    }
+
+    public String getAnilistStatus() {
+        return anilistStatus;
+    }
+
+    public void setAnilistStatus(String anilistStatus) {
+        this.anilistStatus = anilistStatus;
+    }
+
+    public Integer getAnilistAverageScore() {
+        return anilistAverageScore;
+    }
+
+    public void setAnilistAverageScore(Integer anilistAverageScore) {
+        this.anilistAverageScore = anilistAverageScore;
+    }
+
+    public String getAnilistFormat() {
+        return anilistFormat;
+    }
+
+    public void setAnilistFormat(String anilistFormat) {
+        this.anilistFormat = anilistFormat;
+    }
+
+    public String getAnilistSource() {
+        return anilistSource;
+    }
+
+    public void setAnilistSource(String anilistSource) {
+        this.anilistSource = anilistSource;
+    }
+
+    public String getAnilistCountryOfOrigin() {
+        return anilistCountryOfOrigin;
+    }
+
+    public void setAnilistCountryOfOrigin(String anilistCountryOfOrigin) {
+        this.anilistCountryOfOrigin = anilistCountryOfOrigin;
+    }
+
+    public Integer getAnilistVolumes() {
+        return anilistVolumes;
+    }
+
+    public void setAnilistVolumes(Integer anilistVolumes) {
+        this.anilistVolumes = anilistVolumes;
+    }
+
+    public Integer getAnilistChapters() {
+        return anilistChapters;
+    }
+
+    public void setAnilistChapters(Integer anilistChapters) {
+        this.anilistChapters = anilistChapters;
+    }
 }

@@ -1,7 +1,10 @@
 -- Flyway Migration V1: Create crawler schema for multi-source novel catalog
 -- This schema is separate from the existing elscione-specific tables (novel, novel_volume, novel_volume_file)
 -- to allow independent evolution and avoid conflicts.
--- Compatible with H2 Database
+-- Compatible with PostgreSQL
+
+-- Habilitar extensión para generación de UUIDs
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Source registry table
 CREATE TABLE crawler_source (
@@ -14,7 +17,7 @@ CREATE TABLE crawler_source (
     requires_login BOOLEAN DEFAULT FALSE,
     enabled BOOLEAN DEFAULT TRUE,
     tags VARCHAR(1000),  -- comma-separated tags
-    config_json CLOB,    -- JSON config for source-specific settings
+    config_json TEXT,    -- JSON config for source-specific settings
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -24,7 +27,7 @@ CREATE INDEX idx_crawler_source_language ON crawler_source(language);
 
 -- Novels per source (generic, source-agnostic)
 CREATE TABLE crawler_novel (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_id VARCHAR(100) NOT NULL REFERENCES crawler_source(id) ON DELETE CASCADE,
     source_novel_id VARCHAR(500) NOT NULL,  -- URL or ID from source
     title VARCHAR(500) NOT NULL,
@@ -49,7 +52,7 @@ CREATE INDEX idx_crawler_novel_last_synced ON crawler_novel(last_synced_at);
 
 -- Volumes per novel
 CREATE TABLE crawler_volume (
-    id UUID PRIMARY KEY ,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     novel_id UUID NOT NULL REFERENCES crawler_novel(id) ON DELETE CASCADE,
     source_volume_id VARCHAR(200) NOT NULL,
     volume_number INT,
@@ -63,7 +66,7 @@ CREATE INDEX idx_crawler_volume_novel ON crawler_volume(novel_id);
 
 -- Chapters per volume
 CREATE TABLE crawler_chapter (
-    id UUID PRIMARY KEY ,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     volume_id UUID NOT NULL REFERENCES crawler_volume(id) ON DELETE CASCADE,
     source_chapter_id VARCHAR(200) NOT NULL,
     chapter_number INT NOT NULL,
@@ -78,10 +81,10 @@ CREATE INDEX idx_crawler_chapter_volume ON crawler_chapter(volume_id);
 
 -- Chapter content cache (optional, for performance)
 CREATE TABLE crawler_chapter_content (
-    id UUID PRIMARY KEY ,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     chapter_id UUID NOT NULL REFERENCES crawler_chapter(id) ON DELETE CASCADE,
     html_content TEXT,
-    images_json CLOB,  -- JSON array of image URLs
+    images_json TEXT,  -- JSON array of image URLs
     fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,  -- TTL for cache invalidation
     UNIQUE (chapter_id)
@@ -91,7 +94,7 @@ CREATE INDEX idx_crawler_chapter_content_expires ON crawler_chapter_content(expi
 
 -- Source sync status tracking (for monitoring)
 CREATE TABLE crawler_sync_status (
-    id UUID PRIMARY KEY ,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_id VARCHAR(100) NOT NULL REFERENCES crawler_source(id) ON DELETE CASCADE,
     operation VARCHAR(50) NOT NULL,  -- 'search', 'get_novel', 'get_chapters', 'get_chapter_content', 'sync_catalog'
     status VARCHAR(20) NOT NULL,     -- 'success', 'failed', 'partial'
@@ -107,7 +110,7 @@ CREATE INDEX idx_crawler_sync_status_started ON crawler_sync_status(started_at);
 
 -- Insert default sources (will be overridden by application.yml config at runtime)
 -- These are placeholder records; actual registration happens via SourceRegistry at startup
--- Note: H2 doesn't support MERGE INTO with KEY, using INSERT with conditional
+-- Note: PostgreSQL doesn't support MERGE INTO with KEY, using INSERT with conditional
 INSERT INTO crawler_source (id, display_name, icon, language, base_url, rate_limit_rpm, requires_login, enabled, tags)
 SELECT 'elscione', 'Elscione', 'pi pi-book', 'es', 'https://server.elscione.com/Officially%20Translated%20Light%20Novels/', 20, false, true, 'official,spanish,light-novel'
 WHERE NOT EXISTS (SELECT 1 FROM crawler_source WHERE id = 'elscione');

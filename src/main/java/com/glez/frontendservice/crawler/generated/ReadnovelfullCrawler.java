@@ -83,6 +83,13 @@ public class ReadnovelfullCrawler extends AbstractGeneratedCrawler {
 
     // ─── Búsqueda ───
 
+    @Override
+    public List<NovelSearchResult> search(String query) {
+        log.info("Iniciando búsqueda en readnovelfull para: '{}'", query);
+        List<NovelSearchResult> results = super.search(query);
+        log.info("Búsqueda en readnovelfull completada: {} resultados encontrados", results.size());
+        return results;
+    }
 
     // ─── Login ───
 

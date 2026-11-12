@@ -274,8 +274,8 @@ public abstract class AbstractGeneratedCrawler implements SourceCrawler {
 
     @Override
     public NovelDetail getNovelDetails(String novelUrl) {
-        // 1. Buscar en BD por URL hash
-        SourceNovel cached = persistence.findBySourceIdAndNovelUrl(getSourceId(), novelUrl).orElse(null);
+        // 1. Buscar en BD por URL hash (con volúmenes eager)
+        SourceNovel cached = persistence.findBySourceIdAndNovelUrlEagerVolumes(getSourceId(), novelUrl).orElse(null);
         if (cached != null) {
             log.debug("Cache hit for novel details: {}", novelUrl);
             return toNovelDetail(cached);

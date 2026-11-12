@@ -1,9 +1,6 @@
 package com.glez.frontendservice.model;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -24,9 +21,6 @@ import java.util.UUID;
 // Índice de cobertura para el conteo de fallos por (proyecto, paso) y el
 // orden de la cronología sin cargar los eventos.
 @Table(indexes = @Index(name = "idx_wizard_trace_project_step_started", columnList = "project_id, step, started_at"))
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 public class VideoStoryTraceEvent {
 
     @Id
@@ -69,4 +63,84 @@ public class VideoStoryTraceEvent {
 
     @Column(length = 2000)
     private String details;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public VideoStoryProject getProject() {
+        return project;
+    }
+
+    public void setProject(VideoStoryProject project) {
+        this.project = project;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
+    }
+
+    public VideoStoryStep getStep() {
+        return step;
+    }
+
+    public void setStep(VideoStoryStep step) {
+        this.step = step;
+    }
+
+    public TraceEventStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(TraceEventStatus status) {
+        this.status = status;
+    }
+
+    public Integer getAttempt() {
+        return attempt;
+    }
+
+    public void setAttempt(Integer attempt) {
+        this.attempt = attempt;
+    }
+
+    public Instant getStartedAt() {
+        return startedAt;
+    }
+
+    public void setStartedAt(Instant startedAt) {
+        this.startedAt = startedAt;
+    }
+
+    public Instant getFinishedAt() {
+        return finishedAt;
+    }
+
+    public void setFinishedAt(Instant finishedAt) {
+        this.finishedAt = finishedAt;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    public String getDetails() {
+        return details;
+    }
+
+    public void setDetails(String details) {
+        this.details = details;
+    }
 }

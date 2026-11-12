@@ -1,9 +1,6 @@
 package com.glez.frontendservice.model;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -17,9 +14,6 @@ import java.util.UUID;
 // Composite covering index for countGenuineFailedAttempts (book + step
 // + started_at ordering without loading the events).
 @Table(indexes = @Index(name = "idx_trace_book_step_started", columnList = "book_id, step, started_at"))
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 public class ProcessTraceEvent {
 
     @Id
@@ -61,4 +55,84 @@ public class ProcessTraceEvent {
 
     @Column(length = 2000)
     private String details;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public Book getBook() {
+        return book;
+    }
+
+    public void setBook(Book book) {
+        this.book = book;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
+    }
+
+    public ProcessStep getStep() {
+        return step;
+    }
+
+    public void setStep(ProcessStep step) {
+        this.step = step;
+    }
+
+    public TraceEventStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(TraceEventStatus status) {
+        this.status = status;
+    }
+
+    public Integer getAttempt() {
+        return attempt;
+    }
+
+    public void setAttempt(Integer attempt) {
+        this.attempt = attempt;
+    }
+
+    public Instant getStartedAt() {
+        return startedAt;
+    }
+
+    public void setStartedAt(Instant startedAt) {
+        this.startedAt = startedAt;
+    }
+
+    public Instant getFinishedAt() {
+        return finishedAt;
+    }
+
+    public void setFinishedAt(Instant finishedAt) {
+        this.finishedAt = finishedAt;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    public String getDetails() {
+        return details;
+    }
+
+    public void setDetails(String details) {
+        this.details = details;
+    }
 }

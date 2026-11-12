@@ -295,6 +295,7 @@ public class CloudflareBypassServiceImpl extends CloudflareBypassService {
      * Extract cf_clearance cookie from cookie string or array.
      * @deprecated Use extractClearanceCookieFromJson instead
      */
+    @Deprecated
     private String extractClearanceCookie(String cookies) {
         if (cookies == null || cookies.isBlank()) {
             return null;

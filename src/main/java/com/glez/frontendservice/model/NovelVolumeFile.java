@@ -2,9 +2,6 @@ package com.glez.frontendservice.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -14,9 +11,6 @@ import java.util.UUID;
  * suele existir como .epub, .pdf y .zip simultáneamente.
  */
 @Entity
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 public class NovelVolumeFile {
 
     /**
@@ -58,4 +52,68 @@ public class NovelVolumeFile {
 
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public NovelVolume getVolume() {
+        return volume;
+    }
+
+    public void setVolume(NovelVolume volume) {
+        this.volume = volume;
+    }
+
+    public String getRemoteHref() {
+        return remoteHref;
+    }
+
+    public void setRemoteHref(String remoteHref) {
+        this.remoteHref = remoteHref;
+    }
+
+    public Format getFormat() {
+        return format;
+    }
+
+    public void setFormat(Format format) {
+        this.format = format;
+    }
+
+    public Long getSizeBytes() {
+        return sizeBytes;
+    }
+
+    public void setSizeBytes(Long sizeBytes) {
+        this.sizeBytes = sizeBytes;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
 }

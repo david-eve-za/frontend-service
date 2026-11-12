@@ -83,19 +83,22 @@ public class SourceCrawlerPersistenceService {
             novel.setLanguage(langDetector.detect(sample));
         }
 
-        // Sync volúmenes (upsert por serial)
-        List<SourceVolume> syncedVolumes = syncVolumes(novel, model.getVolumes(), crawlerVersion, crawlerTier);
-        novel.setVolumes(syncedVolumes);
-        novel.setVolumeCount(syncedVolumes.size());
-        novel.setChapterCount(syncedVolumes.stream().mapToInt(SourceVolume::getChapterCount).sum());
+        // Primero guardar la novela para obtener ID
+        SourceNovel saved = novelRepo.save(novel);
+        
+        // Sync volúmenes (upsert por serial) - AHORA con novel ya guardada
+        List<SourceVolume> syncedVolumes = syncVolumes(saved, model.getVolumes(), crawlerVersion, crawlerTier);
+        saved.setVolumes(syncedVolumes);
+        saved.setVolumeCount(syncedVolumes.size());
+        saved.setChapterCount(syncedVolumes.stream().mapToInt(SourceVolume::getChapterCount).sum());
 
         // Sync tags
-        syncTags(novel, model.getTags());
+        syncTags(saved, model.getTags());
 
-        SourceNovel saved = novelRepo.save(novel);
+        SourceNovel saved2 = novelRepo.save(saved);
         log.debug("Upserted novel: {} (source={}, volumes={}, chapters={})",
-                saved.getTitle(), sourceId, saved.getVolumeCount(), saved.getChapterCount());
-        return saved;
+                saved2.getTitle(), sourceId, saved2.getVolumeCount(), saved2.getChapterCount());
+        return saved2;
     }
 
     private List<SourceVolume> syncVolumes(SourceNovel novel, List<CrawlerVolumeModel> crawlerVolumes,
@@ -263,8 +266,14 @@ public class SourceCrawlerPersistenceService {
         return novelRepo.findBySourceIdAndNovelUrlHash(sourceId, urlHash);
     }
 
+    @Transactional(readOnly = true)
     public Optional<SourceNovel> findBySourceIdAndNovelUrl(String sourceId, String novelUrl) {
         return novelRepo.findBySourceIdAndNovelUrl(sourceId, novelUrl);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<SourceNovel> findBySourceIdAndNovelUrlEagerVolumes(String sourceId, String novelUrl) {
+        return novelRepo.findBySourceIdAndNovelUrlEagerVolumes(sourceId, novelUrl);
     }
 
     public List<SourceNovel> searchBySource(String sourceId, String search, int page, int size) {

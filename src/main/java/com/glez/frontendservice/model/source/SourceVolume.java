@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.BatchSize;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -61,8 +62,9 @@ public class SourceVolume {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    @OneToMany(mappedBy = "volume", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(mappedBy = "volume", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, orphanRemoval = false)
     @OrderBy("serial ASC")
+    @BatchSize(size = 100)
     private List<SourceChapter> chapters = new ArrayList<>();
 
     @PrePersist

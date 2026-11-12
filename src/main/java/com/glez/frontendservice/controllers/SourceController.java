@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -269,6 +270,7 @@ public class SourceController {
             @ApiResponse(responseCode = "500", description = "Retrieval failed")
     })
     @GetMapping("/{sourceId}/novel-details")
+    @Transactional(readOnly = true)
     public ResponseEntity<NovelDetail> getNovelDetails(
             @Parameter(description = "Source identifier") @PathVariable String sourceId,
             @Parameter(description = "Novel URL") @RequestParam String novelUrl) {

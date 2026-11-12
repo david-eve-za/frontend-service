@@ -72,6 +72,8 @@ import java.util.stream.Collectors;
 @Service
 public class CloudflareBypassService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CloudflareBypassService.class);
+
     public static final String DEFAULT_FIREFOX_USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:139.0) Gecko/20100101 Firefox/139.0";
 

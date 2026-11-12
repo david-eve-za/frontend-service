@@ -1,18 +1,12 @@
 package com.glez.frontendservice.model;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.util.List;
 import java.util.UUID;
 
 @Entity
 @org.hibernate.annotations.DynamicUpdate
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 public class Book {
 
     @Id
@@ -54,4 +48,76 @@ public class Book {
 
     @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Chunks> chunks;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public ProcessingStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(ProcessingStatus status) {
+        this.status = status;
+    }
+
+    public String getFullText() {
+        return fullText;
+    }
+
+    public void setFullText(String fullText) {
+        this.fullText = fullText;
+    }
+
+    public ProcessStep getCurrentStep() {
+        return currentStep;
+    }
+
+    public void setCurrentStep(ProcessStep currentStep) {
+        this.currentStep = currentStep;
+    }
+
+    public String getLastTraceId() {
+        return lastTraceId;
+    }
+
+    public void setLastTraceId(String lastTraceId) {
+        this.lastTraceId = lastTraceId;
+    }
+
+    public String getAudioFilePath() {
+        return audioFilePath;
+    }
+
+    public void setAudioFilePath(String audioFilePath) {
+        this.audioFilePath = audioFilePath;
+    }
+
+    public String getTtsVoice() {
+        return ttsVoice;
+    }
+
+    public void setTtsVoice(String ttsVoice) {
+        this.ttsVoice = ttsVoice;
+    }
+
+    public List<Chunks> getChunks() {
+        return chunks;
+    }
+
+    public void setChunks(List<Chunks> chunks) {
+        this.chunks = chunks;
+    }
 }

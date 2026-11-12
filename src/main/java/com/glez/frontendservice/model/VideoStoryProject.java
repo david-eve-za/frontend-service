@@ -1,9 +1,6 @@
 package com.glez.frontendservice.model;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -17,9 +14,6 @@ import java.util.UUID;
  * hay escenas, sin escenas no hay plantilla de video.
  */
 @Entity
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 @Table(name = "video_story_projects")
 public class VideoStoryProject {
 
@@ -98,4 +92,140 @@ public class VideoStoryProject {
 
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getStory() {
+        return story;
+    }
+
+    public void setStory(String story) {
+        this.story = story;
+    }
+
+    public Integer getVideoDurationSeconds() {
+        return videoDurationSeconds;
+    }
+
+    public void setVideoDurationSeconds(Integer videoDurationSeconds) {
+        this.videoDurationSeconds = videoDurationSeconds;
+    }
+
+    public String getDesignStyle() {
+        return designStyle;
+    }
+
+    public void setDesignStyle(String designStyle) {
+        this.designStyle = designStyle;
+    }
+
+    public Integer getDesignCharacterCount() {
+        return designCharacterCount;
+    }
+
+    public void setDesignCharacterCount(Integer designCharacterCount) {
+        this.designCharacterCount = designCharacterCount;
+    }
+
+    public String getDesigns() {
+        return designs;
+    }
+
+    public void setDesigns(String designs) {
+        this.designs = designs;
+    }
+
+    public String getAssetsAspectRatio() {
+        return assetsAspectRatio;
+    }
+
+    public void setAssetsAspectRatio(String assetsAspectRatio) {
+        this.assetsAspectRatio = assetsAspectRatio;
+    }
+
+    public String getAssets() {
+        return assets;
+    }
+
+    public void setAssets(String assets) {
+        this.assets = assets;
+    }
+
+    public Integer getSceneAvgSeconds() {
+        return sceneAvgSeconds;
+    }
+
+    public void setSceneAvgSeconds(Integer sceneAvgSeconds) {
+        this.sceneAvgSeconds = sceneAvgSeconds;
+    }
+
+    public String getSceneSpeaker1() {
+        return sceneSpeaker1;
+    }
+
+    public void setSceneSpeaker1(String sceneSpeaker1) {
+        this.sceneSpeaker1 = sceneSpeaker1;
+    }
+
+    public String getSceneSpeaker2() {
+        return sceneSpeaker2;
+    }
+
+    public void setSceneSpeaker2(String sceneSpeaker2) {
+        this.sceneSpeaker2 = sceneSpeaker2;
+    }
+
+    public String getSceneLanguage() {
+        return sceneLanguage;
+    }
+
+    public void setSceneLanguage(String sceneLanguage) {
+        this.sceneLanguage = sceneLanguage;
+    }
+
+    public String getScenes() {
+        return scenes;
+    }
+
+    public void setScenes(String scenes) {
+        this.scenes = scenes;
+    }
+
+    public String getVideoPrompt() {
+        return videoPrompt;
+    }
+
+    public void setVideoPrompt(String videoPrompt) {
+        this.videoPrompt = videoPrompt;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
 }

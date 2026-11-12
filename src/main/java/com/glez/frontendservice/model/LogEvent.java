@@ -7,9 +7,6 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 import org.hibernate.annotations.DynamicUpdate;
 
 import java.time.Instant;
@@ -35,9 +32,6 @@ import java.util.UUID;
         @Index(name = "idx_log_event_book_logged_at", columnList = "book_id, logged_at"),
         // Análisis por nivel ("dame los ERROR de la semana").
         @Index(name = "idx_log_event_level_logged_at", columnList = "level, logged_at")})
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 public class LogEvent {
 
     /** Mensajes más largos se truncan al persistir (columna VARCHAR(8192)). */
@@ -80,4 +74,76 @@ public class LogEvent {
     /** step del MDC (EXTRACT/SPLIT/TRANSLATE/AUDIO/FINALIZE). */
     @Column(length = 32)
     private String step;
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public Instant getLoggedAt() {
+        return loggedAt;
+    }
+
+    public void setLoggedAt(Instant loggedAt) {
+        this.loggedAt = loggedAt;
+    }
+
+    public String getLevel() {
+        return level;
+    }
+
+    public void setLevel(String level) {
+        this.level = level;
+    }
+
+    public String getLogger() {
+        return logger;
+    }
+
+    public void setLogger(String logger) {
+        this.logger = logger;
+    }
+
+    public String getThread() {
+        return thread;
+    }
+
+    public void setThread(String thread) {
+        this.thread = thread;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+
+    public String getBookId() {
+        return bookId;
+    }
+
+    public void setBookId(String bookId) {
+        this.bookId = bookId;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
+    }
+
+    public String getStep() {
+        return step;
+    }
+
+    public void setStep(String step) {
+        this.step = step;
+    }
 }

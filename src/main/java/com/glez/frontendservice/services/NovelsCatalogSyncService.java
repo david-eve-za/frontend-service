@@ -70,6 +70,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class NovelsCatalogSyncService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(NovelsCatalogSyncService.class);
+
     private final ElscioneApiClient apiClient;
     private final NovelRepository novelRepository;
     private final NovelVolumeRepository volumeRepository;

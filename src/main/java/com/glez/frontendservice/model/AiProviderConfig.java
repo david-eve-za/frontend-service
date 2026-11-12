@@ -4,9 +4,6 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 
@@ -19,9 +16,6 @@ import java.time.Instant;
  * (app.ai.translation-provider / app.ai.story-provider).
  */
 @Entity
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 @Table(name = "ai_provider_config")
 public class AiProviderConfig {
 
@@ -39,4 +33,36 @@ public class AiProviderConfig {
 
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getTranslationProvider() {
+        return translationProvider;
+    }
+
+    public void setTranslationProvider(String translationProvider) {
+        this.translationProvider = translationProvider;
+    }
+
+    public String getStoryProvider() {
+        return storyProvider;
+    }
+
+    public void setStoryProvider(String storyProvider) {
+        this.storyProvider = storyProvider;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
 }

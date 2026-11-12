@@ -2,9 +2,6 @@ package com.glez.frontendservice.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -17,9 +14,6 @@ import java.util.UUID;
  * {@link Book} enlazado al construir el DTO del gestor.
  */
 @Entity
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
 @Table(uniqueConstraints = @UniqueConstraint(columnNames = {"novel_id", "source_key"}))
 public class NovelVolume {
 
@@ -86,5 +80,101 @@ public class NovelVolume {
     @com.fasterxml.jackson.annotation.JsonIgnore
     public UUID getBookIdOrNull() {
         return book != null ? book.getId() : null;
+    }
+
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public Novel getNovel() {
+        return novel;
+    }
+
+    public void setNovel(Novel novel) {
+        this.novel = novel;
+    }
+
+    public Integer getVolumeNumber() {
+        return volumeNumber;
+    }
+
+    public void setVolumeNumber(Integer volumeNumber) {
+        this.volumeNumber = volumeNumber;
+    }
+
+    public String getLabel() {
+        return label;
+    }
+
+    public void setLabel(String label) {
+        this.label = label;
+    }
+
+    public String getTranslatorGroup() {
+        return translatorGroup;
+    }
+
+    public void setTranslatorGroup(String translatorGroup) {
+        this.translatorGroup = translatorGroup;
+    }
+
+    public String getRemoteDir() {
+        return remoteDir;
+    }
+
+    public void setRemoteDir(String remoteDir) {
+        this.remoteDir = remoteDir;
+    }
+
+    public String getSourceKey() {
+        return sourceKey;
+    }
+
+    public void setSourceKey(String sourceKey) {
+        this.sourceKey = sourceKey;
+    }
+
+    public boolean isRemovedFromSource() {
+        return removedFromSource;
+    }
+
+    public void setRemovedFromSource(boolean removedFromSource) {
+        this.removedFromSource = removedFromSource;
+    }
+
+    public Book getBook() {
+        return book;
+    }
+
+    public void setBook(Book book) {
+        this.book = book;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public List<NovelVolumeFile> getFiles() {
+        return files;
+    }
+
+    public void setFiles(List<NovelVolumeFile> files) {
+        this.files = files;
     }
 }

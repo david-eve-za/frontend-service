@@ -109,6 +109,14 @@
             <artifactId>h2</artifactId>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- PostgreSQL Database -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -389,14 +397,22 @@
                 <artifactId>flyway-maven-plugin</artifactId>
                 <version>11.20.3</version>
                 <configuration>
-                    <url>jdbc:h2:file:./H2-FrontEnd-Service</url>
-                    <user>sa</user>
-                    <password></password>
+                    <url>jdbc:postgresql://localhost:5432/frontend_service</url>
+                    <user>frontend_user</user>
+                    <password>frontend_pass</password>
                     <locations>
                         <location>filesystem:src/main/resources/db/migration</location>
                     </locations>
                     <baselineOnMigrate>true</baselineOnMigrate>
+                    <cleanDisabled>false</cleanDisabled>
                 </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.flywaydb</groupId>
+                        <artifactId>flyway-database-postgresql</artifactId>
+                        <version>11.20.3</version>
+                    </dependency>
+                </dependencies>
             </plugin>
 
             <!-- JaCoCo Code Coverage Plugin -->

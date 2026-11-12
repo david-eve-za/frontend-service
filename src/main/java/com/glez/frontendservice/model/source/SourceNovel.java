@@ -6,6 +6,7 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.BatchSize;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -117,8 +118,9 @@ public class SourceNovel {
     @Column(name = "cover_file", length = 500)
     private String coverFile;
 
-    @OneToMany(mappedBy = "novel", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(mappedBy = "novel", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, orphanRemoval = false)
     @OrderBy("serial ASC")
+    @BatchSize(size = 50)
     private List<SourceVolume> volumes = new ArrayList<>();
 
     @OneToMany(mappedBy = "novel", cascade = CascadeType.ALL, orphanRemoval = true)
